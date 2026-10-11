@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -41,6 +41,25 @@ export function Navigation({
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  // Close mobile drawer on Escape key and lock body scroll
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && mobileOpen) {
+        setMobileOpen(false);
+      }
+    }
+    if (mobileOpen) {
+      document.body.style.overflow = "hidden";
+      window.addEventListener("keydown", handleKeyDown);
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [mobileOpen]);
+
   return (
     <>
       {/* Mobile Top Header */}
@@ -61,16 +80,31 @@ export function Navigation({
 
         <button
           onClick={() => setMobileOpen(!mobileOpen)}
-          className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
-          aria-label="Toggle Navigation"
+          className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+          aria-label={mobileOpen ? "Close Navigation Menu" : "Open Navigation Menu"}
+          aria-expanded={mobileOpen}
         >
           {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
       </div>
 
+      {/* Mobile Drawer Backdrop Overlay */}
+      {mobileOpen && (
+        <div
+          onClick={() => setMobileOpen(false)}
+          className="md:hidden fixed inset-0 top-[53px] bg-slate-950/70 backdrop-blur-sm z-40 animate-in fade-in duration-200"
+          aria-hidden="true"
+        />
+      )}
+
       {/* Mobile Navigation Drawer */}
       {mobileOpen && (
-        <div className="md:hidden bg-slate-950 text-slate-200 border-b border-slate-800 p-4 space-y-3 z-40 fixed inset-x-0 top-[53px] shadow-2xl max-h-[85vh] overflow-y-auto">
+        <div
+          className="md:hidden bg-slate-950 text-slate-200 border-b border-slate-800 p-4 space-y-3 z-50 fixed inset-x-0 top-[53px] shadow-2xl max-h-[85vh] overflow-y-auto animate-in slide-in-from-top-2 duration-200"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Navigation Menu"
+        >
           {/* Brand Switcher inside Mobile Drawer */}
           <div>
             <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-1.5">
@@ -91,14 +125,15 @@ export function Navigation({
                   key={item.name}
                   href={item.href}
                   onClick={() => setMobileOpen(false)}
+                  aria-current={isActive ? "page" : undefined}
                   className={`flex items-center px-3 py-2.5 text-xs font-medium rounded-lg transition-colors ${
                     isActive
-                      ? "bg-sky-600 text-white shadow-sm"
+                      ? "bg-sky-600 text-white shadow-sm font-semibold"
                       : "text-slate-300 hover:text-white hover:bg-slate-900"
                   }`}
                 >
                   <item.icon
-                    className={`mr-3 h-4 w-4 ${
+                    className={`mr-3 h-4 w-4 shrink-0 ${
                       isActive ? "text-white" : "text-slate-400"
                     }`}
                   />
@@ -152,14 +187,15 @@ export function Navigation({
               <Link
                 key={item.name}
                 href={item.href}
+                aria-current={isActive ? "page" : undefined}
                 className={`flex items-center px-3 py-2 text-xs font-medium rounded-lg transition-colors group ${
                   isActive
-                    ? "bg-sky-600 text-white shadow-sm"
+                    ? "bg-sky-600 text-white shadow-sm font-semibold"
                     : "text-slate-300 hover:text-white hover:bg-slate-900"
                 }`}
               >
                 <item.icon
-                  className={`mr-3 h-4 w-4 transition-colors ${
+                  className={`mr-3 h-4 w-4 shrink-0 transition-colors ${
                     isActive
                       ? "text-white"
                       : "text-slate-400 group-hover:text-sky-400"

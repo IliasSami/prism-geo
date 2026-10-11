@@ -15,7 +15,7 @@ export const brands = sqliteTable("brands", {
 
 export const competitors = sqliteTable("competitors", {
   id: text("id").primaryKey(),
-  brandId: text("brand_id").notNull().references(() => brands.id),
+  brandId: text("brand_id").notNull().references(() => brands.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   domain: text("domain").notNull(),
   aliasesJson: text("aliases_json").notNull().default("[]"),
@@ -25,7 +25,7 @@ export const competitors = sqliteTable("competitors", {
 
 export const prompts = sqliteTable("prompts", {
   id: text("id").primaryKey(),
-  brandId: text("brand_id").notNull().references(() => brands.id),
+  brandId: text("brand_id").notNull().references(() => brands.id, { onDelete: "cascade" }),
   queryText: text("query_text").notNull(),
   intentType: text("intent_type").notNull(), // 'dilemma' | 'risk' | 'pricing' | 'comparison' | 'direct' | 'category'
   personaDimension: text("persona_dimension").notNull().default("agency_executive"), // 'agency_executive' | 'buyer' | 'technical'
@@ -35,7 +35,7 @@ export const prompts = sqliteTable("prompts", {
 
 export const crawlBatches = sqliteTable("crawl_batches", {
   id: text("id").primaryKey(),
-  brandId: text("brand_id").notNull().references(() => brands.id),
+  brandId: text("brand_id").notNull().references(() => brands.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("pending"), // 'pending' | 'running' | 'completed' | 'failed'
   sampleSize: integer("sample_size").notNull().default(10), // Monte Carlo sample size N
   totalRuns: integer("total_runs").notNull().default(0),
@@ -48,9 +48,9 @@ export const crawlBatches = sqliteTable("crawl_batches", {
 
 export const promptRuns = sqliteTable("prompt_runs", {
   id: text("id").primaryKey(),
-  brandId: text("brand_id").references(() => brands.id),
-  batchId: text("batch_id").notNull().references(() => crawlBatches.id),
-  promptId: text("prompt_id").notNull().references(() => prompts.id),
+  brandId: text("brand_id").references(() => brands.id, { onDelete: "cascade" }),
+  batchId: text("batch_id").notNull().references(() => crawlBatches.id, { onDelete: "cascade" }),
+  promptId: text("prompt_id").notNull().references(() => prompts.id, { onDelete: "cascade" }),
   engine: text("engine").notNull(), // 'perplexity' | 'google_aio' | 'chatgpt' | 'claude' | 'gemini' | 'copilot'
   runIndex: integer("run_index").notNull(), // 0 to N-1
   responseText: text("response_text").notNull(),
@@ -62,8 +62,8 @@ export const promptRuns = sqliteTable("prompt_runs", {
 
 export const citations = sqliteTable("citations", {
   id: text("id").primaryKey(),
-  brandId: text("brand_id").references(() => brands.id),
-  runId: text("run_id").notNull().references(() => promptRuns.id),
+  brandId: text("brand_id").references(() => brands.id, { onDelete: "cascade" }),
+  runId: text("run_id").notNull().references(() => promptRuns.id, { onDelete: "cascade" }),
   domain: text("domain").notNull(),
   url: text("url").notNull(),
   title: text("title"),
@@ -77,8 +77,8 @@ export const citations = sqliteTable("citations", {
 
 export const entityMentions = sqliteTable("entity_mentions", {
   id: text("id").primaryKey(),
-  brandId: text("brand_id").references(() => brands.id),
-  runId: text("run_id").notNull().references(() => promptRuns.id),
+  brandId: text("brand_id").references(() => brands.id, { onDelete: "cascade" }),
+  runId: text("run_id").notNull().references(() => promptRuns.id, { onDelete: "cascade" }),
   entityName: text("entity_name").notNull(),
   isTargetBrand: integer("is_target_brand", { mode: "boolean" }).notNull().default(false),
   isCompetitor: integer("is_competitor", { mode: "boolean" }).notNull().default(false),
@@ -90,9 +90,9 @@ export const entityMentions = sqliteTable("entity_mentions", {
 
 export const reverseRagChunks = sqliteTable("reverse_rag_chunks", {
   id: text("id").primaryKey(),
-  brandId: text("brand_id").references(() => brands.id),
-  runId: text("run_id").notNull().references(() => promptRuns.id),
-  citationId: text("citation_id").references(() => citations.id),
+  brandId: text("brand_id").references(() => brands.id, { onDelete: "cascade" }),
+  runId: text("run_id").notNull().references(() => promptRuns.id, { onDelete: "cascade" }),
+  citationId: text("citation_id").references(() => citations.id, { onDelete: "cascade" }),
   sourceUrl: text("source_url").notNull(),
   matchedChunkText: text("matched_chunk_text").notNull(),
   similarityScore: real("similarity_score").notNull().default(0.0),
@@ -102,7 +102,7 @@ export const reverseRagChunks = sqliteTable("reverse_rag_chunks", {
 
 export const opportunities = sqliteTable("opportunities", {
   id: text("id").primaryKey(),
-  brandId: text("brand_id").notNull().references(() => brands.id),
+  brandId: text("brand_id").notNull().references(() => brands.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   subQueryTarget: text("sub_query_target").notNull(),
   gapType: text("gap_type").notNull(), // 'missing_answer_block' | 'unclaimed_subquery' | 'competitor_monopoly' | 'negative_sentiment'

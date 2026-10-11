@@ -19,31 +19,34 @@ export class MonteCarloMetricsCalculator {
     total: number,
     confidence = 1.96 // 95% confidence z-score
   ): [number, number] {
-    if (total === 0) return [0, 0];
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(successes) || successes < 0) {
+      return [0, 0];
+    }
+    const safeSuccesses = Math.min(total, Math.max(0, successes));
 
     // Exact small-sample boundaries
-    if (successes === 0) {
+    if (safeSuccesses === 0) {
       const upper = Math.min(1, 1 - Math.pow(0.05, 1 / total));
       return [0, Number(upper.toFixed(3))];
     }
-    if (successes === total) {
+    if (safeSuccesses === total) {
       const lower = Math.max(0, Math.pow(0.05, 1 / total));
       return [Number(lower.toFixed(3)), 1];
     }
 
-    const p = successes / total;
+    const p = safeSuccesses / total;
     const z = confidence;
     const z2 = z * z;
     const correction = 0.5 / total;
 
     const denominator = 1 + z2 / total;
     const center = p + z2 / (2 * total);
-    const spread = z * Math.sqrt((p * (1 - p) + z2 / (4 * total)) / total);
+    const spread = z * Math.sqrt(Math.max(0, (p * (1 - p) + z2 / (4 * total)) / total));
 
     const lower = Math.max(0, (center - spread - correction) / denominator);
     const upper = Math.min(1, (center + spread + correction) / denominator);
 
-    return [Number(lower.toFixed(3)), Number(upper.toFixed(3))];
+    return [Number(Math.min(lower, upper).toFixed(3)), Number(Math.max(lower, upper).toFixed(3))];
   }
 
   /**
@@ -54,7 +57,9 @@ export class MonteCarloMetricsCalculator {
     mentionCharIndex: number,
     totalLength: number
   ): number {
-    if (totalLength === 0 || mentionCharIndex < 0) return 0;
+    if (!Number.isFinite(totalLength) || totalLength <= 0 || !Number.isFinite(mentionCharIndex) || mentionCharIndex < 0) {
+      return 0;
+    }
     const normalizedPosition = Math.min(1, Math.max(0, mentionCharIndex / totalLength));
     // lambda = 1.189 gives exactly exp(-1.189 * 0.30) = 0.7001
     return Number(Math.exp(-1.189 * normalizedPosition).toFixed(3));
@@ -70,11 +75,13 @@ export class MonteCarloMetricsCalculator {
     totalMentionsInAnswer = 1,
     isDirectAnswer = false
   ): number {
-    const validRank = Math.max(1, rank);
+    const validRank = Math.max(1, Number.isFinite(rank) ? rank : 1);
+    const safeMentionCount = Math.max(0, Number.isFinite(mentionCount) ? mentionCount : 1);
+    const safeTotalMentions = Math.max(1, Number.isFinite(totalMentionsInAnswer) ? totalMentionsInAnswer : 1);
     // Discounted rank: #1 = 1.0, #2 = 0.63, #3 = 0.50, #4 = 0.43
     const rankWeight = 1.0 / Math.log2(validRank + 1);
     // Frequency density weight (up to 30% boost for repeated mentions)
-    const freqWeight = Math.min(1.0, mentionCount / Math.max(1, totalMentionsInAnswer));
+    const freqWeight = Math.min(1.0, safeMentionCount / safeTotalMentions);
 
     let score = 0.70 * rankWeight + 0.30 * freqWeight;
     if (isDirectAnswer) {
@@ -91,11 +98,20 @@ export class MonteCarloMetricsCalculator {
     contextSnippet: string,
     entityName: string
   ): { stance: StanceType; sentiment: SentimentType; score: number } {
+    if (!contextSnippet || !entityName) {
+      return { stance: "neutral", sentiment: "neutral", score: 0.0 };
+    }
+
     const textLower = contextSnippet.toLowerCase();
     const entityLower = entityName.toLowerCase();
 
-    // Check surrounding 200 character window of the entity mention
+    // Verify the entity is actually present in the snippet
     const entityIdx = textLower.indexOf(entityLower);
+    if (entityIdx === -1) {
+      return { stance: "neutral", sentiment: "neutral", score: 0.0 };
+    }
+
+    // Check surrounding 200 character window of the entity mention
     const windowStart = Math.max(0, entityIdx - 100);
     const windowEnd = Math.min(textLower.length, entityIdx + entityLower.length + 100);
     const window = textLower.slice(windowStart, windowEnd);
@@ -271,24 +287,36 @@ export class MonteCarloMetricsCalculator {
     }>,
     editorialCitations = 0
   ): CSoVAnalysisResult {
+    const safeBrandCitations = Math.max(0, Number.isFinite(brandCitations) ? brandCitations : 0);
+    const safeEditorialCitations = Math.max(0, Number.isFinite(editorialCitations) ? editorialCitations : 0);
+    const safeCompetitors = Array.isArray(competitors)
+      ? competitors.map((c) => ({
+          name: c.name || "Competitor",
+          citations: Math.max(0, Number.isFinite(c.citations) ? c.citations : 0),
+          topDomains: Array.isArray(c.topDomains) ? c.topDomains : [],
+          avgProminence: Number.isFinite(c.avgProminence) ? c.avgProminence : 0.65,
+          netStanceScore: c.netStanceScore,
+        }))
+      : [];
+
     const totalCompetitiveCitations =
-      brandCitations + competitors.reduce((acc, c) => acc + Math.max(0, c.citations), 0);
-    const totalMarketCitations = totalCompetitiveCitations + Math.max(0, editorialCitations);
+      safeBrandCitations + safeCompetitors.reduce((acc, c) => acc + c.citations, 0);
+    const totalMarketCitations = totalCompetitiveCitations + safeEditorialCitations;
 
     const entities: CSoVEntityShare[] = [];
 
     // Calculate total weighted prominence points across competitive entities
-    const brandProminenceWeight = brandCitations * 0.85; // Target brand prominence baseline
+    const brandProminenceWeight = safeBrandCitations * 0.85; // Target brand prominence baseline
     let totalProminencePoints = brandProminenceWeight;
-    for (const comp of competitors) {
+    for (const comp of safeCompetitors) {
       const compProm = comp.avgProminence || 0.65;
-      totalProminencePoints += Math.max(0, comp.citations) * compProm;
+      totalProminencePoints += comp.citations * compProm;
     }
 
     if (totalCompetitiveCitations === 0) {
       // Return initialized 0% shares without dropping competitors
       entities.push({
-        entityName: targetBrand,
+        entityName: targetBrand || "Target Brand",
         isTargetBrand: true,
         citationShare: 0,
         prominenceShare: 0,
@@ -296,28 +324,28 @@ export class MonteCarloMetricsCalculator {
         topDomains: [],
         rank: 1,
       });
-      for (const comp of competitors) {
+      for (const comp of safeCompetitors) {
         entities.push({
           entityName: comp.name,
           isTargetBrand: false,
           citationShare: 0,
           prominenceShare: 0,
           citationCount: 0,
-          topDomains: comp.topDomains || [],
+          topDomains: comp.topDomains,
           rank: 2,
         });
       }
       return {
         entities,
         totalCompetitiveCitations: 0,
-        editorialCitationsCount: editorialCitations,
+        editorialCitationsCount: safeEditorialCitations,
         editorialDilutionRate: 0,
         totalMarketCitations,
       };
     }
 
     // Target brand share
-    const targetCitShare = Number(((brandCitations / totalCompetitiveCitations) * 100).toFixed(1));
+    const targetCitShare = Number(((safeBrandCitations / totalCompetitiveCitations) * 100).toFixed(1));
     const targetPromShare = totalProminencePoints > 0
       ? Number(((brandProminenceWeight / totalProminencePoints) * 100).toFixed(1))
       : targetCitShare;
@@ -327,13 +355,13 @@ export class MonteCarloMetricsCalculator {
       isTargetBrand: true,
       citationShare: targetCitShare,
       prominenceShare: targetPromShare,
-      citationCount: brandCitations,
+      citationCount: safeBrandCitations,
       topDomains: [],
     });
 
     // Competitor shares
-    for (const comp of competitors) {
-      const citCount = Math.max(0, comp.citations);
+    for (const comp of safeCompetitors) {
+      const citCount = comp.citations;
       const compCitShare = Number(((citCount / totalCompetitiveCitations) * 100).toFixed(1));
       const compPromWeight = citCount * (comp.avgProminence || 0.65);
       const compPromShare = totalProminencePoints > 0
@@ -346,7 +374,7 @@ export class MonteCarloMetricsCalculator {
         citationShare: compCitShare,
         prominenceShare: compPromShare,
         citationCount: citCount,
-        topDomains: comp.topDomains || [],
+        topDomains: comp.topDomains,
         netStanceScore: comp.netStanceScore,
       });
     }
@@ -358,13 +386,13 @@ export class MonteCarloMetricsCalculator {
     });
 
     const editorialDilutionRate = totalMarketCitations > 0
-      ? Number(((editorialCitations / totalMarketCitations) * 100).toFixed(1))
+      ? Number(((safeEditorialCitations / totalMarketCitations) * 100).toFixed(1))
       : 0;
 
     return {
       entities,
       totalCompetitiveCitations,
-      editorialCitationsCount: editorialCitations,
+      editorialCitationsCount: safeEditorialCitations,
       editorialDilutionRate,
       totalMarketCitations,
     };

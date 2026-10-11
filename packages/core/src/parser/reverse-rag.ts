@@ -19,7 +19,13 @@ export class ReverseRagParser {
    * Normalizes a URL: unwraps redirect proxies, strips tracking parameters, and trims fragments.
    */
   public static normalizeUrl(rawUrl: string): { normalizedUrl: string; domain: string; textFragment?: string } {
+    if (!rawUrl || typeof rawUrl !== "string") {
+      return { normalizedUrl: "", domain: "unknown" };
+    }
     let clean = rawUrl.trim().replace(/[.,;:)\]>]+$/, "");
+    if (!clean) {
+      return { normalizedUrl: "", domain: "unknown" };
+    }
 
     // Unwrap Google click redirect /url?q=...
     if (clean.includes("/url?q=")) {
@@ -42,6 +48,9 @@ export class ReverseRagParser {
 
     try {
       const parsed = new URL(clean);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return { normalizedUrl: "", domain: "unknown" };
+      }
       // Strip common ad/tracking query parameters
       const trackingParams = [
         "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
@@ -53,7 +62,7 @@ export class ReverseRagParser {
       const domain = parsed.hostname.toLowerCase().replace(/^www\./, "");
       return {
         normalizedUrl: parsed.toString(),
-        domain,
+        domain: domain || "unknown",
         textFragment,
       };
     } catch {
@@ -123,6 +132,10 @@ export class ReverseRagParser {
     isCompetitorDomain: boolean;
     rank: number;
   }> {
+    if (!text || typeof text !== "string") {
+      return [];
+    }
+
     const citations: Array<{
       url: string;
       domain: string;
@@ -136,6 +149,9 @@ export class ReverseRagParser {
     const seenUrls = new Set<string>();
     let rank = 1;
 
+    const cleanBrandDomain = typeof brandDomain === "string" ? brandDomain.toLowerCase().replace(/^www\./, "").trim() : "";
+    const cleanCompetitors = Array.isArray(competitorDomains) ? competitorDomains : [];
+
     // 1. Extract markdown links: [Anchor Text](https://...)
     const mdRegex = /\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/gi;
     let mdMatch: RegExpExecArray | null;
@@ -143,14 +159,14 @@ export class ReverseRagParser {
       const rawAnchor = mdMatch[1].trim();
       const rawUrl = mdMatch[2].trim();
       const { normalizedUrl, domain } = this.normalizeUrl(rawUrl);
-      if (seenUrls.has(normalizedUrl) || domain === "unknown") continue;
+      if (!normalizedUrl || seenUrls.has(normalizedUrl) || domain === "unknown") continue;
       seenUrls.add(normalizedUrl);
 
-      const targetClean = brandDomain.toLowerCase().replace(/^www\./, "");
-      const isBrandDomain = domain === targetClean || domain.endsWith(`.${targetClean}`);
-      const isCompetitorDomain = competitorDomains.some((comp) => {
-        const c = comp.toLowerCase().replace(/^www\./, "");
-        return domain === c || domain.endsWith(`.${c}`);
+      const isBrandDomain = cleanBrandDomain !== "" && (domain === cleanBrandDomain || domain.endsWith(`.${cleanBrandDomain}`));
+      const isCompetitorDomain = cleanCompetitors.some((comp) => {
+        if (!comp || typeof comp !== "string") return false;
+        const c = comp.toLowerCase().replace(/^www\./, "").trim();
+        return c !== "" && (domain === c || domain.endsWith(`.${c}`));
       });
 
       citations.push({
@@ -169,14 +185,14 @@ export class ReverseRagParser {
     const rawMatches = text.match(urlRegex) || [];
     for (const rawUrl of rawMatches) {
       const { normalizedUrl, domain } = this.normalizeUrl(rawUrl);
-      if (seenUrls.has(normalizedUrl) || domain === "unknown") continue;
+      if (!normalizedUrl || seenUrls.has(normalizedUrl) || domain === "unknown") continue;
       seenUrls.add(normalizedUrl);
 
-      const targetClean = brandDomain.toLowerCase().replace(/^www\./, "");
-      const isBrandDomain = domain === targetClean || domain.endsWith(`.${targetClean}`);
-      const isCompetitorDomain = competitorDomains.some((comp) => {
-        const c = comp.toLowerCase().replace(/^www\./, "");
-        return domain === c || domain.endsWith(`.${c}`);
+      const isBrandDomain = cleanBrandDomain !== "" && (domain === cleanBrandDomain || domain.endsWith(`.${cleanBrandDomain}`));
+      const isCompetitorDomain = cleanCompetitors.some((comp) => {
+        if (!comp || typeof comp !== "string") return false;
+        const c = comp.toLowerCase().replace(/^www\./, "").trim();
+        return c !== "" && (domain === c || domain.endsWith(`.${c}`));
       });
 
       citations.push({
@@ -194,7 +210,7 @@ export class ReverseRagParser {
   }
 
   /**
-   * Computes cosine token overlap similarity bounded strictly in [0.0, 1.0].
+   * Computes TF-IDF weighted cosine token vector alignment bounded strictly in [0.0, 1.0].
    * Filters stop words to prevent common linguistic tokens from distorting attribution.
    */
   public static computeChunkAlignment(
@@ -204,25 +220,53 @@ export class ReverseRagParser {
   ): ReverseRagAlignment {
     const { domain } = this.normalizeUrl(url);
 
-    // Split source into semantic paragraphs
-    const paragraphs = sourcePageText
+    if (!answerSnippet || typeof answerSnippet !== "string" || !sourcePageText || typeof sourcePageText !== "string") {
+      return {
+        url,
+        domain: domain || "unknown",
+        sourceType: "unknown",
+        extractedSnippet: (answerSnippet || "").slice(0, 300),
+        sourceChunkText: "",
+        alignmentScore: 0.0,
+        isSelfContained: false,
+        wordCount: 0,
+        attributionGap: "Invalid or empty content for comparison.",
+      };
+    }
+
+    // Split source into semantic paragraphs or chunks
+    let paragraphs = sourcePageText
       .split(/\n\s*\n/)
       .map((p) => p.trim())
       .filter((p) => p.length > 50);
 
+    if (paragraphs.length === 0) {
+      paragraphs = sourcePageText
+        .split(/\n+/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 50);
+    }
+
+    if (paragraphs.length === 0 && sourcePageText.trim().length > 0) {
+      const words = sourcePageText.trim().split(/\s+/);
+      const chunkSize = 150;
+      for (let i = 0; i < words.length; i += 100) {
+        const slice = words.slice(i, i + chunkSize).join(" ");
+        if (slice.length > 50) paragraphs.push(slice);
+      }
+    }
+
     let bestScore = 0.0;
     let bestChunk = "";
 
-    // Tokenize answer snippet into non-stop words
-    const answerTokens = new Set(
-      answerSnippet
-        .toLowerCase()
-        .replace(/[^\w\s]/g, "")
-        .split(/\s+/)
-        .filter((t) => t.length > 2 && !STOP_WORDS.has(t))
-    );
+    // Build Term Frequency map for answer tokens (filtered by stop words)
+    const answerWords = answerSnippet
+      .toLowerCase()
+      .replace(/[^\w\s]/g, "")
+      .split(/\s+/)
+      .filter((t) => t.length > 2 && !STOP_WORDS.has(t));
 
-    if (answerTokens.size === 0) {
+    if (answerWords.length === 0) {
       return {
         url,
         domain,
@@ -236,25 +280,43 @@ export class ReverseRagParser {
       };
     }
 
+    const answerTf = new Map<string, number>();
+    for (const w of answerWords) {
+      answerTf.set(w, (answerTf.get(w) || 0) + 1);
+    }
+
+    let normAnswer = 0;
+    for (const [, count] of answerTf) {
+      normAnswer += count * count;
+    }
+
     for (const para of paragraphs) {
-      const paraTokens = new Set(
-        para
-          .toLowerCase()
-          .replace(/[^\w\s]/g, "")
-          .split(/\s+/)
-          .filter((t) => t.length > 2 && !STOP_WORDS.has(t))
-      );
+      const paraWords = para
+        .toLowerCase()
+        .replace(/[^\w\s]/g, "")
+        .split(/\s+/)
+        .filter((t) => t.length > 2 && !STOP_WORDS.has(t));
 
-      if (paraTokens.size === 0) continue;
+      if (paraWords.length === 0) continue;
 
-      // Jaccard / Cosine intersection
-      let intersection = 0;
-      for (const t of paraTokens) {
-        if (answerTokens.has(t)) intersection++;
+      const paraTf = new Map<string, number>();
+      for (const w of paraWords) {
+        paraTf.set(w, (paraTf.get(w) || 0) + 1);
       }
 
-      // Cosine similarity: intersection / sqrt(|A| * |B|)
-      const cosineSim = intersection / Math.sqrt(answerTokens.size * paraTokens.size);
+      let dotProduct = 0;
+      let normPara = 0;
+
+      for (const [w, countB] of paraTf) {
+        normPara += countB * countB;
+        const countA = answerTf.get(w);
+        if (countA) {
+          dotProduct += countA * countB;
+        }
+      }
+
+      const denominator = Math.sqrt(normAnswer) * Math.sqrt(normPara);
+      const cosineSim = denominator > 0 ? dotProduct / denominator : 0;
       const boundedScore = Math.min(1.0, Math.max(0.0, cosineSim));
 
       if (boundedScore > bestScore) {

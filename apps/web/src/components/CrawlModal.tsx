@@ -11,6 +11,7 @@ import {
   Cpu,
   Layers,
   Sparkles,
+  RefreshCw,
 } from "lucide-react";
 
 interface CrawlStatus {
@@ -56,6 +57,7 @@ export function CrawlModal({
     currentPrompt: "Ready",
     currentEngine: "idle",
   });
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Poll status while open and running
@@ -68,8 +70,12 @@ export function CrawlModal({
           if (res.ok) {
             const data = await res.json();
             setStatus(data);
-            if (data.status === "completed" || data.status === "failed") {
+            if (data.status === "completed") {
               setIsSubmitting(false);
+              setErrorMessage(null);
+            } else if (data.status === "failed") {
+              setIsSubmitting(false);
+              setErrorMessage(data.currentPrompt || "Audit run encountered a fatal error.");
             }
           }
         } catch {}
@@ -78,8 +84,22 @@ export function CrawlModal({
     return () => clearInterval(interval);
   }, [open, status.status]);
 
+  // Handle Escape key
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && open && status.status !== "running") {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      window.addEventListener("keydown", handleKeyDown);
+    }
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, status.status]);
+
   async function handleStartCrawl() {
     setIsSubmitting(true);
+    setErrorMessage(null);
     setStatus({
       status: "running",
       completedRuns: 0,
@@ -103,12 +123,15 @@ export function CrawlModal({
 
       if (!res.ok) {
         const err = await res.json();
-        alert(err.error || "Failed to trigger crawl run");
-        setStatus((s) => ({ ...s, status: "failed", currentPrompt: err.error }));
+        const msg = err.error || "Failed to trigger crawl run";
+        setErrorMessage(msg);
+        setStatus((s) => ({ ...s, status: "failed", currentPrompt: msg }));
         setIsSubmitting(false);
       }
     } catch (e) {
-      setStatus((s) => ({ ...s, status: "failed", currentPrompt: (e as Error).message }));
+      const msg = (e as Error).message || "Network error occurred";
+      setErrorMessage(msg);
+      setStatus((s) => ({ ...s, status: "failed", currentPrompt: msg }));
       setIsSubmitting(false);
     }
   }
@@ -123,18 +146,28 @@ export function CrawlModal({
     }
   }
 
+  function dismissError() {
+    setErrorMessage(null);
+    setStatus((s) => ({ ...s, status: "idle", currentPrompt: "Ready" }));
+  }
+
   return (
     <>
       <button
         onClick={() => setOpen(true)}
-        className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition shadow-sm active:scale-95 space-x-1.5 border border-slate-700"
+        className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition shadow-sm active:scale-95 space-x-1.5 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
       >
         <Sparkles className="w-3.5 h-3.5 text-sky-400" />
         <span>Run Monte Carlo Audit</span>
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-150">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="crawl-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-150"
+        >
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden">
             {/* Modal Header */}
             <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
@@ -143,7 +176,7 @@ export function CrawlModal({
                   <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold tracking-tight">
+                  <h3 id="crawl-modal-title" className="text-sm font-bold tracking-tight">
                     Monte Carlo Crawl Orchestrator
                   </h3>
                   <p className="text-[11px] text-slate-400 font-mono">
@@ -153,7 +186,9 @@ export function CrawlModal({
               </div>
               <button
                 onClick={() => setOpen(false)}
-                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                disabled={status.status === "running"}
+                aria-label="Close dialog"
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition disabled:opacity-40"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -161,12 +196,37 @@ export function CrawlModal({
 
             {/* Modal Body */}
             <div className="p-6 space-y-5">
+              {/* Dismissable Error Banner */}
+              {errorMessage && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-start justify-between animate-in fade-in duration-200">
+                  <div className="flex items-start space-x-2.5 min-w-0">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <span className="font-bold block text-rose-900">
+                        Audit Execution Error
+                      </span>
+                      <p className="text-[11px] text-rose-700 leading-relaxed mt-0.5 break-words">
+                        {errorMessage}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={dismissError}
+                    aria-label="Dismiss error banner"
+                    className="p-1 rounded-md text-rose-500 hover:text-rose-900 hover:bg-rose-100 transition shrink-0 ml-2"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               {status.status === "running" ? (
                 /* Active Running Progress State */
                 <div className="space-y-4 py-4">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-semibold text-slate-700 flex items-center">
-                      <Loader2 className="w-4 h-4 animate-spin text-sky-600 mr-2" />
+                      <Loader2 className="w-4 h-4 animate-spin text-sky-600 mr-2 shrink-0" />
                       Multi-Session Crawl in Progress
                     </span>
                     <span className="font-mono font-bold text-sky-600 text-sm">
@@ -174,9 +234,16 @@ export function CrawlModal({
                     </span>
                   </div>
 
-                  <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                  {/* Accessible Smooth Progress Bar */}
+                  <div
+                    role="progressbar"
+                    aria-valuenow={status.percent}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden"
+                  >
                     <div
-                      className="bg-sky-600 h-2.5 rounded-full transition-all duration-300"
+                      className="bg-gradient-to-r from-sky-600 to-sky-500 h-2.5 rounded-full transition-all duration-500 ease-out shadow-sm"
                       style={{ width: `${Math.max(5, status.percent)}%` }}
                     />
                   </div>
@@ -215,7 +282,7 @@ export function CrawlModal({
                         setOpen(false);
                         window.location.reload();
                       }}
-                      className="px-5 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition"
+                      className="px-5 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition focus:outline-none focus:ring-2 focus:ring-sky-500"
                     >
                       Refresh & View Updated Metrics
                     </button>
@@ -228,18 +295,21 @@ export function CrawlModal({
                     <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-2">
                       Active Generative Engines
                     </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="group" aria-label="Engine selection">
                       {AVAILABLE_ENGINES.map((engine) => {
                         const isSelected = selectedEngines.includes(engine.id);
                         return (
                           <button
                             key={engine.id}
                             type="button"
+                            role="checkbox"
+                            aria-checked={isSelected}
+                            aria-label={`Toggle engine ${engine.name}`}
                             onClick={() => toggleEngine(engine.id)}
-                            className={`p-2.5 rounded-xl border text-left text-xs transition flex items-center justify-between ${
+                            className={`p-2.5 rounded-xl border text-left text-xs transition flex items-center justify-between focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
                               isSelected
-                                ? "border-sky-500 bg-sky-50 text-slate-900 font-semibold"
-                                : "border-slate-200 hover:border-slate-300 text-slate-600"
+                                ? "border-sky-500 bg-sky-50 text-slate-900 font-semibold shadow-xs"
+                                : "border-slate-200 hover:border-slate-300 text-slate-600 hover:bg-slate-50"
                             }`}
                           >
                             <div>
@@ -249,13 +319,13 @@ export function CrawlModal({
                               </span>
                             </div>
                             <span
-                              className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                              className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ml-2 transition ${
                                 isSelected
-                                  ? "border-sky-600 bg-sky-600 text-white text-[9px]"
-                                  : "border-slate-300"
+                                  ? "border-sky-600 bg-sky-600 text-white text-[10px] font-bold"
+                                  : "border-slate-300 bg-white"
                               }`}
                             >
-                              {isSelected && "✓"}
+                              {isSelected ? "✓" : ""}
                             </span>
                           </button>
                         );
@@ -279,7 +349,8 @@ export function CrawlModal({
                         max="15"
                         value={sampleSize}
                         onChange={(e) => setSampleSize(Number(e.target.value))}
-                        className="w-full accent-sky-600"
+                        className="w-full accent-sky-600 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                        aria-label="Sample size iterations"
                       />
                       <span className="text-[10px] text-slate-400 block mt-1">
                         Monte Carlo variance runs
@@ -301,7 +372,8 @@ export function CrawlModal({
                         max="4"
                         value={concurrency}
                         onChange={(e) => setConcurrency(Number(e.target.value))}
-                        className="w-full accent-sky-600"
+                        className="w-full accent-sky-600 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                        aria-label="Concurrency workers"
                       />
                       <span className="text-[10px] text-slate-400 block mt-1">
                         Parallel stealth workers
@@ -325,7 +397,7 @@ export function CrawlModal({
                 <button
                   type="button"
                   onClick={() => setOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-medium text-slate-600 hover:bg-slate-200/60 transition"
+                  className="px-4 py-2 rounded-xl text-xs font-medium text-slate-600 hover:bg-slate-200/60 transition focus:outline-none focus:ring-1 focus:ring-slate-400"
                 >
                   Cancel
                 </button>
@@ -333,10 +405,14 @@ export function CrawlModal({
                   type="button"
                   disabled={isSubmitting}
                   onClick={handleStartCrawl}
-                  className="px-5 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition shadow-sm active:scale-95 flex items-center space-x-1.5"
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition shadow-sm active:scale-95 flex items-center space-x-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-60"
                 >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Start Audit Run</span>
+                  {isSubmitting ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                  )}
+                  <span>{isSubmitting ? "Starting..." : "Start Audit Run"}</span>
                 </button>
               </div>
             )}

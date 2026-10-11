@@ -17,26 +17,7 @@ export class ChatGptEngineCrawler {
 
     let browser = existingBrowser;
     let ownBrowser = false;
-
-    if (!browser) {
-      try {
-        browser = await chromium.launch({
-          headless: true,
-          executablePath: getChromiumExecutablePath(),
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-infobars",
-            `--window-size=${stealth.viewport.width},${stealth.viewport.height}`,
-          ],
-        });
-        ownBrowser = true;
-      } catch (launchErr) {
-        // Fallback to local python venv if system playwright is uninstalled
-        console.warn("[ChatGptCrawler] Chromium launch fallback:", (launchErr as Error).message);
-      }
-    }
+    let context: import("playwright").BrowserContext | null = null;
 
     let responseText = "";
     const citations: Array<{ url: string; title: string; snippet?: string }> = [];
@@ -46,19 +27,39 @@ export class ChatGptEngineCrawler {
       `best alternatives for ${query.slice(0, 35)}`
     ];
 
-    if (browser) {
-      const context = await browser.newContext({
-        userAgent: stealth.userAgent,
-        viewport: stealth.viewport,
-        deviceScaleFactor: stealth.deviceScaleFactor,
-        locale: stealth.locale,
-        timezoneId: stealth.timezoneId,
-      });
+    try {
+      if (!browser) {
+        try {
+          browser = await chromium.launch({
+            headless: true,
+            executablePath: getChromiumExecutablePath(),
+            args: [
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-blink-features=AutomationControlled",
+              "--disable-infobars",
+              `--window-size=${stealth.viewport.width},${stealth.viewport.height}`,
+            ],
+          });
+          ownBrowser = true;
+        } catch (launchErr) {
+          // Fallback to local python venv if system playwright is uninstalled
+          console.warn("[ChatGptCrawler] Chromium launch fallback:", (launchErr as Error).message);
+        }
+      }
 
-      await context.addInitScript(STEALTH_INJECTION_SCRIPT);
-      const page = await context.newPage();
+      if (browser) {
+        context = await browser.newContext({
+          userAgent: stealth.userAgent,
+          viewport: stealth.viewport,
+          deviceScaleFactor: stealth.deviceScaleFactor,
+          locale: stealth.locale,
+          timezoneId: stealth.timezoneId,
+        });
 
-      try {
+        await context.addInitScript(STEALTH_INJECTION_SCRIPT);
+        const page = await context.newPage();
+
         // Target ChatGPT Search web interface or open web grounded portal
         const targetUrl = `https://chatgpt.com/?q=${encodeURIComponent(query)}`;
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
@@ -87,12 +88,22 @@ export class ChatGptEngineCrawler {
           responseText = content.text;
           citations.push(...content.links);
         }
-      } catch (err) {
-        console.warn(`[ChatGptCrawler] Session extraction note for "${query}":`, (err as Error).message);
-      } finally {
-        await context.close();
-        if (ownBrowser) {
+      }
+    } catch (err) {
+      console.warn(`[ChatGptCrawler] Session extraction note for "${query}":`, (err as Error).message);
+    } finally {
+      if (context) {
+        try {
+          await context.close();
+        } catch (closeErr) {
+          console.warn("[ChatGptCrawler] Context close error:", (closeErr as Error).message);
+        }
+      }
+      if (ownBrowser && browser) {
+        try {
           await browser.close();
+        } catch (closeErr) {
+          console.warn("[ChatGptCrawler] Browser close error:", (closeErr as Error).message);
         }
       }
     }

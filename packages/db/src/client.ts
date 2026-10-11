@@ -35,12 +35,13 @@ export function getRawDb(customPath?: string): DatabaseSync {
 
   const sqlite = new DatabaseSync(dbPath);
 
-  // Set WAL performance pragmas
+  // Set WAL performance and integrity pragmas
   sqlite.exec("PRAGMA journal_mode = WAL;");
   sqlite.exec("PRAGMA synchronous = NORMAL;");
   sqlite.exec("PRAGMA busy_timeout = 5000;");
+  sqlite.exec("PRAGMA foreign_keys = ON;");
 
-  // Create tables
+  // Create tables with foreign key cascades and complete column schemas
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS brands (
       id TEXT PRIMARY KEY,
@@ -56,7 +57,7 @@ export function getRawDb(customPath?: string): DatabaseSync {
 
     CREATE TABLE IF NOT EXISTS competitors (
       id TEXT PRIMARY KEY,
-      brand_id TEXT NOT NULL,
+      brand_id TEXT NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       domain TEXT NOT NULL,
       aliases_json TEXT NOT NULL DEFAULT '[]',
@@ -66,7 +67,7 @@ export function getRawDb(customPath?: string): DatabaseSync {
 
     CREATE TABLE IF NOT EXISTS prompts (
       id TEXT PRIMARY KEY,
-      brand_id TEXT NOT NULL,
+      brand_id TEXT NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
       query_text TEXT NOT NULL,
       intent_type TEXT NOT NULL,
       persona_dimension TEXT NOT NULL DEFAULT 'agency_executive',
@@ -76,18 +77,22 @@ export function getRawDb(customPath?: string): DatabaseSync {
 
     CREATE TABLE IF NOT EXISTS crawl_batches (
       id TEXT PRIMARY KEY,
-      brand_id TEXT NOT NULL,
+      brand_id TEXT NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
       status TEXT NOT NULL DEFAULT 'pending',
       sample_size INTEGER NOT NULL DEFAULT 10,
+      total_runs INTEGER NOT NULL DEFAULT 0,
       completed_runs INTEGER NOT NULL DEFAULT 0,
+      current_prompt TEXT,
+      current_engine TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       finished_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS prompt_runs (
       id TEXT PRIMARY KEY,
-      batch_id TEXT NOT NULL,
-      prompt_id TEXT NOT NULL,
+      brand_id TEXT REFERENCES brands(id) ON DELETE CASCADE,
+      batch_id TEXT NOT NULL REFERENCES crawl_batches(id) ON DELETE CASCADE,
+      prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
       engine TEXT NOT NULL,
       run_index INTEGER NOT NULL,
       response_text TEXT NOT NULL,
@@ -99,7 +104,8 @@ export function getRawDb(customPath?: string): DatabaseSync {
 
     CREATE TABLE IF NOT EXISTS citations (
       id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL,
+      brand_id TEXT REFERENCES brands(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES prompt_runs(id) ON DELETE CASCADE,
       domain TEXT NOT NULL,
       url TEXT NOT NULL,
       title TEXT,
@@ -113,7 +119,8 @@ export function getRawDb(customPath?: string): DatabaseSync {
 
     CREATE TABLE IF NOT EXISTS entity_mentions (
       id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL,
+      brand_id TEXT REFERENCES brands(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES prompt_runs(id) ON DELETE CASCADE,
       entity_name TEXT NOT NULL,
       is_target_brand INTEGER NOT NULL DEFAULT 0,
       is_competitor INTEGER NOT NULL DEFAULT 0,
@@ -125,9 +132,10 @@ export function getRawDb(customPath?: string): DatabaseSync {
 
     CREATE TABLE IF NOT EXISTS reverse_rag_chunks (
       id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL,
-      citation_id TEXT,
-      source_url TEXT NOT NULL,
+      brand_id TEXT REFERENCES brands(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES prompt_runs(id) ON DELETE CASCADE,
+      citation_id TEXT REFERENCES citations(id) ON DELETE CASCADE,
+      sourceUrl TEXT NOT NULL,
       matched_chunk_text TEXT NOT NULL,
       similarity_score REAL NOT NULL DEFAULT 0.0,
       self_contained_score REAL NOT NULL DEFAULT 0.0,
@@ -136,7 +144,7 @@ export function getRawDb(customPath?: string): DatabaseSync {
 
     CREATE TABLE IF NOT EXISTS opportunities (
       id TEXT PRIMARY KEY,
-      brand_id TEXT NOT NULL,
+      brand_id TEXT NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       sub_query_target TEXT NOT NULL,
       gap_type TEXT NOT NULL,
@@ -152,6 +160,20 @@ export function getRawDb(customPath?: string): DatabaseSync {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Safe migration helper for existing databases missing newly added columns
+  const runMigration = (sql: string) => {
+    try {
+      sqlite.exec(sql);
+    } catch {}
+  };
+  runMigration("ALTER TABLE crawl_batches ADD COLUMN total_runs INTEGER DEFAULT 0;");
+  runMigration("ALTER TABLE crawl_batches ADD COLUMN current_prompt TEXT;");
+  runMigration("ALTER TABLE crawl_batches ADD COLUMN current_engine TEXT;");
+  runMigration("ALTER TABLE prompt_runs ADD COLUMN brand_id TEXT;");
+  runMigration("ALTER TABLE citations ADD COLUMN brand_id TEXT;");
+  runMigration("ALTER TABLE entity_mentions ADD COLUMN brand_id TEXT;");
+  runMigration("ALTER TABLE reverse_rag_chunks ADD COLUMN brand_id TEXT;");
 
   _db = sqlite;
   return sqlite;
@@ -406,6 +428,10 @@ export const db = {
             updatedAt: row.updated_at,
           };
         }
+        if (options?.where) {
+          // Explicit where filter provided but did not match slug or id
+          return undefined;
+        }
         const row = sqlite.prepare("SELECT * FROM brands LIMIT 1").get() as any;
         if (!row) return undefined;
         return {
@@ -503,11 +529,15 @@ export const db = {
     },
 
     crawlBatches: {
-      findFirst: (options?: { where?: { brandId?: string } }): CrawlBatchRecord | undefined => {
+      findFirst: (options?: { where?: any }): CrawlBatchRecord | undefined => {
         const sqlite = getRawDb();
         let row: any;
-        if (options?.where?.brandId) {
-          row = sqlite.prepare("SELECT * FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1").get(options.where.brandId);
+        const id = options?.where?.id;
+        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
+        if (id) {
+          row = sqlite.prepare("SELECT * FROM crawl_batches WHERE id = ? LIMIT 1").get(id);
+        } else if (brandId) {
+          row = sqlite.prepare("SELECT * FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1").get(brandId);
         } else {
           row = sqlite.prepare("SELECT * FROM crawl_batches ORDER BY created_at DESC LIMIT 1").get();
         }
@@ -692,13 +722,29 @@ export const db = {
   insert: (tableObj: any) => ({
     values: async (data: any) => {
       const sqlite = getRawDb();
-      const tableName = tableObj.name || tableObj._table;
-      const keys = Object.keys(data);
-      const snakeKeys = keys.map((k) => k.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`));
-      const placeholders = keys.map(() => "?").join(", ");
-      const values = keys.map((k) => (typeof data[k] === "boolean" ? (data[k] ? 1 : 0) : data[k]));
+      const rawTableName = tableObj.name || tableObj._table;
+      const ALLOWED_TABLES = new Set([
+        "brands", "competitors", "prompts", "crawl_batches",
+        "prompt_runs", "citations", "entity_mentions",
+        "reverse_rag_chunks", "opportunities", "system_settings"
+      ]);
+      if (!ALLOWED_TABLES.has(rawTableName)) {
+        throw new Error(`Invalid table for insertion: ${rawTableName}`);
+      }
 
-      const sql = `INSERT OR REPLACE INTO ${tableName} (${snakeKeys.join(", ")}) VALUES (${placeholders})`;
+      const keys = Object.keys(data);
+      const snakeKeys = keys.map((k) => {
+        const s = k.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+        if (!/^[a-z0-9_]+$/.test(s)) {
+          throw new Error(`Invalid column identifier: ${s}`);
+        }
+        return s;
+      });
+
+      const placeholders = keys.map(() => "?").join(", ");
+      const values = keys.map((k) => (typeof data[k] === "boolean" ? (data[k] ? 1 : 0) : data[k] ?? null));
+
+      const sql = `INSERT OR REPLACE INTO ${rawTableName} (${snakeKeys.join(", ")}) VALUES (${placeholders})`;
       sqlite.prepare(sql).run(...values);
     },
   }),
@@ -708,17 +754,38 @@ export const db = {
     set: (data: any) => ({
       where: (condition: any) => {
         const sqlite = getRawDb();
-        const tableName = tableObj.name || tableObj._table;
-        const keys = Object.keys(data);
-        const snakeKeys = keys.map((k) => k.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`));
-        const setClauses = snakeKeys.map((k) => `${k} = ?`).join(", ");
-        const values = keys.map((k) => (typeof data[k] === "boolean" ? (data[k] ? 1 : 0) : data[k]));
+        const rawTableName = tableObj.name || tableObj._table;
+        const ALLOWED_TABLES = new Set([
+          "brands", "competitors", "prompts", "crawl_batches",
+          "prompt_runs", "citations", "entity_mentions",
+          "reverse_rag_chunks", "opportunities", "system_settings"
+        ]);
+        if (!ALLOWED_TABLES.has(rawTableName)) {
+          throw new Error(`Invalid table for update: ${rawTableName}`);
+        }
 
+        const keys = Object.keys(data);
+        const snakeKeys = keys.map((k) => {
+          const s = k.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+          if (!/^[a-z0-9_]+$/.test(s)) {
+            throw new Error(`Invalid column identifier: ${s}`);
+          }
+          return s;
+        });
+        const setClauses = snakeKeys.map((k) => `${k} = ?`).join(", ");
+        const values = keys.map((k) => (typeof data[k] === "boolean" ? (data[k] ? 1 : 0) : data[k] ?? null));
+
+        if (!condition || typeof condition !== "object" || Object.keys(condition).length === 0) {
+          throw new Error("Missing condition for UPDATE statement");
+        }
         const whereKey = Object.keys(condition)[0];
         const whereVal = condition[whereKey];
         const whereSnake = whereKey.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+        if (!/^[a-z0-9_]+$/.test(whereSnake)) {
+          throw new Error(`Invalid column identifier for where clause: ${whereSnake}`);
+        }
 
-        const sql = `UPDATE ${tableName} SET ${setClauses} WHERE ${whereSnake} = ?`;
+        const sql = `UPDATE ${rawTableName} SET ${setClauses} WHERE ${whereSnake} = ?`;
         sqlite.prepare(sql).run(...values, whereVal);
       },
     }),

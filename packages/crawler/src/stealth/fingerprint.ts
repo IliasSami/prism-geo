@@ -96,7 +96,7 @@ export const STEALTH_INJECTION_SCRIPT = `
     }),
   };
 
-  // 3. Spoof authentic PluginArray with standard PDF viewers
+  // 3. Spoof authentic PluginArray with standard PDF viewers (cached for referential equality)
   const mockPlugins = [
     { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
     { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
@@ -104,15 +104,14 @@ export const STEALTH_INJECTION_SCRIPT = `
     { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
     { name: 'WebKit built-in PDF', filename: 'internal-pdf-viewer', description: 'Portable Document Format' }
   ];
+  const pluginArrayInstance = Object.create(PluginArray.prototype);
+  Object.assign(pluginArrayInstance, mockPlugins);
+  Object.defineProperty(pluginArrayInstance, 'length', { value: mockPlugins.length });
+  pluginArrayInstance.item = (i) => mockPlugins[i];
+  pluginArrayInstance.namedItem = (name) => mockPlugins.find(p => p.name === name);
+
   Object.defineProperty(navigator, 'plugins', {
-    get: () => {
-      const arr = Object.create(PluginArray.prototype);
-      Object.assign(arr, mockPlugins);
-      Object.defineProperty(arr, 'length', { value: mockPlugins.length });
-      arr.item = (i) => mockPlugins[i];
-      arr.namedItem = (name) => mockPlugins.find(p => p.name === name);
-      return arr;
-    },
+    get: () => pluginArrayInstance,
     configurable: true,
   });
 

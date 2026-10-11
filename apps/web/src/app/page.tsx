@@ -1,4 +1,5 @@
 import { db, schema, eq, desc, getActiveBrand } from "@prismgeo/db";
+import { MonteCarloMetricsCalculator } from "@prismgeo/core";
 import {
   TrendingUp,
   Award,
@@ -7,6 +8,10 @@ import {
   CheckCircle2,
   AlertCircle,
   ArrowUpRight,
+  Sparkles,
+  Sliders,
+  Compass,
+  Play,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -48,19 +53,19 @@ export default async function OverviewPage() {
     aliases.some((alias) => r.responseText.toLowerCase().includes(alias.toLowerCase()))
   ).length;
 
-  const mentionRate =
-    totalRuns.length > 0
-      ? Math.round((mentionCount / totalRuns.length) * 100)
-      : 22;
+  const hasRuns = totalRuns.length > 0;
+
+  const mentionRate = hasRuns
+    ? Math.round((mentionCount / totalRuns.length) * 100)
+    : 0;
 
   const totalCits = brandCitations.length + competitorCitations.length;
   const targetSoV =
-    totalCits > 0 ? Math.round((brandCitations.length / totalCits) * 100) : 13;
+    totalCits > 0 ? Math.round((brandCitations.length / totalCits) * 100) : 0;
 
-  const citationRate =
-    totalRuns.length > 0
-      ? Math.round((brandCitations.length / totalRuns.length) * 100)
-      : 28;
+  const [wilsonLower, wilsonUpper] = hasRuns
+    ? MonteCarloMetricsCalculator.calculateWilsonInterval(mentionCount, totalRuns.length)
+    : [0, 0];
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
@@ -75,7 +80,7 @@ export default async function OverviewPage() {
             <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
               Executive Visibility Overview
             </h1>
-            <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+            <p className="text-sm text-slate-400 mt-1 max-w-2xl leading-relaxed">
               Real-time reverse-RAG attribution, ICP buyer dilemma tracking, and
               multi-session Monte Carlo variance across Perplexity, Google AI Overviews, Microsoft Copilot, and Google Gemini.
             </p>
@@ -87,12 +92,79 @@ export default async function OverviewPage() {
                 Active Client
               </div>
               <div className="text-base font-bold text-sky-400 font-mono">
-                {brand?.name} ({brand?.domain})
+                {brand?.name || "Client Workspace"} ({brand?.domain || "unassigned"})
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Zero-State Onboarding Banner when brand has no crawl data */}
+      {!hasRuns && (
+        <div className="bg-gradient-to-br from-sky-50 via-white to-slate-50 rounded-2xl p-6 md:p-8 border border-sky-200/80 shadow-sm">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div className="space-y-2 max-w-2xl">
+              <div className="inline-flex items-center space-x-2 text-xs font-bold text-sky-900 uppercase tracking-wider">
+                <Sparkles className="w-4 h-4 text-sky-600" />
+                <span>Client Calibrated — Ready for First Crawl</span>
+              </div>
+              <h2 className="text-xl font-bold text-slate-900">
+                No Monte Carlo Crawl Data Yet for {brand?.name || "this client"}
+              </h2>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Initiate a probabilistic crawl to measure Citation Share of Voice (CSoV), compute 95% Wilson score confidence bands, extract reverse-RAG passages, and detect strategic content gaps.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2.5 shrink-0">
+              <Link
+                href="/prompts"
+                className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition shadow-xs"
+              >
+                <Compass className="w-3.5 h-3.5 text-sky-600" />
+                <span>View Prompts ({prompts.length})</span>
+              </Link>
+              <Link
+                href="/settings"
+                className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition shadow-xs"
+              >
+                <Sliders className="w-3.5 h-3.5 text-slate-500" />
+                <span>Configure Settings</span>
+              </Link>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6 pt-6 border-t border-sky-100 text-xs">
+            <div className="flex items-start space-x-3">
+              <div className="w-6 h-6 rounded-full bg-sky-100 text-sky-700 flex items-center justify-center font-bold text-xs shrink-0">
+                1
+              </div>
+              <div>
+                <span className="font-semibold text-slate-800 block">5 Engines Calibrated</span>
+                <span className="text-[11px] text-slate-500">Perplexity, Google AIO, Copilot, Gemini, ChatGPT</span>
+              </div>
+            </div>
+            <div className="flex items-start space-x-3">
+              <div className="w-6 h-6 rounded-full bg-sky-100 text-sky-700 flex items-center justify-center font-bold text-xs shrink-0">
+                2
+              </div>
+              <div>
+                <span className="font-semibold text-slate-800 block">{competitors.length} Competitors Configured</span>
+                <span className="text-[11px] text-slate-500">Benchmarking citation overlap & market dilution</span>
+              </div>
+            </div>
+            <div className="flex items-start space-x-3">
+              <div className="w-6 h-6 rounded-full bg-sky-100 text-sky-700 flex items-center justify-center font-bold text-xs shrink-0">
+                3
+              </div>
+              <div>
+                <span className="font-semibold text-slate-800 block">100% Zero-Cost Local</span>
+                <span className="text-[11px] text-slate-500">Stealth browser automation — no paid API keys required</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -103,9 +175,15 @@ export default async function OverviewPage() {
           </div>
           <div className="mt-2 flex items-baseline space-x-2">
             <span className="text-3xl font-black text-slate-900">{targetSoV}%</span>
-            <span className="text-xs font-semibold text-emerald-600 flex items-center">
-              <TrendingUp className="w-3 h-3 mr-0.5" /> +4.2%
-            </span>
+            {hasRuns ? (
+              <span className="text-xs font-semibold text-emerald-600 flex items-center">
+                <TrendingUp className="w-3 h-3 mr-0.5" /> Empirical
+              </span>
+            ) : (
+              <span className="text-[10px] font-semibold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                Pending Run
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-500 mt-1">
             vs {competitors.length} configured agency competitors
@@ -119,7 +197,11 @@ export default async function OverviewPage() {
           </div>
           <div className="mt-2 flex items-baseline space-x-2">
             <span className="text-3xl font-black text-slate-900">{mentionRate}%</span>
-            <span className="text-xs text-slate-400 font-mono">Wilson: [64%, 91%]</span>
+            <span className="text-xs text-slate-400 font-mono">
+              {hasRuns
+                ? `Wilson: [${Math.round(wilsonLower * 100)}%, ${Math.round(wilsonUpper * 100)}%]`
+                : "Wilson: Pending Audit"}
+            </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
             Across {totalRuns.length} multi-run executions
@@ -138,7 +220,7 @@ export default async function OverviewPage() {
             <span className="text-xs font-medium text-slate-500">Official Links</span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Grounded on {brand?.domain || "iliassami.com"}
+            Grounded on {brand?.domain || "unassigned"}
           </p>
         </div>
 
@@ -151,7 +233,7 @@ export default async function OverviewPage() {
             <span className="text-3xl font-black text-slate-900">
               {prompts.length}
             </span>
-            <span className="text-xs text-slate-400 font-mono">5 Intent Clusters</span>
+            <span className="text-xs text-slate-400 font-mono">Calibrated Clusters</span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
             Dilemmas, Margins, NDAs, Comparisons
@@ -186,9 +268,11 @@ export default async function OverviewPage() {
               <div className="flex justify-between text-xs font-semibold mb-1">
                 <span className="text-slate-900 flex items-center">
                   <span className="w-2.5 h-2.5 rounded-full bg-sky-600 mr-2"></span>
-                  {brand ? brand.name : "Ilias Sami"} (Target)
+                  {brand?.name || "Active Brand"} (Target)
                 </span>
-                <span className="text-sky-600 font-mono">{targetSoV}% ({brandCitations.length} citations)</span>
+                <span className="text-sky-600 font-mono">
+                  {targetSoV}% ({brandCitations.length} citations)
+                </span>
               </div>
               <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
                 <div
@@ -199,27 +283,38 @@ export default async function OverviewPage() {
             </div>
 
             {/* Competitors Bars */}
-            {competitors.map((comp) => {
-              const compCount = allCitations.filter((cit) => cit.domain === comp.domain).length;
-              const compShare = totalCits > 0 ? Math.round((compCount / totalCits) * 100) : 15;
-              return (
-                <div key={comp.id}>
-                  <div className="flex justify-between text-xs font-medium text-slate-700 mb-1">
-                    <span className="flex items-center">
-                      <span className="w-2.5 h-2.5 rounded-full bg-slate-400 mr-2"></span>
-                      {comp.name} ({comp.domain})
-                    </span>
-                    <span className="text-slate-500 font-mono">{compShare}% ({compCount} citations)</span>
+            {competitors.length === 0 ? (
+              <div className="py-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                No competitors configured yet. Add competitors in Settings to benchmark CSoV.
+              </div>
+            ) : (
+              competitors.map((comp) => {
+                const compCount = allCitations.filter((cit) => cit.domain === comp.domain).length;
+                const compShare = totalCits > 0 ? Math.round((compCount / totalCits) * 100) : 0;
+                return (
+                  <div key={comp.id}>
+                    <div className="flex justify-between text-xs font-medium text-slate-700 mb-1">
+                      <span className="flex items-center truncate max-w-xs">
+                        <span className="w-2.5 h-2.5 rounded-full bg-slate-400 mr-2 shrink-0"></span>
+                        <span className="truncate">{comp.name}</span>
+                        <span className="text-[10px] text-slate-400 font-mono ml-1.5 truncate">
+                          ({comp.domain})
+                        </span>
+                      </span>
+                      <span className="text-slate-500 font-mono shrink-0 ml-2">
+                        {compShare}% ({compCount} citations)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                      <div
+                        className="bg-slate-400 h-2 rounded-full transition-all duration-500"
+                        style={{ width: `${compShare}%` }}
+                      ></div>
+                    </div>
                   </div>
-                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                    <div
-                      className="bg-slate-400 h-2 rounded-full"
-                      style={{ width: `${compShare}%` }}
-                    ></div>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -241,24 +336,30 @@ export default async function OverviewPage() {
           </div>
 
           <div className="mt-4 space-y-3 flex-1">
-            {opportunities.map((opp) => (
-              <div
-                key={opp.id}
-                className="p-3.5 rounded-lg border border-slate-100 bg-slate-50/60 hover:bg-slate-50 transition"
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-slate-900">
-                    {opp.title}
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 uppercase">
-                    {opp.estimatedImpact}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-600 leading-relaxed">
-                  {opp.recommendedAction}
-                </p>
+            {opportunities.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                No content opportunities identified yet. Run a crawl to automatically detect reverse-RAG gaps.
               </div>
-            ))}
+            ) : (
+              opportunities.map((opp) => (
+                <div
+                  key={opp.id}
+                  className="p-3.5 rounded-lg border border-slate-100 bg-slate-50/60 hover:bg-slate-50 transition"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold text-slate-900 truncate mr-2">
+                      {opp.title}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 uppercase shrink-0">
+                      {opp.estimatedImpact}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 leading-relaxed line-clamp-2">
+                    {opp.recommendedAction}
+                  </p>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>

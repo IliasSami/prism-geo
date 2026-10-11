@@ -3,6 +3,16 @@ import { getRawDb, getActiveBrand } from "@prismgeo/db";
 
 export const dynamic = "force-dynamic";
 
+function sanitizeCsvCell(val: any): string {
+  if (val === null || val === undefined) return '""';
+  let str = String(val);
+  // Neutralize CSV formula execution in Excel/Sheets (CWE-1236)
+  if (/^[=+\-@\t\r|]/.test(str)) {
+    str = `'${str}`;
+  }
+  return `"${str.replace(/"/g, '""')}"`;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -17,6 +27,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "No active brand selected" }, { status: 400 });
     }
 
+    const safeBrandId = brandId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const limitParam = Number(searchParams.get("limit")) || 5000;
+    const limit = Math.min(25000, Math.max(1, limitParam));
+
     const sqlite = getRawDb();
 
     if (type === "citations") {
@@ -25,23 +39,24 @@ export async function GET(request: Request) {
           `SELECT domain, url, title, snippet, rank, is_brand_domain, is_competitor_domain, created_at
            FROM citations
            WHERE brand_id = ?
-           ORDER BY created_at DESC`
+           ORDER BY created_at DESC
+           LIMIT ?`
         )
-        .all(brandId) as any[];
+        .all(brandId, limit) as any[];
 
       if (format === "csv") {
         const headers = ["domain", "url", "title", "snippet", "rank", "is_brand", "is_competitor", "created_at"];
         const csvRows = [headers.join(",")];
         for (const r of rows) {
           const vals = [
-            `"${(r.domain || "").replace(/"/g, '""')}"`,
-            `"${(r.url || "").replace(/"/g, '""')}"`,
-            `"${(r.title || "").replace(/"/g, '""')}"`,
-            `"${(r.snippet || "").replace(/"/g, '""')}"`,
+            sanitizeCsvCell(r.domain),
+            sanitizeCsvCell(r.url),
+            sanitizeCsvCell(r.title),
+            sanitizeCsvCell(r.snippet),
             r.rank,
             r.is_brand_domain ? "true" : "false",
             r.is_competitor_domain ? "true" : "false",
-            `"${r.created_at}"`,
+            sanitizeCsvCell(r.created_at),
           ];
           csvRows.push(vals.join(","));
         }
@@ -49,7 +64,7 @@ export async function GET(request: Request) {
         return new NextResponse(csvRows.join("\n"), {
           headers: {
             "Content-Type": "text/csv; charset=utf-8",
-            "Content-Disposition": `attachment; filename="prismgeo-citations-${brandId}.csv"`,
+            "Content-Disposition": `attachment; filename="prismgeo-citations-${safeBrandId}.csv"`,
           },
         });
       }
@@ -77,7 +92,7 @@ export async function GET(request: Request) {
     return new NextResponse(JSON.stringify(snapshot, null, 2), {
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "Content-Disposition": `attachment; filename="prismgeo-audit-snapshot-${brandId}.json"`,
+        "Content-Disposition": `attachment; filename="prismgeo-audit-snapshot-${safeBrandId}.json"`,
       },
     });
   } catch (error) {

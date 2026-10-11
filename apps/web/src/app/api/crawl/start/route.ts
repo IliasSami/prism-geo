@@ -22,8 +22,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Brand ${brandId} not found` }, { status: 404 });
     }
 
-    const sampleSize = Number(body.sampleSize) || 3;
-    const concurrency = Number(body.concurrency) || 2;
+    const sqlite = getRawDb();
+
+    // Concurrency Lock: check if a batch is already currently running
+    const runningBatch = sqlite
+      .prepare(
+        `SELECT id, created_at FROM crawl_batches WHERE status = 'running' ORDER BY created_at DESC LIMIT 1`
+      )
+      .get() as any;
+
+    if (runningBatch && !body.force) {
+      const batchAgeMs = Date.now() - new Date(runningBatch.created_at).getTime();
+      // If batch started less than 15 minutes ago, enforce lock
+      if (batchAgeMs < 15 * 60 * 1000) {
+        return NextResponse.json(
+          {
+            error: "A crawl batch is currently running. Please wait for it to complete.",
+            runningBatchId: runningBatch.id,
+          },
+          { status: 409 }
+        );
+      } else {
+        // Mark stale batch as failed
+        sqlite
+          .prepare(
+            `UPDATE crawl_batches SET status = 'failed', current_prompt = 'Timed out after 15 minutes', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
+          )
+          .run(runningBatch.id);
+      }
+    }
+
+    const sampleSize = Math.max(1, Math.min(20, Number(body.sampleSize) || 3));
+    const concurrency = Math.max(1, Math.min(5, Number(body.concurrency) || 2));
     const engines = Array.isArray(body.engines) && body.engines.length > 0
       ? body.engines
       : ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"];
@@ -32,11 +62,17 @@ export async function POST(request: Request) {
       where: eq(schema.prompts.brandId, brandId),
     });
 
+    if (prompts.length === 0) {
+      return NextResponse.json(
+        { error: "No active prompts found for this brand. Please configure prompts or run the setup wizard first." },
+        { status: 400 }
+      );
+    }
+
     const promptCount = body.promptLimit ? Math.min(prompts.length, Number(body.promptLimit)) : prompts.length;
     const totalRuns = promptCount * engines.length * sampleSize;
 
     const batchId = `batch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    const sqlite = getRawDb();
 
     sqlite
       .prepare(
@@ -45,27 +81,18 @@ export async function POST(request: Request) {
       )
       .run(batchId, brandId, sampleSize, totalRuns);
 
-    // Asynchronously kick off the crawl orchestration
+    // Asynchronously kick off the crawl orchestration with matching batchId
     (async () => {
       try {
         await CrawlerOrchestrator.executeBatch({
+          batchId,
           brandId,
           sampleSize,
           concurrency,
+          engines,
         });
-
-        sqlite
-          .prepare(
-            `UPDATE crawl_batches SET status = 'completed', completed_runs = total_runs, current_prompt = 'Audit completed successfully', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
-          )
-          .run(batchId);
       } catch (err) {
-        console.error("[Crawl Start Error]", err);
-        sqlite
-          .prepare(
-            `UPDATE crawl_batches SET status = 'failed', current_prompt = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`
-          )
-          .run((err as Error).message, batchId);
+        console.error("[Crawl Start Background Error]", err);
       }
     })();
 

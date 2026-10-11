@@ -1,5 +1,7 @@
 import { db, schema, eq, getActiveBrand } from "@prismgeo/db";
-import { Compass, Filter, CheckCircle2 } from "lucide-react";
+import { Compass, Sparkles } from "lucide-react";
+import Link from "next/link";
+import { PromptsClient } from "./PromptsClient";
 
 export const dynamic = "force-dynamic";
 
@@ -12,62 +14,44 @@ export default async function PromptsPage() {
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       <div>
+        <div className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-xs font-semibold mb-1">
+          <Compass className="w-3.5 h-3.5 text-sky-600" />
+          <span>Evaluation Matrix</span>
+        </div>
         <h1 className="text-2xl font-black text-slate-900 tracking-tight">
           ICP Prompts & Search Dilemma Taxonomy
         </h1>
-        <p className="text-xs text-slate-500 mt-1">
-          High-intent B2B search scenarios designed to reflect realistic agency buyer decisions
+        <p className="text-xs text-slate-500 mt-0.5">
+          High-intent B2B search scenarios designed to reflect realistic agency buyer decisions across decision stages
         </p>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Compass className="w-4 h-4 text-sky-600" />
-            <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              Calibrated Prompts Matrix ({prompts.length})
-            </span>
+      {prompts.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-4 shadow-xs">
+          <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center mx-auto border border-sky-100">
+            <Compass className="w-6 h-6" />
           </div>
-          <span className="text-xs font-mono text-emerald-600 font-semibold">
-            100% Active in Crawl Batch
-          </span>
+          <div className="space-y-1 max-w-md mx-auto">
+            <h3 className="text-base font-bold text-slate-900">
+              No Prompts Configured for this Client
+            </h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Synthesize ICP buyer dilemmas and commercial scenarios using the Setup Wizard or seed generator.
+            </p>
+          </div>
+          <div className="pt-2">
+            <Link
+              href="/setup"
+              className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition shadow-xs"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+              <span>Launch Setup Wizard</span>
+            </Link>
+          </div>
         </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 border-b border-slate-200/80 text-slate-600 uppercase font-semibold">
-              <tr>
-                <th className="py-3 px-4">Search Prompt Text</th>
-                <th className="py-3 px-4">Search Intent</th>
-                <th className="py-3 px-4">Target Persona</th>
-                <th className="py-3 px-4">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {prompts.map((p) => (
-                <tr key={p.id} className="hover:bg-slate-50/80 transition">
-                  <td className="py-3 px-4 font-medium text-slate-900 max-w-xl">
-                    "{p.queryText}"
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-50 text-sky-700 border border-sky-200 uppercase">
-                      {p.intentType}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-slate-600 capitalize">
-                    {p.personaDimension.replace(/_/g, " ")}
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="inline-flex items-center text-emerald-600 font-medium">
-                      <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Active
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      ) : (
+        <PromptsClient prompts={prompts} />
+      )}
     </div>
   );
 }

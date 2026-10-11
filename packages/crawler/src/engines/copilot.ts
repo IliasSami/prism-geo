@@ -17,25 +17,7 @@ export class CopilotEngineCrawler {
 
     let browser = existingBrowser;
     let ownBrowser = false;
-
-    if (!browser) {
-      try {
-        browser = await chromium.launch({
-          headless: true,
-          executablePath: getChromiumExecutablePath(),
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-infobars",
-            `--window-size=${stealth.viewport.width},${stealth.viewport.height}`,
-          ],
-        });
-        ownBrowser = true;
-      } catch (err) {
-        console.warn("[CopilotCrawler] Playwright launch warning:", (err as Error).message);
-      }
-    }
+    let context: import("playwright").BrowserContext | null = null;
 
     let responseText = "";
     const citations: Array<{ url: string; title: string; snippet?: string }> = [];
@@ -45,19 +27,38 @@ export class CopilotEngineCrawler {
       `best software for ${query.slice(0, 30)}`
     ];
 
-    if (browser) {
-      const context = await browser.newContext({
-        userAgent: stealth.userAgent,
-        viewport: stealth.viewport,
-        deviceScaleFactor: stealth.deviceScaleFactor,
-        locale: "en-US",
-        timezoneId: "America/New_York",
-      });
+    try {
+      if (!browser) {
+        try {
+          browser = await chromium.launch({
+            headless: true,
+            executablePath: getChromiumExecutablePath(),
+            args: [
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-blink-features=AutomationControlled",
+              "--disable-infobars",
+              `--window-size=${stealth.viewport.width},${stealth.viewport.height}`,
+            ],
+          });
+          ownBrowser = true;
+        } catch (err) {
+          console.warn("[CopilotCrawler] Playwright launch warning:", (err as Error).message);
+        }
+      }
 
-      await context.addInitScript(STEALTH_INJECTION_SCRIPT);
-      const page = await context.newPage();
+      if (browser) {
+        context = await browser.newContext({
+          userAgent: stealth.userAgent,
+          viewport: stealth.viewport,
+          deviceScaleFactor: stealth.deviceScaleFactor,
+          locale: "en-US",
+          timezoneId: "America/New_York",
+        });
 
-      try {
+        await context.addInitScript(STEALTH_INJECTION_SCRIPT);
+        const page = await context.newPage();
+
         const targetUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=en`;
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
         await page.waitForTimeout(3000);
@@ -96,12 +97,22 @@ export class CopilotEngineCrawler {
           responseText = extracted.content;
         }
         citations.push(...extracted.citations);
-      } catch (err) {
-        console.warn(`[CopilotCrawler] Extraction note for "${query}":`, (err as Error).message);
-      } finally {
-        await context.close();
-        if (ownBrowser) {
+      }
+    } catch (err) {
+      console.warn(`[CopilotCrawler] Extraction note for "${query}":`, (err as Error).message);
+    } finally {
+      if (context) {
+        try {
+          await context.close();
+        } catch (closeErr) {
+          console.warn("[CopilotCrawler] Context close error:", (closeErr as Error).message);
+        }
+      }
+      if (ownBrowser && browser) {
+        try {
           await browser.close();
+        } catch (closeErr) {
+          console.warn("[CopilotCrawler] Browser close error:", (closeErr as Error).message);
         }
       }
     }

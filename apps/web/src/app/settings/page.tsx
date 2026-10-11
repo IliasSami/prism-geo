@@ -18,14 +18,26 @@ import {
   Sparkles,
   RefreshCw,
   ExternalLink,
+  AlertCircle,
+  X,
+  Undo2,
 } from "lucide-react";
 import Link from "next/link";
+
+interface ToastState {
+  type: "success" | "error" | "info";
+  message: string;
+}
 
 export default function SettingsHubPage() {
   const [activeTab, setActiveTab] = useState<"workspace" | "engines" | "crawler" | "storage">("workspace");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [toast, setToast] = useState<ToastState | null>(null);
+
+  // Original snapshot to support discard
+  const [initialData, setInitialData] = useState<any>(null);
 
   // Workspace / Brand Data
   const [brands, setBrands] = useState<any[]>([]);
@@ -36,11 +48,6 @@ export default function SettingsHubPage() {
     description: "",
     aliases: "",
   });
-
-  // Competitors Data
-  const [competitors, setCompetitors] = useState<any[]>([]);
-  const [newCompName, setNewCompName] = useState("");
-  const [newCompDomain, setNewCompDomain] = useState("");
 
   // Engines & BYOK Data
   const [engines, setEngines] = useState({
@@ -71,34 +78,65 @@ export default function SettingsHubPage() {
   // Storage info
   const [dbPath, setDbPath] = useState("");
 
+  // Auto-dismiss toast after 3.5s
   useEffect(() => {
-    // Load brands and settings in parallel
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  useEffect(() => {
     Promise.all([
       fetch("/api/brands").then((r) => r.json()),
       fetch("/api/settings").then((r) => r.json()),
     ])
       .then(([brandData, settingsData]) => {
+        let bForm = { name: "", domain: "", description: "", aliases: "" };
         if (brandData.brands) {
           setBrands(brandData.brands);
           setActiveBrandId(brandData.activeBrandId);
           const active = brandData.activeBrand || brandData.brands.find((b: any) => b.id === brandData.activeBrandId);
           if (active) {
-            setBrandForm({
+            bForm = {
               name: active.name,
               domain: active.domain,
               description: active.description || "",
               aliases: JSON.parse(active.aliasesJson || "[]").join(", "),
-            });
+            };
+            setBrandForm(bForm);
           }
         }
         if (settingsData.engines) setEngines(settingsData.engines);
         if (settingsData.byok) setByok(settingsData.byok);
         if (settingsData.crawler) setCrawler(settingsData.crawler);
         if (settingsData.dbPath) setDbPath(settingsData.dbPath);
+
+        setInitialData({
+          brandForm: bForm,
+          engines: settingsData.engines || engines,
+          byok: settingsData.byok || byok,
+          crawler: settingsData.crawler || crawler,
+        });
+
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch((err) => {
+        setToast({ type: "error", message: "Failed to load settings data" });
+        setLoading(false);
+      });
   }, []);
+
+  function handleDiscard() {
+    if (initialData) {
+      setBrandForm(initialData.brandForm);
+      setEngines(initialData.engines);
+      setByok(initialData.byok);
+      setCrawler(initialData.crawler);
+      setHasUnsavedChanges(false);
+      setToast({ type: "info", message: "Discarded uncommitted changes" });
+    }
+  }
 
   async function handleSwitchBrand(brandId: string) {
     try {
@@ -111,13 +149,12 @@ export default function SettingsHubPage() {
         window.location.reload();
       }
     } catch (e) {
-      console.error(e);
+      setToast({ type: "error", message: "Failed to switch active brand" });
     }
   }
 
   async function handleSaveSettings() {
     setSaving(true);
-    setSaveSuccess(false);
     try {
       const res = await fetch("/api/settings", {
         method: "POST",
@@ -128,22 +165,108 @@ export default function SettingsHubPage() {
           crawler,
         }),
       });
+
       if (res.ok) {
-        setSaveSuccess(true);
-        setTimeout(() => setSaveSuccess(false), 3000);
+        setHasUnsavedChanges(false);
+        setInitialData({
+          brandForm,
+          engines,
+          byok,
+          crawler,
+        });
+        setToast({
+          type: "success",
+          message: "Configuration saved successfully to local SQLite!",
+        });
+      } else {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to save configuration");
       }
     } catch (e) {
-      alert((e as Error).message);
+      setToast({
+        type: "error",
+        message: (e as Error).message || "Error saving configuration",
+      });
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto pb-16">
+      {/* Toast Notification Container */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-3 duration-200">
+          <div
+            role="alert"
+            className={`flex items-center space-x-3 px-4 py-3 rounded-xl shadow-xl border text-xs font-medium max-w-md ${
+              toast.type === "success"
+                ? "bg-slate-900 text-white border-slate-800"
+                : toast.type === "error"
+                ? "bg-rose-900 text-white border-rose-800"
+                : "bg-slate-900 text-white border-slate-800"
+            }`}
+          >
+            {toast.type === "success" && (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            )}
+            {toast.type === "error" && (
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            )}
+            {toast.type === "info" && (
+              <Sparkles className="w-4 h-4 text-sky-400 shrink-0" />
+            )}
+            <span className="flex-1 leading-relaxed">{toast.message}</span>
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              className="p-1 rounded text-slate-400 hover:text-white transition shrink-0"
+              aria-label="Dismiss toast"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Unsaved Changes Pill */}
+      {hasUnsavedChanges && (
+        <div className="sticky top-16 z-30 bg-amber-50 border border-amber-200/80 p-3 rounded-xl shadow-sm flex items-center justify-between text-xs text-amber-900 animate-in fade-in duration-200">
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
+            <span className="font-semibold">Unsaved changes detected</span>
+            <span className="text-amber-700 hidden sm:inline">— Remember to save your configuration.</span>
+          </div>
+
+          <div className="flex items-center space-x-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleDiscard}
+              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-amber-800 hover:bg-amber-100 transition"
+            >
+              <Undo2 className="w-3 h-3" />
+              <span>Discard</span>
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={handleSaveSettings}
+              className="inline-flex items-center space-x-1 px-3 py-1 rounded-lg text-[11px] font-bold bg-slate-900 text-white hover:bg-slate-800 transition shadow-xs"
+            >
+              <Save className="w-3 h-3" />
+              <span>{saving ? "Saving..." : "Save Now"}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
+          <div className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-xs font-semibold mb-1">
+            <Settings className="w-3.5 h-3.5 text-sky-600" />
+            <span>Workspace Control</span>
+          </div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight">
             Settings & Engine Configuration Hub
           </h1>
@@ -153,16 +276,10 @@ export default function SettingsHubPage() {
         </div>
 
         <div className="flex items-center space-x-2">
-          {saveSuccess && (
-            <span className="inline-flex items-center text-xs font-semibold text-emerald-600 bg-emerald-50 px-2.5 py-1.5 rounded-lg border border-emerald-200">
-              <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-              Settings Saved
-            </span>
-          )}
           <button
             onClick={handleSaveSettings}
             disabled={saving}
-            className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition shadow-sm active:scale-95"
+            className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition shadow-sm active:scale-95 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-60"
           >
             <Save className="w-3.5 h-3.5" />
             <span>{saving ? "Saving..." : "Save Configuration"}</span>
@@ -171,7 +288,11 @@ export default function SettingsHubPage() {
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex border-b border-slate-200 space-x-1">
+      <div
+        role="tablist"
+        aria-label="Settings categories"
+        className="flex border-b border-slate-200 space-x-1 overflow-x-auto pb-px"
+      >
         {[
           { id: "workspace", name: "Workspace & Clients", icon: Building2 },
           { id: "engines", name: "Engines & BYOK Keys", icon: Cpu },
@@ -182,14 +303,16 @@ export default function SettingsHubPage() {
           return (
             <button
               key={tab.id}
+              role="tab"
+              aria-selected={isActive}
               onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center space-x-2 px-4 py-3 text-xs font-semibold border-b-2 transition ${
+              className={`flex items-center space-x-2 px-4 py-3 text-xs font-semibold border-b-2 whitespace-nowrap transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 rounded-t-lg ${
                 isActive
-                  ? "border-sky-600 text-sky-600"
+                  ? "border-sky-600 text-sky-600 bg-sky-50/50"
                   : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
               }`}
             >
-              <tab.icon className="w-4 h-4" />
+              <tab.icon className="w-4 h-4 shrink-0" />
               <span>{tab.name}</span>
             </button>
           );
@@ -198,7 +321,7 @@ export default function SettingsHubPage() {
 
       {/* TAB 1: WORKSPACE & CLIENTS */}
       {activeTab === "workspace" && (
-        <div className="space-y-6">
+        <div role="tabpanel" className="space-y-6">
           {/* Active Brand Switcher Card */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
             <div className="flex items-center justify-between">
@@ -212,7 +335,7 @@ export default function SettingsHubPage() {
               </div>
               <Link
                 href="/setup"
-                className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 transition border border-sky-200"
+                className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 transition border border-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Onboard New Brand</span>
@@ -250,7 +373,7 @@ export default function SettingsHubPage() {
                     {!isActive && (
                       <button
                         onClick={() => handleSwitchBrand(b.id)}
-                        className="mt-3 w-full py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 transition"
+                        className="mt-3 w-full py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 transition focus:outline-none focus:ring-2 focus:ring-sky-500"
                       >
                         Set as Active
                       </button>
@@ -275,7 +398,10 @@ export default function SettingsHubPage() {
                 <input
                   type="text"
                   value={brandForm.name}
-                  onChange={(e) => setBrandForm({ ...brandForm, name: e.target.value })}
+                  onChange={(e) => {
+                    setBrandForm({ ...brandForm, name: e.target.value });
+                    setHasUnsavedChanges(true);
+                  }}
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
@@ -287,7 +413,10 @@ export default function SettingsHubPage() {
                 <input
                   type="text"
                   value={brandForm.domain}
-                  onChange={(e) => setBrandForm({ ...brandForm, domain: e.target.value })}
+                  onChange={(e) => {
+                    setBrandForm({ ...brandForm, domain: e.target.value });
+                    setHasUnsavedChanges(true);
+                  }}
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
                 />
               </div>
@@ -299,7 +428,10 @@ export default function SettingsHubPage() {
                 <input
                   type="text"
                   value={brandForm.aliases}
-                  onChange={(e) => setBrandForm({ ...brandForm, aliases: e.target.value })}
+                  onChange={(e) => {
+                    setBrandForm({ ...brandForm, aliases: e.target.value });
+                    setHasUnsavedChanges(true);
+                  }}
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
@@ -310,7 +442,7 @@ export default function SettingsHubPage() {
 
       {/* TAB 2: ENGINES & BYOK KEYS */}
       {activeTab === "engines" && (
-        <div className="space-y-6">
+        <div role="tabpanel" className="space-y-6">
           {/* Architecture Mode Selector */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
             <div>
@@ -345,8 +477,11 @@ export default function SettingsHubPage() {
               ].map((m) => (
                 <button
                   key={m.id}
-                  onClick={() => setEngines({ ...engines, mode: m.id })}
-                  className={`p-4 rounded-xl border text-left transition flex flex-col justify-between ${
+                  onClick={() => {
+                    setEngines({ ...engines, mode: m.id });
+                    setHasUnsavedChanges(true);
+                  }}
+                  className={`p-4 rounded-xl border text-left transition flex flex-col justify-between focus:outline-none focus:ring-2 focus:ring-sky-500 ${
                     engines.mode === m.id
                       ? "border-sky-500 bg-sky-50/60 shadow-sm ring-1 ring-sky-500"
                       : "border-slate-200 bg-white hover:border-slate-300"
@@ -401,10 +536,11 @@ export default function SettingsHubPage() {
                     <input
                       type="checkbox"
                       checked={isEnabled}
-                      onChange={(e) =>
-                        setEngines({ ...engines, [eng.id]: e.target.checked })
-                      }
-                      className="w-4 h-4 accent-sky-600 rounded"
+                      onChange={(e) => {
+                        setEngines({ ...engines, [eng.id]: e.target.checked });
+                        setHasUnsavedChanges(true);
+                      }}
+                      className="w-4 h-4 accent-sky-600 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
                     />
                   </div>
                 );
@@ -428,7 +564,10 @@ export default function SettingsHubPage() {
                   type="password"
                   placeholder="sk-proj-..."
                   value={byok.openai}
-                  onChange={(e) => setByok({ ...byok, openai: e.target.value })}
+                  onChange={(e) => {
+                    setByok({ ...byok, openai: e.target.value });
+                    setHasUnsavedChanges(true);
+                  }}
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
                 />
               </div>
@@ -441,7 +580,10 @@ export default function SettingsHubPage() {
                   type="password"
                   placeholder="pplx-..."
                   value={byok.perplexity}
-                  onChange={(e) => setByok({ ...byok, perplexity: e.target.value })}
+                  onChange={(e) => {
+                    setByok({ ...byok, perplexity: e.target.value });
+                    setHasUnsavedChanges(true);
+                  }}
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
                 />
               </div>
@@ -454,7 +596,10 @@ export default function SettingsHubPage() {
                   type="password"
                   placeholder="AIzaSy..."
                   value={byok.gemini}
-                  onChange={(e) => setByok({ ...byok, gemini: e.target.value })}
+                  onChange={(e) => {
+                    setByok({ ...byok, gemini: e.target.value });
+                    setHasUnsavedChanges(true);
+                  }}
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
                 />
               </div>
@@ -467,7 +612,10 @@ export default function SettingsHubPage() {
                   type="password"
                   placeholder="sk-ant-..."
                   value={byok.anthropic}
-                  onChange={(e) => setByok({ ...byok, anthropic: e.target.value })}
+                  onChange={(e) => {
+                    setByok({ ...byok, anthropic: e.target.value });
+                    setHasUnsavedChanges(true);
+                  }}
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
                 />
               </div>
@@ -478,7 +626,7 @@ export default function SettingsHubPage() {
 
       {/* TAB 3: MONTE CARLO & CRAWLER CONTROLS */}
       {activeTab === "crawler" && (
-        <div className="space-y-6">
+        <div role="tabpanel" className="space-y-6">
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-6">
             <h3 className="text-sm font-bold text-slate-900">
               Monte Carlo Sampling Parameters
@@ -499,10 +647,11 @@ export default function SettingsHubPage() {
                   min="1"
                   max="20"
                   value={crawler.sampleSize}
-                  onChange={(e) =>
-                    setCrawler({ ...crawler, sampleSize: Number(e.target.value) })
-                  }
-                  className="w-full accent-sky-600"
+                  onChange={(e) => {
+                    setCrawler({ ...crawler, sampleSize: Number(e.target.value) });
+                    setHasUnsavedChanges(true);
+                  }}
+                  className="w-full accent-sky-600 focus:outline-none focus:ring-1 focus:ring-sky-500"
                 />
                 <p className="text-[11px] text-slate-500">
                   Controls the number of independent sessions sampled per prompt to compute Wilson 95% intervals and variance bands.
@@ -523,10 +672,11 @@ export default function SettingsHubPage() {
                   min="1"
                   max="5"
                   value={crawler.concurrency}
-                  onChange={(e) =>
-                    setCrawler({ ...crawler, concurrency: Number(e.target.value) })
-                  }
-                  className="w-full accent-sky-600"
+                  onChange={(e) => {
+                    setCrawler({ ...crawler, concurrency: Number(e.target.value) });
+                    setHasUnsavedChanges(true);
+                  }}
+                  className="w-full accent-sky-600 focus:outline-none focus:ring-1 focus:ring-sky-500"
                 />
                 <p className="text-[11px] text-slate-500">
                   Parallel headless browser contexts. Keep at 2 for residential networks or 4-5 on high-speed servers.
@@ -542,7 +692,10 @@ export default function SettingsHubPage() {
                 type="text"
                 placeholder="http://username:password@proxy.example.com:8080"
                 value={crawler.proxyUrl}
-                onChange={(e) => setCrawler({ ...crawler, proxyUrl: e.target.value })}
+                onChange={(e) => {
+                  setCrawler({ ...crawler, proxyUrl: e.target.value });
+                  setHasUnsavedChanges(true);
+                }}
                 className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
               />
               <span className="text-[11px] text-slate-400 block">
@@ -555,7 +708,7 @@ export default function SettingsHubPage() {
 
       {/* TAB 4: STORAGE, EXPORT & BACKUPS */}
       {activeTab === "storage" && (
-        <div className="space-y-6">
+        <div role="tabpanel" className="space-y-6">
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
             <h3 className="text-sm font-bold text-slate-900">
               Persistence Engine & Health
@@ -591,7 +744,7 @@ export default function SettingsHubPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
               <a
                 href="/api/export?format=csv&type=citations"
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 text-left transition hover:shadow-sm group flex flex-col justify-between"
+                className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 text-left transition hover:shadow-sm group flex flex-col justify-between focus:outline-none focus:ring-2 focus:ring-sky-500"
               >
                 <div>
                   <div className="font-bold text-xs text-slate-900 group-hover:text-sky-600">
@@ -609,7 +762,7 @@ export default function SettingsHubPage() {
 
               <a
                 href="/api/export?format=json&type=full"
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 text-left transition hover:shadow-sm group flex flex-col justify-between"
+                className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 text-left transition hover:shadow-sm group flex flex-col justify-between focus:outline-none focus:ring-2 focus:ring-sky-500"
               >
                 <div>
                   <div className="font-bold text-xs text-slate-900 group-hover:text-sky-600">
@@ -627,7 +780,7 @@ export default function SettingsHubPage() {
 
               <a
                 href="/api/backup"
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 text-left transition hover:shadow-sm group flex flex-col justify-between"
+                className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 text-left transition hover:shadow-sm group flex flex-col justify-between focus:outline-none focus:ring-2 focus:ring-sky-500"
               >
                 <div>
                   <div className="font-bold text-xs text-slate-900 group-hover:text-sky-600">

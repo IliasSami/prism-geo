@@ -32,13 +32,31 @@ export async function GET(request: Request) {
       });
     }
 
+    // Check and auto-fail stale running batches (> 15 minutes old)
+    if (batch.status === "running") {
+      const ageMs = Date.now() - new Date(batch.created_at).getTime();
+      if (ageMs > 15 * 60 * 1000) {
+        sqlite
+          .prepare(
+            `UPDATE crawl_batches SET status = 'failed', current_prompt = 'Batch timed out after 15 minutes', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
+          )
+          .run(batch.id);
+        batch.status = "failed";
+        batch.current_prompt = "Batch timed out after 15 minutes";
+      }
+    }
+
     // Compute actual completed runs count from prompt_runs table for this batch
     const runCountRow = sqlite
       .prepare("SELECT count(*) as cnt FROM prompt_runs WHERE batch_id = ?")
       .get(batch.id) as any;
     const completedRuns = runCountRow?.cnt || batch.completed_runs || 0;
     const totalRuns = batch.total_runs || (batch.sample_size * 5) || 10;
-    const percent = totalRuns > 0 ? Math.min(100, Math.round((completedRuns / totalRuns) * 100)) : 0;
+    const percent = batch.status === "completed"
+      ? 100
+      : totalRuns > 0
+      ? Math.min(99, Math.round((completedRuns / totalRuns) * 100))
+      : 0;
 
     return NextResponse.json({
       batchId: batch.id,

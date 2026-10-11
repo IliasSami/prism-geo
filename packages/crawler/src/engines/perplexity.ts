@@ -17,57 +17,58 @@ export class PerplexityEngineCrawler {
 
     let browser = existingBrowser;
     let ownBrowser = false;
-
-    if (!browser) {
-      try {
-        browser = await chromium.launch({
-          headless: true,
-          executablePath: getChromiumExecutablePath(),
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-infobars",
-            `--window-size=${stealth.viewport.width},${stealth.viewport.height}`,
-          ],
-        });
-        ownBrowser = true;
-      } catch (err) {
-        console.warn("[PerplexityCrawler] Playwright launch warning:", (err as Error).message);
-      }
-    }
+    let context: import("playwright").BrowserContext | null = null;
 
     const interceptedQueries: string[] = [];
     let responseText = "";
     const citations: Array<{ url: string; title: string; snippet?: string }> = [];
 
-    if (browser) {
-      const context = await browser.newContext({
-        userAgent: stealth.userAgent,
-        viewport: stealth.viewport,
-        deviceScaleFactor: stealth.deviceScaleFactor,
-        locale: stealth.locale,
-        timezoneId: stealth.timezoneId,
-      });
-
-      await context.addInitScript(STEALTH_INJECTION_SCRIPT);
-      const page = await context.newPage();
-
-      // Intercept internal query fan-out network calls
-      page.on("request", (req) => {
-        const url = req.url();
-        if (url.includes("query=") || url.includes("search?")) {
-          try {
-            const parsed = new URL(url);
-            const q = parsed.searchParams.get("query") || parsed.searchParams.get("q");
-            if (q && q !== query && !interceptedQueries.includes(q)) {
-              interceptedQueries.push(q);
-            }
-          } catch {}
+    try {
+      if (!browser) {
+        try {
+          browser = await chromium.launch({
+            headless: true,
+            executablePath: getChromiumExecutablePath(),
+            args: [
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-blink-features=AutomationControlled",
+              "--disable-infobars",
+              `--window-size=${stealth.viewport.width},${stealth.viewport.height}`,
+            ],
+          });
+          ownBrowser = true;
+        } catch (err) {
+          console.warn("[PerplexityCrawler] Playwright launch warning:", (err as Error).message);
         }
-      });
+      }
 
-      try {
+      if (browser) {
+        context = await browser.newContext({
+          userAgent: stealth.userAgent,
+          viewport: stealth.viewport,
+          deviceScaleFactor: stealth.deviceScaleFactor,
+          locale: stealth.locale,
+          timezoneId: stealth.timezoneId,
+        });
+
+        await context.addInitScript(STEALTH_INJECTION_SCRIPT);
+        const page = await context.newPage();
+
+        // Intercept internal query fan-out network calls
+        page.on("request", (req) => {
+          const url = req.url();
+          if (url.includes("query=") || url.includes("search?")) {
+            try {
+              const parsed = new URL(url);
+              const q = parsed.searchParams.get("query") || parsed.searchParams.get("q");
+              if (q && q !== query && !interceptedQueries.includes(q)) {
+                interceptedQueries.push(q);
+              }
+            } catch {}
+          }
+        });
+
         const targetUrl = `https://www.perplexity.ai/search?q=${encodeURIComponent(query)}`;
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
         await page.waitForTimeout(4000);
@@ -98,12 +99,22 @@ export class PerplexityEngineCrawler {
           responseText = content.text;
           citations.push(...content.links);
         }
-      } catch (err) {
-        console.warn(`[PerplexityCrawler] Extraction note for "${query}":`, (err as Error).message);
-      } finally {
-        await context.close();
-        if (ownBrowser) {
+      }
+    } catch (err) {
+      console.warn(`[PerplexityCrawler] Extraction note for "${query}":`, (err as Error).message);
+    } finally {
+      if (context) {
+        try {
+          await context.close();
+        } catch (closeErr) {
+          console.warn("[PerplexityCrawler] Context close error:", (closeErr as Error).message);
+        }
+      }
+      if (ownBrowser && browser) {
+        try {
           await browser.close();
+        } catch (closeErr) {
+          console.warn("[PerplexityCrawler] Browser close error:", (closeErr as Error).message);
         }
       }
     }
