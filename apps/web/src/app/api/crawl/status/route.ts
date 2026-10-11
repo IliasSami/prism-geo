@@ -3,6 +3,14 @@ import { getRawDb, getActiveBrand } from "@prismgeo/db";
 
 export const dynamic = "force-dynamic";
 
+function parseSqliteDate(dateStr: string | null | undefined): number {
+  if (!dateStr) return Date.now();
+  if (dateStr.includes("Z") || dateStr.includes("+")) {
+    return new Date(dateStr).getTime();
+  }
+  return new Date(dateStr.replace(" ", "T") + "Z").getTime();
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -14,11 +22,28 @@ export async function GET(request: Request) {
     if (batchId) {
       batch = sqlite.prepare("SELECT * FROM crawl_batches WHERE id = ?").get(batchId);
     } else if (activeBrand) {
-      batch = sqlite
-        .prepare("SELECT * FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1")
-        .get(activeBrand.id);
+      // Look for an active running batch first, otherwise the latest batch
+      batch =
+        sqlite
+          .prepare(
+            "SELECT * FROM crawl_batches WHERE brand_id = ? AND status = 'running' ORDER BY created_at DESC LIMIT 1"
+          )
+          .get(activeBrand.id) ||
+        sqlite
+          .prepare(
+            "SELECT * FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1"
+          )
+          .get(activeBrand.id);
     } else {
-      batch = sqlite.prepare("SELECT * FROM crawl_batches ORDER BY created_at DESC LIMIT 1").get();
+      batch =
+        sqlite
+          .prepare(
+            "SELECT * FROM crawl_batches WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
+          )
+          .get() ||
+        sqlite
+          .prepare("SELECT * FROM crawl_batches ORDER BY created_at DESC LIMIT 1")
+          .get();
     }
 
     if (!batch) {
@@ -32,17 +57,17 @@ export async function GET(request: Request) {
       });
     }
 
-    // Check and auto-fail stale running batches (> 15 minutes old)
+    // Check and auto-fail genuinely stale running batches (> 30 minutes old)
     if (batch.status === "running") {
-      const ageMs = Date.now() - new Date(batch.created_at).getTime();
-      if (ageMs > 15 * 60 * 1000) {
+      const ageMs = Date.now() - parseSqliteDate(batch.created_at);
+      if (ageMs > 30 * 60 * 1000) {
         sqlite
           .prepare(
-            `UPDATE crawl_batches SET status = 'failed', current_prompt = 'Batch timed out after 15 minutes', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
+            `UPDATE crawl_batches SET status = 'failed', current_prompt = 'Batch timed out after 30 minutes', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
           )
           .run(batch.id);
         batch.status = "failed";
-        batch.current_prompt = "Batch timed out after 15 minutes";
+        batch.current_prompt = "Batch timed out after 30 minutes";
       }
     }
 

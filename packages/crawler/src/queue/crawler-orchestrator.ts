@@ -13,6 +13,7 @@ export interface CrawlBatchOptions {
   sampleSize?: number; // Monte Carlo N runs
   concurrency?: number; // Browser tabs concurrency
   engines?: Array<"perplexity" | "google_aio" | "copilot" | "gemini" | "chatgpt">;
+  promptLimit?: number;
 }
 
 export class CrawlerOrchestrator {
@@ -36,13 +37,17 @@ export class CrawlerOrchestrator {
     });
     const competitorDomains = competitors.map((c: any) => c.domain);
 
-    const activePrompts = await db.query.prompts.findMany({
+    const rawPrompts = await db.query.prompts.findMany({
       where: eq(schema.prompts.brandId, brandId),
     });
 
-    if (activePrompts.length === 0) {
+    if (rawPrompts.length === 0) {
       throw new Error(`No active prompts configured for brand ${brandId}`);
     }
+
+    const activePrompts = options.promptLimit
+      ? rawPrompts.slice(0, options.promptLimit)
+      : rawPrompts;
 
     // 2. Resolve or create batch record
     const batchId = options.batchId || `batch-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;

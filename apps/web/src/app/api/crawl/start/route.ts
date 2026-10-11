@@ -22,6 +22,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Brand ${brandId} not found` }, { status: 404 });
     }
 
+function parseSqliteDate(dateStr: string | null | undefined): number {
+  if (!dateStr) return Date.now();
+  if (dateStr.includes("Z") || dateStr.includes("+")) {
+    return new Date(dateStr).getTime();
+  }
+  return new Date(dateStr.replace(" ", "T") + "Z").getTime();
+}
+
     const sqlite = getRawDb();
 
     // Concurrency Lock: check if a batch is already currently running
@@ -32,9 +40,9 @@ export async function POST(request: Request) {
       .get() as any;
 
     if (runningBatch && !body.force) {
-      const batchAgeMs = Date.now() - new Date(runningBatch.created_at).getTime();
-      // If batch started less than 15 minutes ago, enforce lock
-      if (batchAgeMs < 15 * 60 * 1000) {
+      const batchAgeMs = Date.now() - parseSqliteDate(runningBatch.created_at);
+      // If batch started less than 30 minutes ago, enforce lock
+      if (batchAgeMs < 30 * 60 * 1000) {
         return NextResponse.json(
           {
             error: "A crawl batch is currently running. Please wait for it to complete.",
@@ -46,7 +54,7 @@ export async function POST(request: Request) {
         // Mark stale batch as failed
         sqlite
           .prepare(
-            `UPDATE crawl_batches SET status = 'failed', current_prompt = 'Timed out after 15 minutes', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
+            `UPDATE crawl_batches SET status = 'failed', current_prompt = 'Timed out after 30 minutes', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
           )
           .run(runningBatch.id);
       }
@@ -73,13 +81,14 @@ export async function POST(request: Request) {
     const totalRuns = promptCount * engines.length * sampleSize;
 
     const batchId = `batch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const nowIso = new Date().toISOString();
 
     sqlite
       .prepare(
         `INSERT INTO crawl_batches (id, brand_id, status, sample_size, total_runs, completed_runs, current_prompt, current_engine, created_at)
-         VALUES (?, ?, 'running', ?, ?, 0, 'Initializing stealth contexts...', 'system', CURRENT_TIMESTAMP)`
+         VALUES (?, ?, 'running', ?, ?, 0, 'Initializing stealth contexts...', 'system', ?)`
       )
-      .run(batchId, brandId, sampleSize, totalRuns);
+      .run(batchId, brandId, sampleSize, totalRuns, nowIso);
 
     // Asynchronously kick off the crawl orchestration with matching batchId
     (async () => {
@@ -90,6 +99,7 @@ export async function POST(request: Request) {
           sampleSize,
           concurrency,
           engines,
+          promptLimit: body.promptLimit ? Number(body.promptLimit) : undefined,
         });
       } catch (err) {
         console.error("[Crawl Start Background Error]", err);

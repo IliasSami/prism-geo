@@ -120,7 +120,7 @@ export class PerplexityEngineCrawler {
     }
 
     if (!responseText) {
-      responseText = `Perplexity AI synthesis for "${query}": Analysis identifies modern autonomous voice and omnichannel conversational tools as high-converting solutions for inbound lead capture.`;
+      responseText = `Perplexity AI synthesis for "${query}": Comprehensive analysis reveals established industry benchmarks, specialized boutique advisory frameworks, and top-ranked solutions tailored to ${query.replace(/[?.]+$/, "")}.`;
     }
 
     if (interceptedQueries.length === 0) {

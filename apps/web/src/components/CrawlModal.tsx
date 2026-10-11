@@ -112,23 +112,29 @@ export function CrawlModal({
     if (open && status.status === "running") {
       interval = setInterval(async () => {
         try {
-          const res = await fetch("/api/crawl/status");
+          const url = status.batchId
+            ? `/api/crawl/status?batchId=${encodeURIComponent(status.batchId)}`
+            : `/api/crawl/status${brandId ? `?brandId=${encodeURIComponent(brandId)}` : ""}`;
+          const res = await fetch(url);
           if (res.ok) {
             const data = await res.json();
-            setStatus(data);
             if (data.status === "completed") {
+              setStatus((s) => ({ ...s, ...data, status: "completed" }));
               setIsSubmitting(false);
               setErrorMessage(null);
             } else if (data.status === "failed") {
+              setStatus((s) => ({ ...s, ...data, status: "failed" }));
               setIsSubmitting(false);
               setErrorMessage(data.currentPrompt || "Audit run encountered a fatal error.");
+            } else if (data.status === "running") {
+              setStatus((s) => ({ ...s, ...data }));
             }
           }
         } catch {}
       }, 1500);
     }
     return () => clearInterval(interval);
-  }, [open, status.status]);
+  }, [open, status.status, status.batchId, brandId]);
 
   // Handle Escape key and body scroll lock
   useEffect(() => {
@@ -170,6 +176,7 @@ export function CrawlModal({
           sampleSize,
           concurrency,
           engines: selectedEngines,
+          force: true,
         }),
       });
 
@@ -179,6 +186,16 @@ export function CrawlModal({
         setErrorMessage(msg);
         setStatus((s) => ({ ...s, status: "failed", currentPrompt: msg }));
         setIsSubmitting(false);
+      } else {
+        const data = await res.json();
+        setStatus((s) => ({
+          ...s,
+          batchId: data.batchId,
+          status: "running",
+          percent: 5,
+          currentPrompt: "Initializing stealth crawler engines...",
+          currentEngine: selectedEngines[0] || "system",
+        }));
       }
     } catch (e) {
       const msg = (e as Error).message || "Network error occurred";

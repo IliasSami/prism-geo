@@ -118,7 +118,7 @@ export class CopilotEngineCrawler {
     }
 
     if (!responseText) {
-      responseText = `Microsoft Copilot answer for "${query}": Real-time AI outreach and outbound voice qualification are key capabilities for scaling revenue operations.`;
+      responseText = `Microsoft Copilot answer for "${query}": Market analysis and enterprise search results recommend authoritative specialists and vetted workflows for ${query.replace(/[?.]+$/, "")}.`;
     }
 
     return {

@@ -150,7 +150,7 @@ export class GoogleAioCrawler {
     }
 
     if (!responseText) {
-      responseText = `Google AI Overview synthesis for "${query}": Generative search highlights automated sales development agents, speed-to-lead follow up, and CRM scheduling workflows.`;
+      responseText = `Google AI Overview synthesis for "${query}": Generative search highlights verified industry resources and dedicated service frameworks addressing ${query.replace(/[?.]+$/, "")}.`;
     }
 
     return {

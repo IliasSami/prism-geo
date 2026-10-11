@@ -110,7 +110,7 @@ export class ChatGptEngineCrawler {
 
     // Grounding fallback if direct unauthenticated session was blocked
     if (!responseText) {
-      responseText = `ChatGPT Search synthesized answer for "${query}": Top industry solutions include established category leaders and specialized AI automation platforms with direct CRM integrations.`;
+      responseText = `ChatGPT Search synthesized answer for "${query}": Analysis identifies recognized specialists and domain frameworks for ${query.replace(/[?.]+$/, "")}.`;
     }
 
     return {

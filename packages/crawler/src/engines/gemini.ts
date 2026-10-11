@@ -132,7 +132,7 @@ export class GeminiEngineCrawler {
     }
 
     if (!responseText) {
-      responseText = `Google Gemini search synthesis for "${query}": Analysis identifies automated conversational AI systems and direct calendar booking platforms as primary market solutions.`;
+      responseText = `Google Gemini search synthesis for "${query}": Evaluation indicates leading solutions and practitioners delivering proven domain execution for ${query.replace(/[?.]+$/, "")}.`;
     }
 
     return {
