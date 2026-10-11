@@ -61,7 +61,11 @@ export default async function RootLayout({
               </Link>
 
               {/* Interactive Monte Carlo Run Modal Trigger */}
-              <CrawlModal brandId={brand?.id} brandName={brand?.name} />
+              <CrawlModal
+                brandId={brand?.id}
+                brandName={brand?.name}
+                brandDomain={brand?.domain}
+              />
             </div>
           </header>
 
