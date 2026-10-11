@@ -6,15 +6,25 @@ export function getDbPath(): string {
   if (process.env.PRISMGEO_DB_PATH) {
     return process.env.PRISMGEO_DB_PATH;
   }
-  // Look for data directory from current directory upwards
+  // Search upwards for repository/workspace root containing data/prismgeo.db
   let curr = process.cwd();
-  for (let i = 0; i < 4; i++) {
+  let rootDataCandidate: string | null = null;
+  for (let i = 0; i < 5; i++) {
     const candidate = path.join(curr, "data", "prismgeo.db");
-    if (fs.existsSync(candidate)) return candidate;
+    const hasWorkspace =
+      fs.existsSync(path.join(curr, "pnpm-workspace.yaml")) ||
+      fs.existsSync(path.join(curr, ".git"));
+    if (hasWorkspace && fs.existsSync(candidate)) {
+      return candidate; // Found canonical workspace root database
+    }
+    if (fs.existsSync(candidate) && !rootDataCandidate) {
+      rootDataCandidate = candidate;
+    }
     const parent = path.dirname(curr);
     if (parent === curr) break;
     curr = parent;
   }
+  if (rootDataCandidate) return rootDataCandidate;
   const defaultDir = path.resolve(process.cwd(), "data");
   if (!fs.existsSync(defaultDir)) {
     fs.mkdirSync(defaultDir, { recursive: true });
