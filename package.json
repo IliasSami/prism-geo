@@ -1,0 +1,20 @@
+{
+  "name": "prism-geo-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PrismGEO: Open-Source Generative Engine Observability & Visibility Suite",
+  "scripts": {
+    "dev": "pnpm --filter @prismgeo/web dev",
+    "build": "pnpm --filter \"@prismgeo/*\" build",
+    "db:push": "pnpm --filter @prismgeo/db db:push",
+    "db:studio": "pnpm --filter @prismgeo/db db:studio",
+    "seed": "tsx packages/db/src/seed.ts",
+    "crawl": "tsx packages/crawler/src/cli.ts",
+    "test": "pnpm --filter \"@prismgeo/*\" test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
