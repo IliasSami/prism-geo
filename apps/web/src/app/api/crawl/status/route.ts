@@ -15,35 +15,27 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const batchId = searchParams.get("batchId");
+    const brandIdParam = searchParams.get("brandId");
     const sqlite = getRawDb();
     const activeBrand = getActiveBrand();
+    const targetBrandId = brandIdParam || activeBrand?.id;
 
     let batch: any = null;
     if (batchId) {
       batch = sqlite.prepare("SELECT * FROM crawl_batches WHERE id = ?").get(batchId);
-    } else if (activeBrand) {
-      // Look for an active running batch first, otherwise the latest batch
-      batch =
-        sqlite
-          .prepare(
-            "SELECT * FROM crawl_batches WHERE brand_id = ? AND status = 'running' ORDER BY created_at DESC LIMIT 1"
-          )
-          .get(activeBrand.id) ||
-        sqlite
-          .prepare(
-            "SELECT * FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1"
-          )
-          .get(activeBrand.id);
+    } else if (targetBrandId) {
+      // ONLY look for an actively running batch for this brand!
+      batch = sqlite
+        .prepare(
+          "SELECT * FROM crawl_batches WHERE brand_id = ? AND status = 'running' ORDER BY created_at DESC LIMIT 1"
+        )
+        .get(targetBrandId);
     } else {
-      batch =
-        sqlite
-          .prepare(
-            "SELECT * FROM crawl_batches WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
-          )
-          .get() ||
-        sqlite
-          .prepare("SELECT * FROM crawl_batches ORDER BY created_at DESC LIMIT 1")
-          .get();
+      batch = sqlite
+        .prepare(
+          "SELECT * FROM crawl_batches WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
+        )
+        .get();
     }
 
     if (!batch) {
@@ -57,17 +49,25 @@ export async function GET(request: Request) {
       });
     }
 
-    // Check and auto-fail genuinely stale running batches (> 30 minutes old)
+    // Check and auto-fail genuinely abandoned running batches (no activity in 15 mins or > 2 hrs old)
     if (batch.status === "running") {
-      const ageMs = Date.now() - parseSqliteDate(batch.created_at);
-      if (ageMs > 30 * 60 * 1000) {
+      const lastRunRow = sqlite
+        .prepare("SELECT created_at FROM prompt_runs WHERE batch_id = ? ORDER BY created_at DESC LIMIT 1")
+        .get(batch.id) as any;
+      const lastActivityMs = lastRunRow
+        ? parseSqliteDate(lastRunRow.created_at)
+        : parseSqliteDate(batch.created_at);
+      const inactiveMs = Date.now() - lastActivityMs;
+      const totalAgeMs = Date.now() - parseSqliteDate(batch.created_at);
+
+      if (inactiveMs > 15 * 60 * 1000 || totalAgeMs > 2 * 60 * 60 * 1000) {
         sqlite
           .prepare(
-            `UPDATE crawl_batches SET status = 'failed', current_prompt = 'Batch timed out after 30 minutes', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
+            `UPDATE crawl_batches SET status = 'failed', current_prompt = 'Batch abandoned after inactivity', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
           )
           .run(batch.id);
         batch.status = "failed";
-        batch.current_prompt = "Batch timed out after 30 minutes";
+        batch.current_prompt = "Batch abandoned after inactivity";
       }
     }
 

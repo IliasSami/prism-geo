@@ -81,6 +81,7 @@ export function CrawlModal({
   brandDomain?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [promptScope, setPromptScope] = useState<number>(30);
   const [sampleSize, setSampleSize] = useState(5);
   const [concurrency, setConcurrency] = useState(2);
   const [selectedEngines, setSelectedEngines] = useState<string[]>([
@@ -105,6 +106,37 @@ export function CrawlModal({
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Whenever modal opens, clear any previous error and check if a run is currently active
+  useEffect(() => {
+    if (open) {
+      if (status.status !== "running") {
+        setErrorMessage(null);
+        const checkActive = async () => {
+          try {
+            const url = `/api/crawl/status${brandId ? `?brandId=${encodeURIComponent(brandId)}` : ""}`;
+            const res = await fetch(url);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.status === "running") {
+                setStatus(data);
+              } else {
+                setStatus({
+                  status: "idle",
+                  completedRuns: 0,
+                  totalRuns: 0,
+                  percent: 0,
+                  currentPrompt: "Ready",
+                  currentEngine: "idle",
+                });
+              }
+            }
+          } catch {}
+        };
+        checkActive();
+      }
+    }
+  }, [open, brandId]);
 
   // Poll status while open and running
   useEffect(() => {
@@ -158,10 +190,11 @@ export function CrawlModal({
   async function handleStartCrawl() {
     setIsSubmitting(true);
     setErrorMessage(null);
+    const totalEstRuns = (promptScope > 0 ? promptScope : 42) * selectedEngines.length * sampleSize;
     setStatus({
       status: "running",
       completedRuns: 0,
-      totalRuns: 10,
+      totalRuns: totalEstRuns,
       percent: 5,
       currentPrompt: "Initializing stealth browser sessions...",
       currentEngine: "playwright",
@@ -176,6 +209,7 @@ export function CrawlModal({
           sampleSize,
           concurrency,
           engines: selectedEngines,
+          promptLimit: promptScope > 0 ? promptScope : undefined,
           force: true,
         }),
       });
@@ -464,6 +498,40 @@ export function CrawlModal({
                     </div>
                   </div>
 
+                  {/* Prompt Scope Selector */}
+                  <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-semibold text-slate-300 flex items-center space-x-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+                        <span>Prompt Scope</span>
+                      </span>
+                      <span className="font-mono font-bold text-sky-400 bg-sky-950/80 px-2 py-0.5 rounded text-xs border border-sky-800/60">
+                        {promptScope === 0 ? "All Prompts (42)" : `${promptScope} Prompts`}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 pt-0.5">
+                      {[
+                        { label: "10 Prompts", value: 10, desc: "Quick Scan" },
+                        { label: "30 Prompts", value: 30, desc: "Standard Audit" },
+                        { label: "All Prompts", value: 0, desc: "Full Scope" },
+                      ].map((scope) => (
+                        <button
+                          key={scope.value}
+                          type="button"
+                          onClick={() => setPromptScope(scope.value)}
+                          className={`py-2 px-2.5 rounded-lg text-xs font-medium border text-center transition ${
+                            promptScope === scope.value
+                              ? "border-sky-500 bg-sky-950/70 text-sky-200 shadow-sm"
+                              : "border-slate-800 bg-slate-900/50 text-slate-400 hover:text-slate-200 hover:border-slate-700"
+                          }`}
+                        >
+                          <div className="font-semibold">{scope.label}</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">{scope.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* Sampling Controls (Dual Cards) */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                     {/* Sample Size */}
@@ -540,13 +608,16 @@ export function CrawlModal({
             {/* Sticky Footer */}
             {status.status !== "running" && status.status !== "completed" && (
               <div className="px-5 sm:px-6 py-3.5 bg-slate-950/90 border-t border-slate-800 flex items-center justify-between shrink-0 sticky bottom-0 z-10 backdrop-blur">
-                <span className="text-[11px] text-slate-500 hidden sm:inline">
-                  Estimated: ~{sampleSize * 25}s multi-engine run
+                <span className="text-[11px] text-slate-400 hidden sm:inline">
+                  Estimated: ~{Math.round(((promptScope > 0 ? promptScope : 42) * selectedEngines.length * sampleSize * 0.4) / concurrency)}s multi-engine run
                 </span>
                 <div className="flex items-center space-x-2.5 ml-auto">
                   <button
                     type="button"
-                    onClick={() => setOpen(false)}
+                    onClick={() => {
+                      setOpen(false);
+                      setErrorMessage(null);
+                    }}
                     className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800/70 transition focus:outline-none focus:ring-1 focus:ring-slate-500"
                   >
                     Cancel

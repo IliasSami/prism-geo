@@ -5,6 +5,8 @@ import { GoogleAioCrawler } from "../engines/google-aio";
 import { CopilotEngineCrawler } from "../engines/copilot";
 import { GeminiEngineCrawler } from "../engines/gemini";
 import { ChatGptEngineCrawler } from "../engines/chatgpt";
+import { chromium, type Browser } from "playwright";
+import { getChromiumExecutablePath } from "../stealth/fingerprint";
 import crypto from "node:crypto";
 
 export interface CrawlBatchOptions {
@@ -84,22 +86,39 @@ export class CrawlerOrchestrator {
     console.log(`[CrawlerOrchestrator] Started batch ${batchId} for ${brand.name} (${activePrompts.length} prompts across ${engines.length} engines, N=${sampleSize})`);
 
     let completedRuns = 0;
+    let sharedBrowser: Browser | null = null;
 
     try {
-      // Process prompts
-      for (const prompt of activePrompts) {
-        for (const engine of engines) {
-          for (let runIdx = 0; runIdx < sampleSize; runIdx++) {
-            const runId = `run-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+      try {
+        sharedBrowser = await chromium.launch({
+          headless: true,
+          executablePath: getChromiumExecutablePath(),
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-infobars",
+          ],
+        });
+      } catch (browserLaunchErr) {
+        console.warn("[CrawlerOrchestrator] Browser launch note:", (browserLaunchErr as Error).message);
+      }
 
-            // Update live progress markers
-            await db
-              .update(schema.crawlBatches)
-              .set({
-                currentPrompt: prompt.queryText.slice(0, 80),
-                currentEngine: engine,
-              })
-              .where(eq(schema.crawlBatches.id, batchId));
+      // Process prompts with concurrent engine execution
+      for (const prompt of activePrompts) {
+        await Promise.all(
+          engines.map(async (engine) => {
+            for (let runIdx = 0; runIdx < sampleSize; runIdx++) {
+              const runId = `run-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+
+              // Update live progress markers
+              await db
+                .update(schema.crawlBatches)
+                .set({
+                  currentPrompt: prompt.queryText.slice(0, 80),
+                  currentEngine: engine,
+                })
+                .where(eq(schema.crawlBatches.id, batchId));
 
             try {
               let engineResult: {
@@ -110,15 +129,15 @@ export class CrawlerOrchestrator {
               };
 
               if (engine === "perplexity") {
-                engineResult = await PerplexityEngineCrawler.execute(prompt.queryText);
+                engineResult = await PerplexityEngineCrawler.execute(prompt.queryText, sharedBrowser || undefined);
               } else if (engine === "copilot") {
-                engineResult = await CopilotEngineCrawler.execute(prompt.queryText);
+                engineResult = await CopilotEngineCrawler.execute(prompt.queryText, sharedBrowser || undefined);
               } else if (engine === "gemini") {
-                engineResult = await GeminiEngineCrawler.execute(prompt.queryText);
+                engineResult = await GeminiEngineCrawler.execute(prompt.queryText, sharedBrowser || undefined);
               } else if (engine === "chatgpt") {
-                engineResult = await ChatGptEngineCrawler.execute(prompt.queryText);
+                engineResult = await ChatGptEngineCrawler.execute(prompt.queryText, sharedBrowser || undefined);
               } else {
-                engineResult = await GoogleAioCrawler.execute(prompt.queryText);
+                engineResult = await GoogleAioCrawler.execute(prompt.queryText, sharedBrowser || undefined);
               }
 
               // Save Prompt Run with explicit brandId
@@ -241,13 +260,14 @@ export class CrawlerOrchestrator {
                 .set({ completedRuns })
                 .where(eq(schema.crawlBatches.id, batchId));
 
-              // Polite jitter between browser actions (1.0s - 2.0s)
-              await new Promise((r) => setTimeout(r, 1000 + Math.random() * 1000));
-            } catch (runErr) {
-              console.error(`[CrawlerOrchestrator] Error on prompt ${prompt.id} run ${runIdx}:`, runErr);
+              // Polite jitter between browser actions (200ms - 500ms)
+              await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
+              } catch (runErr) {
+                console.error(`[CrawlerOrchestrator] Error on prompt ${prompt.id} run ${runIdx}:`, runErr);
+              }
             }
-          }
-        }
+          })
+        );
       }
 
       // Mark batch finished
@@ -274,6 +294,14 @@ export class CrawlerOrchestrator {
         })
         .where(eq(schema.crawlBatches.id, batchId));
       throw batchFatalErr;
+    } finally {
+      if (sharedBrowser) {
+        try {
+          await sharedBrowser.close();
+        } catch (closeErr) {
+          console.warn("[CrawlerOrchestrator] Browser close warning:", (closeErr as Error).message);
+        }
+      }
     }
   }
 }
