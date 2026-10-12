@@ -2,6 +2,7 @@ import type {
   ProbabilisticMetric,
   CSoVEntityShare,
   CSoVAnalysisResult,
+  IntentStratification,
   SentimentType,
   StanceType,
   StanceMetrics,
@@ -172,6 +173,7 @@ export class MonteCarloMetricsCalculator {
         prominenceScore: 0,
         effectiveVisibilityIndex: 0,
         ndcpScore: 0,
+        conditionalNdcpScore: 0,
         volatilityStdDev: 0,
         sampleCount: 0,
         sentimentDistribution: { positive: 0, neutral: 0, negative: 0 },
@@ -240,9 +242,12 @@ export class MonteCarloMetricsCalculator {
       ? Number((totalProminence / prominenceSamples).toFixed(3))
       : 0;
 
-    // Effective Visibility Index (EVI): Unconditional expected prominence
+    // Effective Visibility Index (EVI): Unconditional expected prominence E[Prominence] = P(Mention) * E[Prominence | Mention]
     const effectiveVisibilityIndex = Number((mentionRate * avgProminence).toFixed(3));
-    const ndcpScore = mentionSuccesses > 0 ? Number((totalNdcp / mentionSuccesses).toFixed(3)) : 0;
+    // Conditional NDCP: Rank discount given mention
+    const conditionalNdcp = mentionSuccesses > 0 ? Number((totalNdcp / mentionSuccesses).toFixed(3)) : 0;
+    // Unconditional Effective NDCP: Expected rank discount across entire search corpus
+    const effectiveNdcp = Number((mentionRate * conditionalNdcp).toFixed(3));
 
     // Net Stance Score (NSS) across mentions: -1.0 to +1.0
     const netStanceScore = mentionSuccesses > 0
@@ -260,7 +265,8 @@ export class MonteCarloMetricsCalculator {
       mentionRate,
       prominenceScore: avgProminence,
       effectiveVisibilityIndex,
-      ndcpScore,
+      ndcpScore: effectiveNdcp,
+      conditionalNdcpScore: conditionalNdcp,
       volatilityStdDev,
       sampleCount: total,
       sentimentDistribution: sentiments,
@@ -272,8 +278,9 @@ export class MonteCarloMetricsCalculator {
   }
 
   /**
-   * Computes Comprehensive Citation Share of Voice (CSoV) & Market Dilution.
-   * Fixes zero-citation drop-out bug, calculates genuine prominence share, and accounts for editorial citations.
+   * Computes Comprehensive Citation Share of Voice (CSoV), Market Dilution,
+   * Bayesian Dirichlet/Laplace Smoothed Competitive Share, and Stratified Intent SoV.
+   * Eliminates the conditioning fallacy (e.g. 4 / (4 + 0) = 100%) and delivers authentic enterprise metrics.
    */
   public static computeCSoV(
     targetBrand: string,
@@ -285,7 +292,15 @@ export class MonteCarloMetricsCalculator {
       avgProminence?: number;
       netStanceScore?: number;
     }>,
-    editorialCitations = 0
+    editorialCitations = 0,
+    options?: {
+      bayesianAlpha?: number;
+      intentRuns?: Array<{
+        isBranded: boolean;
+        hasBrandCitation: boolean;
+        totalCitationsInRun?: number;
+      }>;
+    }
   ): CSoVAnalysisResult {
     const safeBrandCitations = Math.max(0, Number.isFinite(brandCitations) ? brandCitations : 0);
     const safeEditorialCitations = Math.max(0, Number.isFinite(editorialCitations) ? editorialCitations : 0);
@@ -303,57 +318,55 @@ export class MonteCarloMetricsCalculator {
       safeBrandCitations + safeCompetitors.reduce((acc, c) => acc + c.citations, 0);
     const totalMarketCitations = totalCompetitiveCitations + safeEditorialCitations;
 
+    // Entity count K (brand + competitors)
+    const entityCount = 1 + safeCompetitors.length;
+    // Bayesian Laplace/Dirichlet prior parameter (default alpha = 1.0)
+    const alpha = Math.max(0.1, Number.isFinite(options?.bayesianAlpha) ? (options!.bayesianAlpha as number) : 1.0);
+    // Total smoothed pseudo-observations: total + K * alpha
+    const smoothedCompetitiveDenominator = totalCompetitiveCitations + entityCount * alpha;
+    // Credence weight: how much empirical observations outweigh the prior (0.0 to 1.0)
+    const sampleCredenceWeight = Number((totalCompetitiveCitations / smoothedCompetitiveDenominator).toFixed(3));
+
+    // Market Citation Share: Target Brand Share of ALL Citations (including Editorial / UGC / Reviews)
+    const marketCitationShareBrand = totalMarketCitations > 0
+      ? Number(((safeBrandCitations / totalMarketCitations) * 100).toFixed(1))
+      : 0;
+    const editorialShare = totalMarketCitations > 0
+      ? Number(((safeEditorialCitations / totalMarketCitations) * 100).toFixed(1))
+      : 0;
+
     const entities: CSoVEntityShare[] = [];
 
-    // Calculate total weighted prominence points across competitive entities
-    const brandProminenceWeight = safeBrandCitations * 0.85; // Target brand prominence baseline
+    // Prominence points weighting
+    const brandPromScore = 0.85;
+    const brandProminenceWeight = safeBrandCitations * brandPromScore;
     let totalProminencePoints = brandProminenceWeight;
     for (const comp of safeCompetitors) {
       const compProm = comp.avgProminence || 0.65;
       totalProminencePoints += comp.citations * compProm;
     }
+    const smoothedPromDenominator = totalProminencePoints + entityCount * alpha * 0.75;
 
-    if (totalCompetitiveCitations === 0) {
-      // Return initialized 0% shares without dropping competitors
-      entities.push({
-        entityName: targetBrand || "Target Brand",
-        isTargetBrand: true,
-        citationShare: 0,
-        prominenceShare: 0,
-        citationCount: 0,
-        topDomains: [],
-        rank: 1,
-      });
-      for (const comp of safeCompetitors) {
-        entities.push({
-          entityName: comp.name,
-          isTargetBrand: false,
-          citationShare: 0,
-          prominenceShare: 0,
-          citationCount: 0,
-          topDomains: comp.topDomains,
-          rank: 2,
-        });
-      }
-      return {
-        entities,
-        totalCompetitiveCitations: 0,
-        editorialCitationsCount: safeEditorialCitations,
-        editorialDilutionRate: 0,
-        totalMarketCitations,
-      };
-    }
-
-    // Target brand share
-    const targetCitShare = Number(((safeBrandCitations / totalCompetitiveCitations) * 100).toFixed(1));
+    // Target brand shares
+    // 1. Bayesian smoothed competitive share: (brand + alpha) / (total + K * alpha)
+    const targetSmoothedShare = Number((((safeBrandCitations + alpha) / smoothedCompetitiveDenominator) * 100).toFixed(1));
+    // 2. Raw frequentist competitive share (when total > 0)
+    const targetRawShare = totalCompetitiveCitations > 0
+      ? Number(((safeBrandCitations / totalCompetitiveCitations) * 100).toFixed(1))
+      : Number((100 / entityCount).toFixed(1));
+    // 3. Absolute market citation share
+    const targetMarketShare = marketCitationShareBrand;
+    // 4. Prominence share (Bayesian smoothed)
     const targetPromShare = totalProminencePoints > 0
-      ? Number(((brandProminenceWeight / totalProminencePoints) * 100).toFixed(1))
-      : targetCitShare;
+      ? Number((((brandProminenceWeight + alpha * brandPromScore) / smoothedPromDenominator) * 100).toFixed(1))
+      : targetSmoothedShare;
 
     entities.push({
       entityName: targetBrand,
       isTargetBrand: true,
-      citationShare: targetCitShare,
+      citationShare: targetSmoothedShare,
+      rawCitationShare: targetRawShare,
+      marketCitationShare: targetMarketShare,
       prominenceShare: targetPromShare,
       citationCount: safeBrandCitations,
       topDomains: [],
@@ -362,16 +375,26 @@ export class MonteCarloMetricsCalculator {
     // Competitor shares
     for (const comp of safeCompetitors) {
       const citCount = comp.citations;
-      const compCitShare = Number(((citCount / totalCompetitiveCitations) * 100).toFixed(1));
-      const compPromWeight = citCount * (comp.avgProminence || 0.65);
+      const compSmoothedShare = Number((((citCount + alpha) / smoothedCompetitiveDenominator) * 100).toFixed(1));
+      const compRawShare = totalCompetitiveCitations > 0
+        ? Number(((citCount / totalCompetitiveCitations) * 100).toFixed(1))
+        : Number((100 / entityCount).toFixed(1));
+      const compMarketShare = totalMarketCitations > 0
+        ? Number(((citCount / totalMarketCitations) * 100).toFixed(1))
+        : 0;
+
+      const compPromScore = comp.avgProminence || 0.65;
+      const compPromWeight = citCount * compPromScore;
       const compPromShare = totalProminencePoints > 0
-        ? Number(((compPromWeight / totalProminencePoints) * 100).toFixed(1))
-        : compCitShare;
+        ? Number((((compPromWeight + alpha * compPromScore) / smoothedPromDenominator) * 100).toFixed(1))
+        : compSmoothedShare;
 
       entities.push({
         entityName: comp.name,
         isTargetBrand: false,
-        citationShare: compCitShare,
+        citationShare: compSmoothedShare,
+        rawCitationShare: compRawShare,
+        marketCitationShare: compMarketShare,
         prominenceShare: compPromShare,
         citationCount: citCount,
         topDomains: comp.topDomains,
@@ -379,15 +402,49 @@ export class MonteCarloMetricsCalculator {
       });
     }
 
-    // Sort by citation share descending and assign ranks
+    // Sort by citationShare (Bayesian smoothed) descending and assign ranks
     entities.sort((a, b) => b.citationShare - a.citationShare);
     entities.forEach((e, idx) => {
       e.rank = idx + 1;
     });
 
-    const editorialDilutionRate = totalMarketCitations > 0
-      ? Number(((safeEditorialCitations / totalMarketCitations) * 100).toFixed(1))
-      : 0;
+    // Intent breakdown if intentRuns supplied
+    let intentBreakdown: IntentStratification | undefined;
+    if (options?.intentRuns && options.intentRuns.length > 0) {
+      const brandedRuns = options.intentRuns.filter((r) => r.isBranded);
+      const nonBrandedRuns = options.intentRuns.filter((r) => !r.isBranded);
+
+      const bBrandCits = brandedRuns.filter((r) => r.hasBrandCitation).length;
+      const bTotalCits = brandedRuns.reduce((acc, r) => acc + (r.totalCitationsInRun || 1), 0);
+
+      const nbBrandCits = nonBrandedRuns.filter((r) => r.hasBrandCitation).length;
+      const nbTotalCits = nonBrandedRuns.reduce((acc, r) => acc + (r.totalCitationsInRun || 1), 0);
+
+      const brandedSoV = bTotalCits > 0 ? Number(((bBrandCits / bTotalCits) * 100).toFixed(1)) : 0;
+      const nonBrandedSoV = nbTotalCits > 0 ? Number(((nbBrandCits / nbTotalCits) * 100).toFixed(1)) : 0;
+
+      const wNb = nonBrandedRuns.length > 0 && brandedRuns.length > 0 ? 0.70 : nonBrandedRuns.length > 0 ? 1.0 : 0.0;
+      const wB = nonBrandedRuns.length > 0 && brandedRuns.length > 0 ? 0.30 : brandedRuns.length > 0 ? 1.0 : 0.0;
+      const blendedSoV = Number((wNb * nonBrandedSoV + wB * brandedSoV).toFixed(1));
+
+      intentBreakdown = {
+        nonBrandedSoV,
+        brandedSoV,
+        blendedSoV,
+        nonBrandedPromptCount: nonBrandedRuns.length,
+        brandedPromptCount: brandedRuns.length,
+        nonBrandedBrandCitations: nbBrandCits,
+        nonBrandedTotalCitations: nbTotalCits,
+        brandedBrandCitations: bBrandCits,
+        brandedTotalCitations: bTotalCits,
+        weights: {
+          nonBranded: wNb,
+          branded: wB,
+        },
+      };
+    }
+
+    const editorialDilutionRate = editorialShare;
 
     return {
       entities,
@@ -395,6 +452,11 @@ export class MonteCarloMetricsCalculator {
       editorialCitationsCount: safeEditorialCitations,
       editorialDilutionRate,
       totalMarketCitations,
+      marketCitationShareBrand,
+      editorialShare,
+      bayesianPriorAlpha: alpha,
+      sampleCredenceWeight,
+      intentBreakdown,
     };
   }
 

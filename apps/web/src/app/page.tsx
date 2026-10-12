@@ -38,16 +38,80 @@ export default async function OverviewPage() {
   const allCitations = await db.query.citations.findMany({
     where: { brandId },
   });
-  const brandCitations = allCitations.filter((c) => c.domain === brand?.domain);
-  const compDomains = new Set(competitors.map((c) => c.domain));
-  const competitorCitations = allCitations.filter((c) => compDomains.has(c.domain));
+
+  const normalizeDomain = (d: string) =>
+    d.toLowerCase().trim().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+
+  const brandDomainNorm = normalizeDomain(brand?.domain || "");
+  const brandCitations = allCitations.filter((c) => {
+    const cn = normalizeDomain(c.domain);
+    return (
+      c.isBrandDomain ||
+      cn === brandDomainNorm ||
+      (brandDomainNorm && (cn.includes(brandDomainNorm) || (c.url && c.url.includes(brandDomainNorm))))
+    );
+  });
+
+  const compMetrics = competitors.map((c) => {
+    const compNorm = normalizeDomain(c.domain);
+    const count = allCitations.filter((cit) => {
+      const cn = normalizeDomain(cit.domain);
+      return (
+        cn === compNorm ||
+        (compNorm && (cn.includes(compNorm) || (cit.url && cit.url.includes(compNorm))))
+      );
+    }).length;
+    return {
+      name: c.name,
+      citations: count,
+      topDomains: [c.domain],
+      avgProminence: 0.65,
+    };
+  });
+
+  const brandAndCompCitationCount =
+    brandCitations.length + compMetrics.reduce((sum, c) => sum + c.citations, 0);
+  const editorialCount = Math.max(0, allCitations.length - brandAndCompCitationCount);
+
+  const aliases: string[] = JSON.parse(brand?.aliasesJson || "[]");
+  if (brand?.name) aliases.push(brand.name);
+
+  const promptMap = new Map(prompts.map((p) => [p.id, p]));
+  const intentRuns = totalRuns.map((r) => {
+    const p = promptMap.get(r.promptId);
+    const textLower = r.responseText.toLowerCase();
+    const queryLower = (p?.queryText || "").toLowerCase();
+    const isBranded =
+      aliases.some((a) => queryLower.includes(a.toLowerCase())) ||
+      p?.intentType === "direct" ||
+      p?.intentType === "pricing";
+    const hasBrandCitation =
+      brandDomainNorm ? (textLower.includes(brandDomainNorm) || brandCitations.some((c) => c.runId === r.id)) : false;
+    return {
+      isBranded,
+      hasBrandCitation,
+      totalCitationsInRun: 1,
+    };
+  });
+
+  const csovResult = MonteCarloMetricsCalculator.computeCSoV(
+    brand?.name || "Target Brand",
+    brandCitations.length,
+    compMetrics,
+    editorialCount,
+    {
+      bayesianAlpha: 1.0,
+      intentRuns,
+    }
+  );
+
+  const marketCitationShare = csovResult.marketCitationShareBrand;
+  const competitiveShare = csovResult.entities.find((e) => e.isTargetBrand)?.citationShare ?? 0;
+
   const opportunities = await db.query.opportunities.findMany({
     where: eq(schema.opportunities.brandId, brandId),
     limit: 3,
   });
-
-  const aliases: string[] = JSON.parse(brand?.aliasesJson || "[]");
-  if (brand?.name) aliases.push(brand.name);
 
   const mentionCount = totalRuns.filter((r) =>
     aliases.some((alias) => r.responseText.toLowerCase().includes(alias.toLowerCase()))
@@ -58,10 +122,6 @@ export default async function OverviewPage() {
   const mentionRate = hasRuns
     ? Math.round((mentionCount / totalRuns.length) * 100)
     : 0;
-
-  const totalCits = brandCitations.length + competitorCitations.length;
-  const targetSoV =
-    totalCits > 0 ? Math.round((brandCitations.length / totalCits) * 100) : 0;
 
   const [wilsonLower, wilsonUpper] = hasRuns
     ? MonteCarloMetricsCalculator.calculateWilsonInterval(mentionCount, totalRuns.length)
@@ -170,11 +230,11 @@ export default async function OverviewPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         <div className="bg-white rounded-xl p-5 border border-slate-200/80 shadow-sm">
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium">
-            <span>Citation Share of Voice (CSoV)</span>
+            <span>Market Citation Share (CSoV)</span>
             <Award className="w-4 h-4 text-sky-600" />
           </div>
           <div className="mt-2 flex items-baseline space-x-2">
-            <span className="text-3xl font-black text-slate-900">{targetSoV}%</span>
+            <span className="text-3xl font-black text-slate-900">{marketCitationShare}%</span>
             {hasRuns ? (
               <span className="text-xs font-semibold text-emerald-600 flex items-center">
                 <TrendingUp className="w-3 h-3 mr-0.5" /> Empirical
@@ -186,7 +246,7 @@ export default async function OverviewPage() {
             )}
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            vs {competitors.length} configured agency competitors
+            {brandCitations.length} of {allCitations.length} total citations in AI answers
           </p>
         </div>
 
@@ -271,13 +331,13 @@ export default async function OverviewPage() {
                   {brand?.name || "Active Brand"} (Target)
                 </span>
                 <span className="text-sky-600 font-mono">
-                  {targetSoV}% ({brandCitations.length} citations)
+                  {marketCitationShare}% Market · {competitiveShare}% Head-to-Head ({brandCitations.length} citations)
                 </span>
               </div>
               <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
                 <div
                   className="bg-sky-600 h-2.5 rounded-full transition-all duration-500"
-                  style={{ width: `${Math.min(100, targetSoV)}%` }}
+                  style={{ width: `${Math.min(100, Math.max(3, marketCitationShare))}%` }}
                 ></div>
               </div>
             </div>
@@ -289,8 +349,10 @@ export default async function OverviewPage() {
               </div>
             ) : (
               competitors.map((comp) => {
-                const compCount = allCitations.filter((cit) => cit.domain === comp.domain).length;
-                const compShare = totalCits > 0 ? Math.round((compCount / totalCits) * 100) : 0;
+                const compEntity = csovResult.entities.find((e) => e.entityName === comp.name);
+                const compCitCount = compEntity?.citationCount ?? 0;
+                const compMarketShare = compEntity?.marketCitationShare ?? 0;
+                const compSmoothedShare = compEntity?.citationShare ?? 0;
                 return (
                   <div key={comp.id}>
                     <div className="flex justify-between text-xs font-medium text-slate-700 mb-1">
@@ -302,19 +364,58 @@ export default async function OverviewPage() {
                         </span>
                       </span>
                       <span className="text-slate-500 font-mono shrink-0 ml-2">
-                        {compShare}% ({compCount} citations)
+                        {compMarketShare}% Market · {compSmoothedShare}% Head-to-Head ({compCitCount} citations)
                       </span>
                     </div>
                     <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                       <div
                         className="bg-slate-400 h-2 rounded-full transition-all duration-500"
-                        style={{ width: `${compShare}%` }}
+                        style={{ width: `${Math.min(100, Math.max(compCitCount > 0 ? 2 : 0, compMarketShare))}%` }}
                       ></div>
                     </div>
                   </div>
                 );
               })
             )}
+
+            {/* Discovered Organic Grounding Leaders */}
+            {(() => {
+              const compDomainSet = new Set(competitors.map((c) => normalizeDomain(c.domain)));
+              const domainCounts = new Map<string, number>();
+              for (const c of allCitations) {
+                const normDomain = normalizeDomain(c.domain);
+                if (normDomain !== brandDomainNorm && !compDomainSet.has(normDomain)) {
+                  domainCounts.set(normDomain, (domainCounts.get(normDomain) || 0) + 1);
+                }
+              }
+              const topOrganic = Array.from(domainCounts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 4);
+
+              if (topOrganic.length === 0) return null;
+
+              return (
+                <div className="pt-3 border-t border-slate-100 text-xs">
+                  <div className="text-[11px] font-semibold text-slate-500 mb-2">
+                    Top Organic Answer Sources Cited by AI Engines:
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {topOrganic.map(([d, count]) => {
+                      const share = allCitations.length > 0 ? ((count / allCitations.length) * 100).toFixed(1) : "0";
+                      return (
+                        <span
+                          key={d}
+                          className="inline-flex items-center space-x-1.5 px-2 py-1 rounded bg-slate-100 text-slate-700 text-[11px] font-mono"
+                        >
+                          <span className="font-semibold">{d}</span>
+                          <span className="text-slate-400">({count} · {share}%)</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
 

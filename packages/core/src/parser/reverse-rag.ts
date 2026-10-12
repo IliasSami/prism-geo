@@ -14,6 +14,47 @@ const STOP_WORDS = new Set([
   "why", "with", "would", "you", "your", "yours", "yourself", "yourselves"
 ]);
 
+const VALID_TLDS = new Set([
+  "com", "org", "net", "io", "ai", "agency", "app", "dev", "biz", "info",
+  "travel", "tech", "cloud", "media", "expert", "consulting", "digital",
+  "solutions", "uk", "de", "ca", "us", "me", "tv", "cc", "co", "co.uk", "org.uk", "com.au"
+]);
+
+const NOISE_DOMAINS = new Set([
+  "bing.com", "microsoft.com", "google.com", "msn.com", "live.com", "yahoo.com",
+  "duckduckgo.com", "baidu.com", "yandex.com",
+  "whatsapp.com", "web.whatsapp.com", "instagram.com", "facebook.com", "youtube.com",
+  "tiktok.com", "pinterest.com", "snapchat.com", "twitter.com", "x.com", "t.co",
+  "vietnam.travel", "foodvietnamese.com", "wvstateparks.com",
+  "dictionary.cambridge.org", "merriam-webster.com", "wiktionary.org",
+  "support.microsoft.com", "support.google.com", "answers.microsoft.com"
+]);
+
+export function cleanExtractedHost(hostname: string): string {
+  let host = (hostname || "").toLowerCase().trim().replace(/^www\./, "");
+  if (!host) return "unknown";
+
+  const parts = host.split(".");
+  if (parts.length >= 2) {
+    const last = parts[parts.length - 1];
+    if (VALID_TLDS.has(last)) return host;
+    if (parts.length >= 3 && VALID_TLDS.has(parts[parts.length - 2] + "." + parts[parts.length - 1])) {
+      return host;
+    }
+    // If the last label is glued to trailing text (e.g. comwhite-label, comwhatsapp, ioBest)
+    const sortedTlds = Array.from(VALID_TLDS)
+      .filter((t) => !t.includes("."))
+      .sort((a, b) => b.length - a.length);
+    for (const tld of sortedTlds) {
+      if (last.startsWith(tld) && last.length > tld.length) {
+        parts[parts.length - 1] = tld;
+        return parts.join(".");
+      }
+    }
+  }
+  return host;
+}
+
 export class ReverseRagParser {
   /**
    * Normalizes a URL: unwraps redirect proxies, strips tracking parameters, and trims fragments.
@@ -22,12 +63,12 @@ export class ReverseRagParser {
     if (!rawUrl || typeof rawUrl !== "string") {
       return { normalizedUrl: "", domain: "unknown" };
     }
-    let clean = rawUrl.trim().replace(/[.,;:)\]>]+$/, "");
+    let clean = rawUrl.trim().replace(/[.,;:)\]>"']+$/, "");
     if (!clean) {
       return { normalizedUrl: "", domain: "unknown" };
     }
 
-    // Unwrap Google click redirect /url?q=...
+    // 1. Unwrap Google click redirect /url?q=...
     if (clean.includes("/url?q=")) {
       try {
         const u = new URL(clean);
@@ -38,13 +79,36 @@ export class ReverseRagParser {
       }
     }
 
-    // Extract scroll-to-text fragment #:~:text=
+    // 2. Unwrap Bing click redirect /ck/a?...&u=a1<base64>...
+    if (clean.includes("/ck/a?") || clean.includes("bing.com/ck/a")) {
+      try {
+        const u = new URL(clean);
+        const rawU = u.searchParams.get("u");
+        if (rawU && rawU.startsWith("a1")) {
+          const decoded = Buffer.from(rawU.slice(2), "base64").toString("utf-8");
+          if (decoded && (decoded.startsWith("http://") || decoded.startsWith("https://"))) {
+            clean = decoded;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 3. Extract scroll-to-text fragment #:~:text=
     let textFragment: string | undefined;
     if (clean.includes("#:~:text=")) {
       const parts = clean.split("#:~:text=");
       clean = parts[0];
       textFragment = decodeURIComponent(parts[1] || "");
     }
+
+    // 4. Unglue text accidentally concatenated after known TLD without slash
+    // (e.g. https://iliassami.comWhite-Label -> https://iliassami.com)
+    clean = clean.replace(
+      /(\.(?:com|org|net|io|ai|agency|consulting|solutions|digital|expert|travel|cloud|media|tech|app|dev|biz|info|co|uk|de|ca|us|me))([A-Z][a-zA-Z0-9_\-\/]*)/g,
+      "$1"
+    );
 
     try {
       const parsed = new URL(clean);
@@ -59,7 +123,12 @@ export class ReverseRagParser {
       for (const param of trackingParams) {
         parsed.searchParams.delete(param);
       }
-      const domain = parsed.hostname.toLowerCase().replace(/^www\./, "");
+
+      const domain = cleanExtractedHost(parsed.hostname);
+      if (domain !== "unknown" && parsed.hostname !== domain) {
+        parsed.hostname = domain;
+      }
+
       return {
         normalizedUrl: parsed.toString(),
         domain: domain || "unknown",
@@ -160,7 +229,6 @@ export class ReverseRagParser {
       const rawUrl = mdMatch[2].trim();
       const { normalizedUrl, domain } = this.normalizeUrl(rawUrl);
       if (!normalizedUrl || seenUrls.has(normalizedUrl) || domain === "unknown") continue;
-      seenUrls.add(normalizedUrl);
 
       const isBrandDomain = cleanBrandDomain !== "" && (domain === cleanBrandDomain || domain.endsWith(`.${cleanBrandDomain}`));
       const isCompetitorDomain = cleanCompetitors.some((comp) => {
@@ -169,6 +237,17 @@ export class ReverseRagParser {
         return c !== "" && (domain === c || domain.endsWith(`.${c}`));
       });
 
+      // Discard noise and garbage domains unless it is the target brand or configured competitor
+      if (!isBrandDomain && !isCompetitorDomain) {
+        if (NOISE_DOMAINS.has(domain) || Array.from(NOISE_DOMAINS).some((noise) => domain.endsWith(`.${noise}`))) {
+          continue;
+        }
+        if (!domain.includes(".") || domain.length < 4) {
+          continue;
+        }
+      }
+
+      seenUrls.add(normalizedUrl);
       citations.push({
         url: normalizedUrl,
         domain,
@@ -181,12 +260,17 @@ export class ReverseRagParser {
     }
 
     // 2. Extract remaining raw URLs
-    const urlRegex = /(?:https?:\/\/[^\s\)\],]+)/gi;
-    const rawMatches = text.match(urlRegex) || [];
+    // Unglue any URLs concatenated directly to capitalized titles without whitespace
+    const ungluedText = text.replace(
+      /(https?:\/\/[a-zA-Z0-9_\-\.]+?\.(?:com|org|net|io|ai|agency|consulting|solutions|digital|expert|travel|cloud|media|tech|app|dev|biz|info|co|uk|de|ca|us|me))([A-Z][a-zA-Z0-9_\-]*)/g,
+      "$1 $2"
+    );
+
+    const urlRegex = /(?:https?:\/\/[^\s\)\],>"']+)/gi;
+    const rawMatches = ungluedText.match(urlRegex) || [];
     for (const rawUrl of rawMatches) {
       const { normalizedUrl, domain } = this.normalizeUrl(rawUrl);
       if (!normalizedUrl || seenUrls.has(normalizedUrl) || domain === "unknown") continue;
-      seenUrls.add(normalizedUrl);
 
       const isBrandDomain = cleanBrandDomain !== "" && (domain === cleanBrandDomain || domain.endsWith(`.${cleanBrandDomain}`));
       const isCompetitorDomain = cleanCompetitors.some((comp) => {
@@ -195,6 +279,17 @@ export class ReverseRagParser {
         return c !== "" && (domain === c || domain.endsWith(`.${c}`));
       });
 
+      // Discard noise and garbage domains unless it is the target brand or configured competitor
+      if (!isBrandDomain && !isCompetitorDomain) {
+        if (NOISE_DOMAINS.has(domain) || Array.from(NOISE_DOMAINS).some((noise) => domain.endsWith(`.${noise}`))) {
+          continue;
+        }
+        if (!domain.includes(".") || domain.length < 4) {
+          continue;
+        }
+      }
+
+      seenUrls.add(normalizedUrl);
       citations.push({
         url: normalizedUrl,
         domain,

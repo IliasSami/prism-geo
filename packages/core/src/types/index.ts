@@ -76,13 +76,30 @@ export interface EngineWeightedVisibility {
   breakdown: EngineVisibilityBreakdown[];
 }
 
+export interface IntentStratification {
+  nonBrandedSoV: number; // Share of voice on neutral/category prompts (0 - 100%)
+  brandedSoV: number; // Share of voice on brand-evaluative prompts (0 - 100%)
+  blendedSoV: number; // Calibrated weighted blended score (0 - 100%)
+  nonBrandedPromptCount: number;
+  brandedPromptCount: number;
+  nonBrandedBrandCitations: number;
+  nonBrandedTotalCitations: number;
+  brandedBrandCitations: number;
+  brandedTotalCitations: number;
+  weights: {
+    nonBranded: number;
+    branded: number;
+  };
+}
+
 export interface ProbabilisticMetric {
   citationProbability: number; // 0.0 to 1.0 (Monte Carlo success frequency)
   wilsonInterval: [number, number]; // [lower, upper] 95% confidence interval with Yates correction
   mentionRate: number; // 0.0 to 1.0
-  prominenceScore: number; // 0.0 to 1.0 position-weighted salience (lambda = 1.189)
+  prominenceScore: number; // 0.0 to 1.0 conditional position-weighted salience (lambda = 1.189) given mention
   effectiveVisibilityIndex: number; // Unconditional expected prominence (p_mention * prominence)
-  ndcpScore: number; // Normalized Discounted Cumulative Prominence
+  ndcpScore: number; // Unconditional Effective Discounted Cumulative Prominence (p_mention * conditional NDCP)
+  conditionalNdcpScore: number; // Conditional NDCP when mentioned
   volatilityStdDev: number; // Standard error across runs
   sampleCount: number; // N runs analyzed
   sentimentDistribution: {
@@ -96,7 +113,9 @@ export interface ProbabilisticMetric {
 export interface CSoVEntityShare {
   entityName: string;
   isTargetBrand: boolean;
-  citationShare: number; // Percentage 0 - 100 (Competitive Citation Share)
+  citationShare: number; // Percentage 0 - 100 (Bayesian Smoothed Competitive Share)
+  rawCitationShare: number; // Percentage 0 - 100 (Frequentist unsmoothed competitive share)
+  marketCitationShare: number; // Percentage 0 - 100 (Absolute share of all market citations including editorial)
   prominenceShare: number; // Percentage 0 - 100 (True Prominence-Weighted Share)
   citationCount: number;
   topDomains: string[];
@@ -110,6 +129,11 @@ export interface CSoVAnalysisResult {
   editorialCitationsCount: number;
   editorialDilutionRate: number; // Percentage of citations going to 3rd party reviews/UGC
   totalMarketCitations: number;
+  marketCitationShareBrand: number; // Target brand share of all citations in market
+  editorialShare: number; // 3rd party share of all citations in market
+  bayesianPriorAlpha: number; // Parameter alpha used for Laplace/Dirichlet smoothing (e.g. 1.0)
+  sampleCredenceWeight: number; // 0.0 - 1.0 confidence weight showing empirical dominance over prior
+  intentBreakdown?: IntentStratification;
 }
 
 export interface SubQueryDecomposition {

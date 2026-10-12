@@ -28,12 +28,16 @@ export async function seedPrismGeo() {
     });
   }
 
-  // 2. Seed Competitors
+  // 2. Seed Competitors (Real agency competitors in white-label SEO & GEO)
   const competitorsData = [
-    { name: "Brandify", domain: "brandify.io", aliases: ["Brandify SEO"] },
-    { name: "Pitch Pine Media", domain: "pitchpinemedia.com", aliases: ["Pitch Pine"] },
+    { name: "Stan Ventures", domain: "stanventures.com", aliases: ["Stan Ventures", "Stan Ventures SEO", "StanVentures"] },
+    { name: "DashClicks", domain: "dashclicks.com", aliases: ["DashClicks", "Dash Clicks", "DashClicks SEO"] },
+    { name: "OneLittleWeb", domain: "onelittleweb.com", aliases: ["OneLittleWeb", "One Little Web", "OLW"] },
+    { name: "Brandify", domain: "brandify.io", aliases: ["Brandify", "Brandify SEO"] },
+    { name: "Victorious", domain: "victoriousseo.com", aliases: ["Victorious", "Victorious SEO", "Victorious Agency", "victorious.com"] },
+    { name: "Pitch Pine Media", domain: "pitchpinemedia.com", aliases: ["Pitch Pine", "Pitch Pine Media"] },
+    { name: "Mavlers", domain: "mavlers.agency", aliases: ["Mavlers", "Mavlers Agency", "Uplers"] },
     { name: "AEO Engine", domain: "aeoengine.ai", aliases: ["AEO Engine"] },
-    { name: "Mavlers", domain: "mavlers.agency", aliases: ["Mavlers Agency", "Uplers"] },
   ];
 
   for (const comp of competitorsData) {
