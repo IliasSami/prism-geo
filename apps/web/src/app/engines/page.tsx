@@ -1,34 +1,22 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { getActiveBrand, getRawDb, getSettings } from "@prismgeo/db";
 import { isProfileConnected, apiKeyFor, type ApiKeys } from "@prismgeo/crawler";
-import { getEngineHealth, type HealthStatus } from "@/lib/engine-health";
 import EngineSessionsPanel from "@/components/EngineSessionsPanel";
-import { Badge, Card, CardHeader, Dot, Meter, PageHeader, buttonClass, engineLabel, type Tone } from "@/components/ui";
+import { CopyButton } from "@/components/CopyButton";
+import { Badge, Card, CardHeader, Dot, Meter, Notice, PageHeader, buttonClass, engineLabel, formatWhen, plural, type Tone } from "@/components/ui";
+import { getEngineViews, getLatestAudit } from "@/components/insights/engine-state";
+import { kindPhrase, isRealOutcome } from "@/components/engine-copy";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Engines" };
 
-/** Recent audits used for timing, capture methods and the failure list (status comes from getEngineHealth). */
+/** Recent audits used for timing, capture methods and the failure list (status comes from engine-state). */
 const RECENT_BATCHES = 3;
-const STATUS: Record<HealthStatus, { label: string; tone: Tone }> = {
-  working: { label: "Working", tone: "success" },
-  degraded: { label: "Degraded", tone: "warning" },
-  blocked: { label: "Blocked", tone: "danger" },
-  untested: { label: "Not run yet", tone: "neutral" },
-  not_set_up: { label: "Not set up", tone: "neutral" },
-};
 const API_ENGINES = ["chatgpt", "gemini", "perplexity", "google_aio"];
 const KEY_NAME: Record<string, string> = { chatgpt: "OpenAI", gemini: "Gemini", perplexity: "Perplexity", google_aio: "SerpApi" };
 const METHOD_LABEL: Record<string, string> = { browser: "free browser", browser_signed_in: "signed-in session", api: "API key" };
-const REASON: Record<string, string> = {
-  blocked: "Blocked by the engine",
-  skipped_after_blocks: "Skipped, engine still blocking",
-  no_answer: "No readable answer",
-  no_ai_overview: "No AI Overview shown",
-  error: "Error",
-  network: "Could not connect (network or proxy)",
-  setup: "Browser not installed",
-  unavailable: "Not available",
-};
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 interface Failure {
   engine: string;
@@ -50,7 +38,7 @@ export default function EnginesPage() {
 
   const batches = brand
     ? (sqlite
-        .prepare("SELECT id, created_at, errors_json FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT ?")
+        .prepare("SELECT id, created_at, errors_json FROM crawl_batches WHERE brand_id = ? AND status <> 'running' ORDER BY created_at DESC LIMIT ?")
         .all(brand.id, RECENT_BATCHES) as Array<{ id: string; created_at: string; errors_json: string | null }>)
     : [];
   const batchIds = batches.map((b) => b.id);
@@ -80,39 +68,37 @@ export default function EnginesPage() {
   const engineSettings = getSettings<{ mode?: string } & Record<string, unknown>>("engine_settings", {});
   const mode = engineSettings.mode === "byok" || engineSettings.mode === "stealth" ? engineSettings.mode : "hybrid";
   const keys = getSettings<ApiKeys>("byok_api_keys", {});
+  const latest = getLatestAudit(brand?.id, "engines-page");
 
-  const rows = getEngineHealth(brand?.id).map((h) => {
-    const id = h.engine;
+  const rows = getEngineViews(brand?.id, "engines-page").map((v) => {
+    const id = v.engine;
+    const h = v.health;
     const er = runs.filter((r) => r.engine === id);
-    const ef = failures.filter((f) => f.engine === id && f.promptId);
-    const status = h.enabled || h.status === "not_set_up" ? STATUS[h.status] : { label: "Switched off", tone: "neutral" as Tone };
+    const status: { label: string; tone: Tone } = v.enabled || v.state === "not_set_up" ? { label: v.label, tone: v.tone } : { label: "Switched off", tone: "outline" };
     const keyName = KEY_NAME[id];
     const route =
-      h.status === "not_set_up"
+      id === "copilot" && v.state === "not_set_up"
         ? "Needs a signed-in Microsoft account"
         : h.route === "api"
           ? `${keyName} API key`
           : `${h.route === "signed_in" ? "Signed-in session" : "Free browser (logged out)"}${h.apiFallback ? `, ${keyName} API key if blocked` : ""}`;
-    const kinds = ef.reduce<Record<string, number>>((acc, f) => ((acc[f.kind] = (acc[f.kind] || 0) + 1), acc), {});
-    const topKind = Object.entries(kinds).sort((x, y) => y[1] - x[1])[0]?.[0];
     const methods = Object.entries(
       er.reduce<Record<string, number>>((acc, r) => ((acc[r.capture_method] = (acc[r.capture_method] || 0) + 1), acc), {})
     ).map(([m, n]) => `${n} via ${METHOD_LABEL[m] || m}`);
-    const signedIn = isProfileConnected(id);
+    const signedIn = isProfileConnected(h.engine);
+    const topKind = Object.entries(v.kinds)
+      .filter(([k]) => !isRealOutcome(k))
+      .sort((a, b) => b[1] - a[1])[0]?.[0];
     return {
-      id,
+      ...v,
       status,
-      share: h.attempted ? h.captured / h.attempted : null,
-      received: h.captured,
-      attempted: h.attempted,
-      kinds,
+      share: v.attempted ? v.captured / v.attempted : null,
       medianMs: median(er.map((r) => r.execution_ms).filter((x) => x > 0)),
       allTime: Number(allTime.find((a) => a.engine === id)?.n || 0),
       route,
-      remedy: h.remedy,
-      needsSession: !signedIn && (id === "copilot" || id === "perplexity" || topKind === "blocked" || topKind === "skipped_after_blocks"),
-      canUseKey: API_ENGINES.includes(id) && apiKeyFor(id, keys) === "",
       methods,
+      needsSession: !signedIn && (id === "copilot" || id === "perplexity" || topKind === "blocked" || topKind === "skipped_after_blocks"),
+      canUseKey: API_ENGINES.includes(id) && apiKeyFor(id, keys) === "" && mode !== "stealth",
     };
   });
   // Skipped runs were never sent to the engine, so they are summarised instead of listed
@@ -125,17 +111,16 @@ export default function EnginesPage() {
     .reverse()
     .filter((f, i, all) => i === all.findIndex((g) => g.engine === f.engine && g.promptId === f.promptId && g.kind === f.kind))
     .slice(0, 20);
-  const working = rows.filter((r) => r.status.tone === "success").length;
-  const blocked = rows.filter((r) => r.status.tone === "danger").length;
+  const setupIssue = latest?.outcome.reason?.technical;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <PageHeader
         title="Engines"
         description={
-          batches.length
-            ? `Health from the last ${batches.length === 1 ? "audit" : `${batches.length} audits`}: ${working} working${blocked ? `, ${blocked} blocked` : ""}.`
-            : "How each AI engine is reached. Run an audit to measure each one."
+          latest
+            ? `Status from each engine's latest audit (last audit ${formatWhen(latest.at)}: ${latest.captured} of ${latest.captured + latest.failed} answered).`
+            : "How each AI engine is reached. Run an audit to check each one."
         }
         actions={
           <Link href="/settings?tab=engines" className={buttonClass("secondary")}>
@@ -144,14 +129,26 @@ export default function EnginesPage() {
         }
       />
 
+      {latest && latest.captured === 0 && latest.outcome.reason && (
+        <Notice tone="danger" title={latest.outcome.title}>
+          <p>{latest.outcome.reason.next}</p>
+          {setupIssue && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <code className="rounded-md bg-white px-2 py-1 font-mono text-sm text-zinc-900 ring-1 ring-red-200">{setupIssue}</code>
+              <CopyButton text={setupIssue} label="Copy command" />
+            </div>
+          )}
+        </Notice>
+      )}
+
       <Card className="overflow-hidden">
-        <ul className="stagger divide-y divide-zinc-100">
+        <ul className="divide-y divide-zinc-100">
           {rows.map((r) => (
-            <li key={r.id} className="grid gap-3 px-5 py-4 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.6fr)] md:items-start md:gap-6">
+            <li key={r.engine} className="grid gap-3 px-5 py-4 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.6fr)] md:items-start md:gap-6">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <Dot tone={r.status.tone} />
-                  <h2 className="text-md font-semibold text-zinc-900">{engineLabel(r.id)}</h2>
+                  <h2 className="text-md font-semibold text-zinc-900">{engineLabel(r.engine)}</h2>
                   <Badge tone={r.status.tone}>{r.status.label}</Badge>
                 </div>
                 <p className="mt-1 text-sm text-zinc-500">{r.route}</p>
@@ -161,15 +158,15 @@ export default function EnginesPage() {
                 {r.attempted > 0 ? (
                   <>
                     <div className="flex items-baseline justify-between text-sm">
-                      <span className="text-zinc-500">Answers received</span>
+                      <span className="text-zinc-500">Answered in latest audit</span>
                       <span className="font-medium text-zinc-900 tabular">
-                        {r.received}/{r.attempted}
+                        {r.captured}/{r.attempted}
                       </span>
                     </div>
                     <Meter
                       value={r.share ?? 0}
                       tone={r.status.tone === "success" ? "success" : r.status.tone === "warning" ? "warning" : "danger"}
-                      label={`${engineLabel(r.id)} answers received`}
+                      label={`${engineLabel(r.engine)}: ${r.captured} of ${r.attempted} answered`}
                     />
                     <div className="flex justify-between text-xs text-zinc-500 tabular">
                       <span>{r.medianMs ? `Median ${(r.medianMs / 1000).toFixed(1)}s per answer` : "No timing yet"}</span>
@@ -177,104 +174,124 @@ export default function EnginesPage() {
                     </div>
                   </>
                 ) : (
-                  <p className="text-sm text-zinc-500">{r.allTime ? `${r.allTime} answers stored, none in recent audits` : "No answers yet"}</p>
+                  <p className="text-sm text-zinc-500">{r.allTime ? `${plural(r.allTime, "answer")} stored, none in recent audits` : "No answers yet"}</p>
                 )}
               </div>
 
               <div className="min-w-0 space-y-2">
-                {r.remedy ? (
-                  <p className="text-sm leading-relaxed text-zinc-700">{r.remedy}</p>
+                {r.state === "working" ? (
+                  <p className="text-sm text-zinc-500">Nothing to fix.</p>
                 ) : (
-                  <p className="text-sm text-zinc-500">{r.status.tone === "success" ? "Nothing to fix." : "Run an audit to check this engine."}</p>
+                  <>
+                    {r.reason && <p className="text-sm text-zinc-700">{r.reason}</p>}
+                    {r.fix && <p className="text-sm leading-relaxed text-zinc-700">{r.fix.next}</p>}
+                    {!r.reason && !r.fix && <p className="text-sm text-zinc-500">Run an audit to check this engine.</p>}
+                  </>
                 )}
-                {r.remedy && (
+                {r.state !== "working" && (r.attempted > 0 || r.engine === "copilot") && (r.canUseKey || r.needsSession) && (
                   <div className="flex flex-wrap gap-2">
                     {r.canUseKey && (
                       <Link href="/settings?tab=engines" className={buttonClass("secondary", "sm")}>
-                        Add {KEY_NAME[r.id]} key
+                        Add {KEY_NAME[r.engine]} key
                       </Link>
                     )}
                     {r.needsSession && (
                       <a href="#sessions" className={buttonClass("secondary", "sm")}>
-                        Connect session
+                        Connect a session below
                       </a>
                     )}
                   </div>
                 )}
-                <details className="group text-xs text-zinc-500">
-                  <summary className="cursor-pointer select-none rounded text-zinc-500 hover:text-zinc-800">Technical details</summary>
-                  <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                    <dt>Captured by</dt>
-                    <dd className="text-zinc-700">{r.methods.length ? r.methods.join(", ") : "none in recent audits"}</dd>
-                    <dt>Failures</dt>
-                    <dd className="text-zinc-700">
-                      {Object.keys(r.kinds).length
-                        ? Object.entries(r.kinds)
-                            .map(([k, n]) => `${n} ${(REASON[k] || k).toLowerCase()}`)
-                            .join(", ")
-                        : "none"}
-                    </dd>
-                    <dt>Mode</dt>
-                    <dd className="text-zinc-700">{mode === "hybrid" ? "Browser, then API key if blocked" : mode === "byok" ? "API key when saved" : "Free browser only"}</dd>
-                  </dl>
-                </details>
               </div>
             </li>
           ))}
         </ul>
+        <details className="group border-t border-zinc-100">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3 text-sm font-medium text-zinc-600 hover:text-zinc-900 [&::-webkit-details-marker]:hidden">
+            <span aria-hidden className="transition-transform duration-150 group-open:rotate-90">
+              ›
+            </span>
+            Show technical details
+          </summary>
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-3 px-5 pb-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <dt className="text-zinc-500">Mode</dt>
+              <dd className="text-zinc-800">{mode === "hybrid" ? "Browser, then API key if blocked" : mode === "byok" ? "API key when saved" : "Free browser only"}</dd>
+            </div>
+            {rows.map((r) => (
+              <div key={r.engine}>
+                <dt className="text-zinc-500">{engineLabel(r.engine)}</dt>
+                <dd className="text-zinc-800">
+                  Captured: {r.methods.length ? r.methods.join(", ") : "none in recent audits"}.{" "}
+                  {Object.keys(r.kinds).length > 0 &&
+                    `Latest audit: ${Object.entries(r.kinds)
+                      .map(([k, n]) => `${n} ${kindPhrase(k)}`)
+                      .join(", ")}.`}
+                  {r.fix?.technical && (
+                    <>
+                      {" "}
+                      Setup command: <code className="font-mono text-zinc-900">{r.fix.technical}</code>
+                    </>
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </details>
       </Card>
 
       <div id="sessions" className="scroll-mt-20">
         <EngineSessionsPanel />
       </div>
 
-      <Card>
-        <CardHeader
-          title="Recent failures"
-          description={
-            <>
-              Runs from the last {batches.length || 0} audit{batches.length === 1 ? "" : "s"} that produced no answer. A screenshot and the page HTML of each
-              failure are saved in <code className="font-mono text-zinc-700">data/crawl-debug/</code>.
-            </>
-          }
-        />
-        {Object.keys(skippedByEngine).length > 0 && (
-          <p className="border-b border-zinc-100 px-5 py-3 text-sm text-zinc-600">
-            Not attempted because the engine was still blocking:{" "}
-            {Object.entries(skippedByEngine)
-              .map(([e, n]) => `${engineLabel(e)} ${n}`)
-              .join(", ")}
-            .
-          </p>
-        )}
-        {recentFailures.length === 0 ? (
-          <p className="px-5 py-6 text-base text-zinc-500">No failures in recent audits.</p>
-        ) : (
-          <ul className="divide-y divide-zinc-100">
-            {recentFailures.map((f, i) => (
-              <li key={`${f.engine}-${f.promptId}-${i}`} className="flex flex-col gap-1 px-5 py-3 sm:flex-row sm:items-start sm:gap-4">
-                <div className="flex shrink-0 flex-wrap items-center gap-2 sm:w-64">
-                  <Badge className="whitespace-nowrap" tone={f.kind === "no_ai_overview" ? "neutral" : f.kind === "blocked" || f.kind === "skipped_after_blocks" ? "danger" : "warning"}>
-                    {REASON[f.kind] || f.kind}
-                  </Badge>
-                  <span className="text-sm font-medium text-zinc-700">{engineLabel(f.engine)}</span>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-base text-zinc-900" title={promptText.get(f.promptId || "")}>
-                    {promptText.get(f.promptId || "") || "Deleted prompt"}
-                  </p>
-                  <p className="truncate text-xs text-zinc-500" title={f.message}>
-                    {f.message}
-                  </p>
-                </div>
-                <time className="shrink-0 text-xs text-zinc-500 tabular" dateTime={f.at}>
-                  {new Date(f.at.includes("T") ? f.at : `${f.at.replace(" ", "T")}Z`).toLocaleString()}
-                </time>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      {batches.length > 0 && (
+        <Card>
+          <CardHeader
+            title="Recent failures"
+            description={
+              <>
+                Runs from the last {plural(batches.length, "audit")} that produced no answer. A screenshot and the page HTML of each failure are saved in{" "}
+                <code className="font-mono text-zinc-700">data/crawl-debug/</code>.
+              </>
+            }
+          />
+          {Object.keys(skippedByEngine).length > 0 && (
+            <p className="border-b border-zinc-100 px-5 py-3 text-sm text-zinc-600">
+              Not attempted because the engine was still blocking:{" "}
+              {Object.entries(skippedByEngine)
+                .map(([e, n]) => `${engineLabel(e)} ${n}`)
+                .join(", ")}
+              .
+            </p>
+          )}
+          {recentFailures.length === 0 ? (
+            <p className="px-5 py-6 text-base text-zinc-500">No failures in recent audits.</p>
+          ) : (
+            <ul className="divide-y divide-zinc-100">
+              {recentFailures.map((f, i) => (
+                <li key={`${f.engine}-${f.promptId}-${i}`} className="flex flex-col gap-1 px-5 py-3 sm:flex-row sm:items-start sm:gap-4">
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 sm:w-72">
+                    <Badge
+                      className="whitespace-nowrap"
+                      tone={isRealOutcome(f.kind) ? "outline" : f.kind === "blocked" || f.kind === "skipped_after_blocks" ? "danger" : "warning"}
+                    >
+                      {capital(kindPhrase(f.kind))}
+                    </Badge>
+                    <span className="text-sm font-medium text-zinc-700">{engineLabel(f.engine)}</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="line-clamp-2 text-base text-zinc-900">{promptText.get(f.promptId || "") || "Deleted prompt"}</p>
+                    <p className="line-clamp-2 break-words text-xs text-zinc-500">{f.message}</p>
+                  </div>
+                  <time className="shrink-0 text-xs text-zinc-500 tabular" dateTime={f.at}>
+                    {formatWhen(f.at)}
+                  </time>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

@@ -1,6 +1,5 @@
 import { getRawDb, type BrandRecord } from "@prismgeo/db";
-import { engineRemedy } from "@prismgeo/crawler";
-import { rate, type EntityRow, type Report } from "@/lib/report";
+import { rate, type EntityRow } from "@/lib/report";
 import { normalizeDomain, domainMatches } from "@/lib/visibility";
 
 /**
@@ -89,43 +88,6 @@ export function entitiesForEngine(brand: BrandRecord, engine: string): { entitie
   return { entities, answers: runs.length, withSources: withSources.length };
 }
 
-export interface EngineHealth {
-  engine: string;
-  captured: number;
-  blocked: number;
-  skipped: number;
-  noAnswer: number;
-  noOverview: number;
-  status: "working" | "degraded" | "blocked";
-  remedy: string | null;
-}
-
-/** Per-engine capture health over all stored answers and recorded failures. */
-export function engineHealth(brand: BrandRecord, report: Report): EngineHealth[] {
-  const captured = new Map(
-    (getRawDb().prepare("SELECT engine, COUNT(*) AS n FROM prompt_runs WHERE brand_id = ? GROUP BY engine").all(brand.id) as Array<{ engine: string; n: number }>).map(
-      (r) => [r.engine, Number(r.n)]
-    )
-  );
-  const engines = [...new Set([...captured.keys(), ...Object.keys(report.failures.byEngine)])];
-  return engines
-    .map((engine) => {
-      const f = report.failures.byEngine[engine] || { blocked: 0, skipped: 0, noAnswer: 0, noOverview: 0 };
-      const ok = (captured.get(engine) || 0) + f.noOverview;
-      const total = ok + f.blocked + f.skipped + f.noAnswer;
-      const share = total ? ok / total : 0;
-      const status: EngineHealth["status"] = share >= 0.8 ? "working" : share >= 0.2 ? "degraded" : "blocked";
-      return {
-        engine,
-        captured: captured.get(engine) || 0,
-        ...f,
-        status,
-        remedy: status === "working" ? null : engineRemedy(engine, f.blocked + f.skipped > f.noAnswer ? "blocked" : "no_answer"),
-      };
-    })
-    .sort((a, b) => b.captured - a.captured);
-}
-
 /** Counts that drive the first-run checklist. */
 export function setupCounts(brandId: string): { competitors: number; prompts: number; answers: number } {
   const one = (sql: string) => Number((getRawDb().prepare(sql).get(brandId) as { n: number }).n);
@@ -134,4 +96,27 @@ export function setupCounts(brandId: string): { competitors: number; prompts: nu
     prompts: one("SELECT COUNT(*) AS n FROM prompts WHERE brand_id = ? AND active = 1"),
     answers: one("SELECT COUNT(*) AS n FROM prompt_runs WHERE brand_id = ?"),
   };
+}
+
+/**
+ * Answers per prompt that name your brand at all, echoes included. Branded prompts are left out of
+ * the headline rates (the brand is in the question), but their answers do name you, and the
+ * Competitors page says so instead of reporting 0.
+ */
+export function brandNamedByPrompt(brandId: string): Map<string, number> {
+  const rows = getRawDb()
+    .prepare(
+      `SELECT r.prompt_id AS prompt_id, COUNT(DISTINCT r.id) AS n FROM prompt_runs r
+       JOIN entity_mentions m ON m.run_id = r.id AND m.is_target_brand = 1
+       WHERE r.brand_id = ? GROUP BY r.prompt_id`
+    )
+    .all(brandId) as Array<{ prompt_id: string; n: number }>;
+  return new Map(rows.map((r) => [String(r.prompt_id), Number(r.n)]));
+}
+
+/** Tracked competitors, for pages that list them before any answers exist. */
+export function trackedCompetitors(brandId: string): Array<{ name: string; domain: string }> {
+  return (getRawDb().prepare("SELECT name, domain FROM competitors WHERE brand_id = ? ORDER BY name").all(brandId) as Array<{ name: string; domain: string }>).map(
+    (c) => ({ name: String(c.name), domain: String(c.domain) })
+  );
 }

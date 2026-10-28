@@ -80,7 +80,7 @@ export default function EngineSessionsPanel() {
           return (
             <li
               key={s.engine}
-              className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 p-3.5 transition-colors hover:border-zinc-300 animate-fade-in"
+              className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 p-3.5 transition-colors hover:border-zinc-300"
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -93,14 +93,14 @@ export default function EngineSessionsPanel() {
                 </div>
                 <p className="mt-0.5 text-sm text-zinc-500">
                   {s.connecting
-                    ? "Sign in in the browser window, then close it."
+                    ? "A sign-in window opened on the computer running PrismGEO (not on this device if you are using another one). Sign in there, then close it."
                     : s.connected && s.connectedAt
                       ? `Saved ${new Date(s.connectedAt).toLocaleString()}`
                       : info.benefit}
                 </p>
               </div>
               {s.connecting ? (
-                <Loader2 className="h-5 w-5 shrink-0 animate-spin text-accent-600" aria-label="Waiting for sign-in" />
+                <Loader2 className="h-5 w-5 shrink-0 animate-spin text-accent-600" aria-hidden />
               ) : s.connected ? (
                 <div className="flex shrink-0 gap-1.5">
                   <Button size="sm" onClick={() => act(s.engine, "POST")} disabled={busy} aria-label={`Reconnect ${info.name}`}>
@@ -111,7 +111,7 @@ export default function EngineSessionsPanel() {
                   </Button>
                 </div>
               ) : (
-                <Button size="sm" variant="primary" onClick={() => act(s.engine, "POST")} disabled={busy} aria-label={`Connect ${info.name}`}>
+                <Button size="sm" variant="secondary" onClick={() => act(s.engine, "POST")} disabled={busy} aria-label={`Connect ${info.name}`}>
                   {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />} Connect
                 </Button>
               )}
