@@ -1,0 +1,24 @@
+{
+  "name": "prism-geo-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PrismGEO: Open-Source Generative Engine Observability & Visibility Suite",
+  "scripts": {
+    "dev": "pnpm --filter @prismgeo/web dev",
+    "build": "pnpm --filter @prismgeo/web build",
+    "start": "pnpm --filter @prismgeo/web start",
+    "crawl": "tsx packages/crawler/src/cli.ts",
+    "mcp": "tsx packages/mcp/src/stdio.ts",
+    "typecheck": "tsc --noEmit -p packages/db && tsc --noEmit -p packages/core && tsc --noEmit -p packages/crawler && tsc --noEmit -p packages/mcp && tsc --noEmit -p apps/web",
+    "test": "node --import tsx --test \"packages/*/test/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@10.34.9"
+}

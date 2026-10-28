@@ -1,0 +1,25 @@
+{
+  "name": "@prismgeo/mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP connector that lets Claude (Desktop, Code or claude.ai) read and operate a PrismGEO workspace",
+  "main": "./src/server.ts",
+  "bin": {
+    "prismgeo-mcp": "./src/stdio.ts"
+  },
+  "scripts": {
+    "start": "tsx src/stdio.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@prismgeo/db": "workspace:*",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* PrismGEO is a light interface; it does not follow the OS dark setting (mixed themes looked broken). */
+:root {
+  color-scheme: light;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-zinc-50 text-zinc-900 font-sans text-base antialiased;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent-500 ring-offset-2 ring-offset-white;
+  }
+  ::selection {
+    @apply bg-accent-100 text-accent-700;
+  }
+}
+
+@layer components {
+  /* Stagger children in on page load: add .stagger to a container */
+  .stagger > * {
+    @apply animate-fade-up;
+  }
+  .stagger > *:nth-child(2) { animation-delay: 40ms; }
+  .stagger > *:nth-child(3) { animation-delay: 80ms; }
+  .stagger > *:nth-child(4) { animation-delay: 120ms; }
+  .stagger > *:nth-child(5) { animation-delay: 160ms; }
+  .stagger > *:nth-child(n + 6) { animation-delay: 200ms; }
+
+  .skeleton {
+    @apply rounded-md bg-zinc-200/70;
+    background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+    background-size: 400px 100%;
+    background-repeat: no-repeat;
+    @apply animate-shimmer;
+  }
+
+  /* 36px controls with a mouse, 44px on touch screens (WCAG 2.5.5 target size) */
+  @media (pointer: coarse) {
+    .tap-target {
+      min-height: 44px;
+      min-width: 44px;
+    }
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Motion is decoration; switch it off for people who ask for less */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Every control gets the 44px touch target, not only those that opt in with .tap-target.
+   min-height has no effect on inline links inside text, so running copy is unchanged. */
+@media (pointer: coarse) {
+  button:not(.sr-only):not([class*="sr-only"]),
+  [role="tab"],
+  select,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]) {
+    min-height: 44px;
+  }
+  a[href].inline-flex,
+  a[href].flex {
+    min-height: 44px;
+  }
+  button:not(.sr-only):not([class*="sr-only"]) {
+    min-width: 44px;
+  }
+}

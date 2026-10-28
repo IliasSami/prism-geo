@@ -1,0 +1,11 @@
+services:
+  prismgeo:
+    build: .
+    ports:
+      - "127.0.0.1:3333:3333"   # remove 127.0.0.1 only if you put authentication in front
+    volumes:
+      - ./data:/app/data
+    environment:
+      PRISMGEO_URL: http://localhost:3333
+    shm_size: "1gb"             # Chromium needs more than Docker's 64 MB default
+    restart: unless-stopped

@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnpm/
+.pnpm-store/
+
+# Next.js & Build Outputs
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+
+# SQLite WAL and Temporary Files
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+.prismgeo.key
+
+# OS & IDE metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs & Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Local SQLite database (client data — never commit)
+data/*.db
+data/crawl-debug/
+data/browser-profiles/
+data/backups/
+data/logs/
+*.db
+*.sqlite
+data/ui-audit/
+*.tmp.mts
