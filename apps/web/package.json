@@ -1,12 +1,12 @@
 {
   "name": "@prismgeo/web",
-  "version": "1.0.0",
+  "version": "1.0.0-beta.1",
   "private": true,
   "scripts": {
     "dev": "next dev -H ${PRISMGEO_HOST:-127.0.0.1} -p ${PRISMGEO_PORT:-3333}",
     "build": "next build",
     "start": "next start -H ${PRISMGEO_HOST:-127.0.0.1} -p ${PRISMGEO_PORT:-3333}",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -15,9 +15,10 @@
     "@prismgeo/db": "workspace:*",
     "@prismgeo/mcp": "workspace:*",
     "lucide-react": "^1.16.0",
-    "next": "^15.2.1",
+    "next": "15.5.28",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
