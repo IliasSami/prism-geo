@@ -1,6 +1,35 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
+import { runMigrations } from "./migrations";
+
+/** Owner-only permissions: the database holds API keys, the connector token and browser cookies. */
+export const PRIVATE_DIR_MODE = 0o700;
+export const PRIVATE_FILE_MODE = 0o600;
+
+/** Creates a directory with mode 0700 (and tightens it if this process owns it). */
+export function ensurePrivateDir(dir: string): void {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+    return;
+  }
+  try {
+    const st = fs.statSync(dir);
+    if (typeof process.getuid === "function" && st.uid === process.getuid() && (st.mode & 0o077) !== 0) fs.chmodSync(dir, PRIVATE_DIR_MODE);
+  } catch (err) {
+    console.warn(`[PrismGEO DB] Could not restrict permissions of ${dir}: ${(err as Error).message}`);
+  }
+}
+
+/** Sets 0600 on a file this process owns, if it exists. */
+export function restrictFile(file: string): void {
+  try {
+    if (fs.existsSync(file)) fs.chmodSync(file, PRIVATE_FILE_MODE);
+  } catch (err) {
+    console.warn(`[PrismGEO DB] Could not restrict permissions of ${file}: ${(err as Error).message}`);
+  }
+}
 
 export function getDbPath(): string {
   if (process.env.PRISMGEO_DB_PATH) {
@@ -11,9 +40,7 @@ export function getDbPath(): string {
   let rootDataCandidate: string | null = null;
   for (let i = 0; i < 5; i++) {
     const candidate = path.join(curr, "data", "prismgeo.db");
-    const hasWorkspace =
-      fs.existsSync(path.join(curr, "pnpm-workspace.yaml")) ||
-      fs.existsSync(path.join(curr, ".git"));
+    const hasWorkspace = fs.existsSync(path.join(curr, "pnpm-workspace.yaml")) || fs.existsSync(path.join(curr, ".git"));
     if (hasWorkspace) {
       return candidate; // Found canonical workspace root database
     }
@@ -26,10 +53,25 @@ export function getDbPath(): string {
   }
   if (rootDataCandidate) return rootDataCandidate;
   const defaultDir = path.resolve(process.cwd(), "data");
-  if (!fs.existsSync(defaultDir)) {
-    fs.mkdirSync(defaultDir, { recursive: true });
-  }
+  ensurePrivateDir(defaultDir);
   return path.join(defaultDir, "prismgeo.db");
+}
+
+/**
+ * Opens a database file with PrismGEO's pragmas, brings its schema up to date (see
+ * migrations.ts) and restricts the file permissions. Not cached; use getRawDb() in the app.
+ */
+export function openDatabase(dbPath: string): DatabaseSync {
+  if (dbPath !== ":memory:") ensurePrivateDir(path.dirname(dbPath));
+  const sqlite = new DatabaseSync(dbPath);
+  sqlite.exec("PRAGMA journal_mode = WAL;");
+  sqlite.exec("PRAGMA synchronous = NORMAL;");
+  sqlite.exec("PRAGMA busy_timeout = 5000;");
+  sqlite.exec("PRAGMA foreign_keys = ON;");
+  const result = runMigrations(sqlite, dbPath);
+  if (result.applied.length > 0) console.log(`[PrismGEO DB] Schema v${result.from} -> v${result.to}: ${result.applied.join("; ")}`);
+  if (dbPath !== ":memory:") for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) restrictFile(f);
+  return sqlite;
 }
 
 /**
@@ -42,163 +84,14 @@ let _db: DatabaseSync | null = g.__prismDb ?? null;
 
 export function getRawDb(customPath?: string): DatabaseSync {
   if (_db) return _db;
-
-  const dbPath = customPath || getDbPath();
-  const dir = path.dirname(dbPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  const sqlite = new DatabaseSync(dbPath);
-
-  // Set WAL performance and integrity pragmas
-  sqlite.exec("PRAGMA journal_mode = WAL;");
-  sqlite.exec("PRAGMA synchronous = NORMAL;");
-  sqlite.exec("PRAGMA busy_timeout = 5000;");
-  sqlite.exec("PRAGMA foreign_keys = ON;");
-
-  // Create tables with foreign key cascades and complete column schemas
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS brands (
-      id TEXT PRIMARY KEY,
-      slug TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      domain TEXT NOT NULL UNIQUE,
-      description TEXT,
-      aliases_json TEXT NOT NULL DEFAULT '[]',
-      value_props_json TEXT NOT NULL DEFAULT '[]',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS competitors (
-      id TEXT PRIMARY KEY,
-      brand_id TEXT NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
-      domain TEXT NOT NULL,
-      aliases_json TEXT NOT NULL DEFAULT '[]',
-      active INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS prompts (
-      id TEXT PRIMARY KEY,
-      brand_id TEXT NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
-      query_text TEXT NOT NULL,
-      intent_type TEXT NOT NULL,
-      persona_dimension TEXT NOT NULL DEFAULT 'agency_executive',
-      active INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS crawl_batches (
-      id TEXT PRIMARY KEY,
-      brand_id TEXT NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
-      status TEXT NOT NULL DEFAULT 'pending',
-      sample_size INTEGER NOT NULL DEFAULT 10,
-      total_runs INTEGER NOT NULL DEFAULT 0,
-      completed_runs INTEGER NOT NULL DEFAULT 0,
-      current_prompt TEXT,
-      current_engine TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      finished_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS prompt_runs (
-      id TEXT PRIMARY KEY,
-      brand_id TEXT REFERENCES brands(id) ON DELETE CASCADE,
-      batch_id TEXT NOT NULL REFERENCES crawl_batches(id) ON DELETE CASCADE,
-      prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
-      engine TEXT NOT NULL,
-      run_index INTEGER NOT NULL,
-      response_text TEXT NOT NULL,
-      sub_queries_json TEXT NOT NULL DEFAULT '[]',
-      prompt_tokens INTEGER,
-      execution_ms INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS citations (
-      id TEXT PRIMARY KEY,
-      brand_id TEXT REFERENCES brands(id) ON DELETE CASCADE,
-      run_id TEXT NOT NULL REFERENCES prompt_runs(id) ON DELETE CASCADE,
-      domain TEXT NOT NULL,
-      url TEXT NOT NULL,
-      title TEXT,
-      snippet TEXT,
-      anchor_text TEXT,
-      rank INTEGER NOT NULL DEFAULT 1,
-      is_brand_domain INTEGER NOT NULL DEFAULT 0,
-      is_competitor_domain INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS entity_mentions (
-      id TEXT PRIMARY KEY,
-      brand_id TEXT REFERENCES brands(id) ON DELETE CASCADE,
-      run_id TEXT NOT NULL REFERENCES prompt_runs(id) ON DELETE CASCADE,
-      entity_name TEXT NOT NULL,
-      is_target_brand INTEGER NOT NULL DEFAULT 0,
-      is_competitor INTEGER NOT NULL DEFAULT 0,
-      sentiment TEXT NOT NULL DEFAULT 'neutral',
-      prominence_score REAL NOT NULL DEFAULT 0.0,
-      position_rank INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS reverse_rag_chunks (
-      id TEXT PRIMARY KEY,
-      brand_id TEXT REFERENCES brands(id) ON DELETE CASCADE,
-      run_id TEXT NOT NULL REFERENCES prompt_runs(id) ON DELETE CASCADE,
-      citation_id TEXT REFERENCES citations(id) ON DELETE CASCADE,
-      source_url TEXT NOT NULL,
-      matched_chunk_text TEXT NOT NULL,
-      similarity_score REAL NOT NULL DEFAULT 0.0,
-      self_contained_score REAL NOT NULL DEFAULT 0.0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS opportunities (
-      id TEXT PRIMARY KEY,
-      brand_id TEXT NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
-      title TEXT NOT NULL,
-      sub_query_target TEXT NOT NULL,
-      gap_type TEXT NOT NULL,
-      recommended_action TEXT NOT NULL,
-      estimated_impact TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS system_settings (
-      key TEXT PRIMARY KEY,
-      value_json TEXT NOT NULL,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  // Safe migration helper for existing databases missing newly added columns
-  const runMigration = (sql: string) => {
-    try {
-      sqlite.exec(sql);
-    } catch {}
-  };
-  runMigration("ALTER TABLE crawl_batches ADD COLUMN total_runs INTEGER DEFAULT 0;");
-  runMigration("ALTER TABLE crawl_batches ADD COLUMN current_prompt TEXT;");
-  runMigration("ALTER TABLE crawl_batches ADD COLUMN current_engine TEXT;");
-  runMigration("ALTER TABLE crawl_batches ADD COLUMN failed_runs INTEGER NOT NULL DEFAULT 0;");
-  runMigration("ALTER TABLE crawl_batches ADD COLUMN errors_json TEXT NOT NULL DEFAULT '[]';");
-  runMigration("ALTER TABLE crawl_batches ADD COLUMN heartbeat_at TEXT;");
-  runMigration("ALTER TABLE prompt_runs ADD COLUMN brand_id TEXT;");
-  runMigration("ALTER TABLE prompt_runs ADD COLUMN capture_method TEXT NOT NULL DEFAULT 'browser';");
-  runMigration("ALTER TABLE citations ADD COLUMN brand_id TEXT;");
-  runMigration("ALTER TABLE entity_mentions ADD COLUMN brand_id TEXT;");
-  runMigration("ALTER TABLE reverse_rag_chunks ADD COLUMN brand_id TEXT;");
-
+  const sqlite = openDatabase(customPath || getDbPath());
   _db = sqlite;
   g.__prismDb = sqlite;
   return sqlite;
 }
+
+/** ISO-8601 UTC timestamp, the one format PrismGEO writes. */
+export const nowIso = () => new Date().toISOString();
 
 // Type definitions matching schema
 export interface BrandRecord {
@@ -207,6 +100,8 @@ export interface BrandRecord {
   name: string;
   domain: string;
   description: string | null;
+  /** Short product category ("AI voice agent for cart recovery"); null when not set. */
+  category: string | null;
   aliasesJson: string;
   valuePropsJson: string;
   createdAt: string;
@@ -261,6 +156,8 @@ export interface PromptRunRecord {
   executionMs: number;
   /** How the answer was obtained: 'browser' (logged-out), 'browser_signed_in' or 'api'. */
   captureMethod: string;
+  /** JSON object of quality flags, e.g. {"entityConfusion":{"lookalikeDomains":["northwindvoiceai.com"]}}. */
+  flagsJson: string;
   createdAt: string;
 }
 
@@ -283,12 +180,24 @@ export interface EntityMentionRecord {
   id: string;
   brandId: string;
   runId: string;
+  /** Competitor row id (null for the target brand, or for a competitor deleted since). */
+  competitorId: string | null;
   entityName: string;
   isTargetBrand: boolean;
   isCompetitor: boolean;
+  /** The prompt itself names the entity (an echo); null for rows stored before this was recorded. */
+  isPromptSubject: boolean | null;
   sentiment: string;
+  /** recommended_primary | recommended_alternative | neutral | warning_caution; null for old rows. */
+  stance: string | null;
+  hasCaveat: boolean;
   prominenceScore: number;
-  positionRank: number;
+  /** Order of first mention among non-echo tracked entities; null for echoes. */
+  positionRank: number | null;
+  /** Index of the list item / table row naming the entity, when the answer is a list. */
+  listPosition: number | null;
+  /** The answer cites or names a look-alike of the brand's domain. */
+  entityConfusion: boolean;
   createdAt: string;
 }
 
@@ -304,119 +213,310 @@ export interface OpportunityRecord {
   createdAt: string;
 }
 
+type Row = Record<string, any>;
+
+export function rowToBrand(row: Row): BrandRecord {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    domain: row.domain,
+    description: row.description,
+    category: row.category ?? null,
+    aliasesJson: row.aliases_json,
+    valuePropsJson: row.value_props_json,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+const rowToCompetitor = (r: Row): CompetitorRecord => ({
+  id: r.id,
+  brandId: r.brand_id,
+  name: r.name,
+  domain: r.domain,
+  aliasesJson: r.aliases_json,
+  active: Boolean(r.active),
+  createdAt: r.created_at,
+});
+
+const rowToPrompt = (r: Row): PromptRecord => ({
+  id: r.id,
+  brandId: r.brand_id,
+  queryText: r.query_text,
+  intentType: r.intent_type,
+  personaDimension: r.persona_dimension,
+  active: Boolean(r.active),
+  createdAt: r.created_at,
+});
+
+const rowToBatch = (r: Row): CrawlBatchRecord => ({
+  id: r.id,
+  brandId: r.brand_id,
+  status: r.status,
+  sampleSize: r.sample_size,
+  totalRuns: r.total_runs ?? 0,
+  completedRuns: r.completed_runs,
+  currentPrompt: r.current_prompt ?? null,
+  currentEngine: r.current_engine ?? null,
+  failedRuns: r.failed_runs ?? 0,
+  errorsJson: r.errors_json ?? "[]",
+  createdAt: r.created_at,
+  finishedAt: r.finished_at,
+});
+
+const rowToRun = (r: Row): PromptRunRecord => ({
+  id: r.id,
+  brandId: r.brand_id,
+  batchId: r.batch_id,
+  promptId: r.prompt_id,
+  engine: r.engine,
+  runIndex: r.run_index,
+  responseText: r.response_text,
+  subQueriesJson: r.sub_queries_json,
+  promptTokens: r.prompt_tokens,
+  executionMs: r.execution_ms,
+  captureMethod: r.capture_method ?? "browser",
+  flagsJson: r.flags_json ?? "{}",
+  createdAt: r.created_at,
+});
+
+const rowToCitation = (r: Row): CitationRecord => ({
+  id: r.id,
+  brandId: r.brand_id,
+  runId: r.run_id,
+  domain: r.domain,
+  url: r.url,
+  title: r.title,
+  snippet: r.snippet,
+  anchorText: r.anchor_text,
+  rank: r.rank,
+  isBrandDomain: Boolean(r.is_brand_domain),
+  isCompetitorDomain: Boolean(r.is_competitor_domain),
+  createdAt: r.created_at,
+});
+
+const rowToMention = (r: Row): EntityMentionRecord => ({
+  id: r.id,
+  brandId: r.brand_id,
+  runId: r.run_id,
+  competitorId: r.competitor_id ?? null,
+  entityName: r.entity_name,
+  isTargetBrand: Boolean(r.is_target_brand),
+  isCompetitor: Boolean(r.is_competitor),
+  isPromptSubject: r.is_prompt_subject === null || r.is_prompt_subject === undefined ? null : Boolean(r.is_prompt_subject),
+  sentiment: r.sentiment,
+  stance: r.stance ?? null,
+  hasCaveat: Boolean(r.has_caveat),
+  prominenceScore: r.prominence_score,
+  positionRank: r.position_rank ?? null,
+  listPosition: r.list_position ?? null,
+  entityConfusion: Boolean(r.entity_confusion),
+  createdAt: r.created_at,
+});
+
+const rowToOpportunity = (r: Row): OpportunityRecord => ({
+  id: r.id,
+  brandId: r.brand_id,
+  title: r.title,
+  subQueryTarget: r.sub_query_target,
+  gapType: r.gap_type,
+  recommendedAction: r.recommended_action,
+  estimatedImpact: r.estimated_impact,
+  status: r.status,
+  createdAt: r.created_at,
+});
+
 export function getActiveBrand(): BrandRecord | undefined {
   const sqlite = getRawDb();
-  try {
-    const setting = sqlite.prepare("SELECT value_json FROM system_settings WHERE key = 'active_brand_id'").get() as any;
-    if (setting) {
-      const brandId = JSON.parse(setting.value_json);
-      const row = sqlite.prepare("SELECT * FROM brands WHERE id = ?").get(brandId) as any;
-      if (row) {
-        return {
-          id: row.id,
-          slug: row.slug,
-          name: row.name,
-          domain: row.domain,
-          description: row.description,
-          aliasesJson: row.aliases_json,
-          valuePropsJson: row.value_props_json,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        };
-      }
+  const setting = sqlite.prepare("SELECT value_json FROM system_settings WHERE key = 'active_brand_id'").get() as Row | undefined;
+  if (setting) {
+    let brandId: unknown = null;
+    try {
+      brandId = JSON.parse(setting.value_json);
+    } catch {
+      console.warn("[PrismGEO DB] Ignoring an unreadable active_brand_id setting");
     }
-  } catch {}
-  const defaultRow = sqlite.prepare("SELECT * FROM brands ORDER BY updated_at DESC LIMIT 1").get() as any;
-  if (!defaultRow) return undefined;
-  return {
-    id: defaultRow.id,
-    slug: defaultRow.slug,
-    name: defaultRow.name,
-    domain: defaultRow.domain,
-    description: defaultRow.description,
-    aliasesJson: defaultRow.aliases_json,
-    valuePropsJson: defaultRow.value_props_json,
-    createdAt: defaultRow.created_at,
-    updatedAt: defaultRow.updated_at,
-  };
+    if (typeof brandId === "string") {
+      const row = sqlite.prepare("SELECT * FROM brands WHERE id = ?").get(brandId) as Row | undefined;
+      if (row) return rowToBrand(row);
+    }
+  }
+  const defaultRow = sqlite.prepare("SELECT * FROM brands ORDER BY updated_at DESC LIMIT 1").get() as Row | undefined;
+  return defaultRow ? rowToBrand(defaultRow) : undefined;
 }
 
 export function setActiveBrand(brandId: string): void {
-  const sqlite = getRawDb();
-  sqlite
-    .prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES ('active_brand_id', ?, CURRENT_TIMESTAMP)")
-    .run(JSON.stringify(brandId));
+  getRawDb()
+    .prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES ('active_brand_id', ?, ?)")
+    .run(JSON.stringify(brandId), nowIso());
 }
 
 export function getAllBrands(): BrandRecord[] {
-  const sqlite = getRawDb();
-  const rows = sqlite.prepare("SELECT * FROM brands ORDER BY name ASC").all() as any[];
-  return rows.map((r) => ({
-    id: r.id,
-    slug: r.slug,
-    name: r.name,
-    domain: r.domain,
-    description: r.description,
-    aliasesJson: r.aliases_json,
-    valuePropsJson: r.value_props_json,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-  }));
+  return (getRawDb().prepare("SELECT * FROM brands ORDER BY name ASC").all() as Row[]).map(rowToBrand);
 }
 
-export function createBrand(data: {
-  name: string;
-  domain: string;
-  description?: string;
-  aliases?: string[];
-  valueProps?: string[];
-}): BrandRecord {
+/** A client could not be created or changed because it conflicts with an existing one. */
+export class BrandConflictError extends Error {
+  readonly field: "domain" | "slug" | "name";
+  constructor(field: "domain" | "slug" | "name", message: string) {
+    super(message);
+    this.field = field;
+  }
+}
+
+/** A brand/competitor domain was not a valid host name. */
+export class InvalidDomainError extends Error {}
+
+/** "https://www.Example.com:443/x" -> "example.com". Throws InvalidDomainError for anything that is not a host name. */
+export function normalizeBrandDomain(raw: string): string {
+  const host = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
+    .split(/[/?#]/)[0]
+    .replace(/:\d+$/, "")
+    .replace(/\.$/, "")
+    .replace(/^www\./, "");
+  if (!/^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) {
+    throw new InvalidDomainError(`"${raw}" is not a valid domain. Enter a domain like example.com.`);
+  }
+  return host;
+}
+
+export function slugify(name: string): string {
+  return (
+    String(name || "")
+      .normalize("NFKD")
+      .replace(/[̀-ͯ]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "client"
+  );
+}
+
+/**
+ * Creates a client. The slug is `<name>-<short id>`, so two clients may share a name; a second
+ * client with the same domain is refused with a BrandConflictError carrying a readable message.
+ */
+export function createBrand(data: { name: string; domain: string; description?: string; category?: string; aliases?: string[]; valueProps?: string[] }): BrandRecord {
   const sqlite = getRawDb();
-  const id = `brand-${data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now().toString(36)}`;
-  const slug = data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-  const aliasesJson = JSON.stringify(data.aliases || []);
-  const valuePropsJson = JSON.stringify(data.valueProps || []);
-  const now = new Date().toISOString();
-
-  sqlite
-    .prepare(
-      `INSERT INTO brands (id, slug, name, domain, description, aliases_json, value_props_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(id, slug, data.name, data.domain, data.description || "", aliasesJson, valuePropsJson, now, now);
-
-  return {
-    id,
-    slug,
-    name: data.name,
-    domain: data.domain,
-    description: data.description || null,
-    aliasesJson,
-    valuePropsJson,
-    createdAt: now,
-    updatedAt: now,
-  };
+  const name = String(data.name || "").trim();
+  if (!name) throw new Error("Enter a client name.");
+  const domain = normalizeBrandDomain(data.domain);
+  const existing = sqlite.prepare("SELECT name FROM brands WHERE domain = ?").get(domain) as Row | undefined;
+  if (existing) throw new BrandConflictError("domain", `A client with the domain ${domain} already exists (${existing.name}).`);
+  const shortId = crypto.randomBytes(3).toString("hex");
+  const slug = `${slugify(name)}-${shortId}`;
+  const id = `brand-${slug}`;
+  const aliasesJson = JSON.stringify((data.aliases || []).filter((a) => typeof a === "string" && a.trim()).map((a) => a.trim()));
+  const valuePropsJson = JSON.stringify((data.valueProps || []).filter((v) => typeof v === "string" && v.trim()).map((v) => v.trim()));
+  const now = nowIso();
+  const category = typeof data.category === "string" && data.category.trim() ? data.category.trim().slice(0, 120) : null;
+  try {
+    sqlite
+      .prepare(
+        `INSERT INTO brands (id, slug, name, domain, description, category, aliases_json, value_props_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(id, slug, name, domain, data.description || "", category, aliasesJson, valuePropsJson, now, now);
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (/UNIQUE constraint failed: brands\.domain/.test(msg)) throw new BrandConflictError("domain", `A client with the domain ${domain} already exists.`);
+    if (/UNIQUE constraint failed: brands\.(slug|id)/.test(msg)) throw new BrandConflictError("slug", "Could not create the client, please try again.");
+    throw err;
+  }
+  return { id, slug, name, domain, description: data.description || null, category, aliasesJson, valuePropsJson, createdAt: now, updatedAt: now };
 }
 
 export function getSettings<T>(key: string, defaultValue: T): T {
-  const sqlite = getRawDb();
+  const row = getRawDb().prepare("SELECT value_json FROM system_settings WHERE key = ?").get(key) as Row | undefined;
+  if (!row || !row.value_json) return defaultValue;
   try {
-    const row = sqlite.prepare("SELECT value_json FROM system_settings WHERE key = ?").get(key) as any;
-    if (row && row.value_json) {
-      return JSON.parse(row.value_json) as T;
-    }
-  } catch {}
-  return defaultValue;
+    return JSON.parse(row.value_json) as T;
+  } catch {
+    console.warn(`[PrismGEO DB] Setting "${key}" is not valid JSON; using the default`);
+    return defaultValue;
+  }
 }
 
 export function setSettings<T>(key: string, value: T): void {
-  const sqlite = getRawDb();
-  sqlite
-    .prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)")
-    .run(key, JSON.stringify(value));
+  getRawDb()
+    .prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES (?, ?, ?)")
+    .run(key, JSON.stringify(value), nowIso());
 }
 
-// High-level fluent query client
+// ---------------------------------------------------------------- Drizzle-like query shim
+//
+// A small subset of the Drizzle API used by a few call sites. Filters are explicit: each finder
+// names the keys it understands, and any other key (or a missing scope on brand-owned tables)
+// throws, so a typo can never silently return every client's rows.
+
+/** Thrown when a query-shim call uses a filter the shim does not implement. */
+export class UnsupportedFilterError extends Error {}
+
+const camelToSnake = (k: string) => k.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+
+/** Recognised filter values by snake_case column. Throws on any other key. */
+function filterOf(table: string, where: unknown, allowed: string[]): Record<string, unknown> {
+  if (where === undefined || where === null) return {};
+  if (typeof where !== "object" || Array.isArray(where)) throw new UnsupportedFilterError(`db.query.${table}: "where" must be an object from eq()`);
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
+    const col = camelToSnake(key);
+    if (!allowed.includes(col)) {
+      throw new UnsupportedFilterError(`db.query.${table}: unsupported filter "${key}" (supported: ${allowed.join(", ")}). Use getRawDb() with SQL for other queries.`);
+    }
+    if (value === undefined) throw new UnsupportedFilterError(`db.query.${table}: filter "${key}" is undefined`);
+    out[col] = typeof value === "boolean" ? (value ? 1 : 0) : value;
+  }
+  return out;
+}
+
+/** Builds "WHERE a = ? AND b = ?" from a filter; `required` lists columns of which one must be present. */
+function whereSql(table: string, filter: Record<string, unknown>, required: string[] = []): { sql: string; params: any[] } {
+  if (required.length && !required.some((c) => c in filter)) {
+    throw new UnsupportedFilterError(`db.query.${table}: a filter on ${required.join(" or ")} is required (brand-owned rows are never listed unscoped)`);
+  }
+  const cols = Object.keys(filter);
+  if (cols.length === 0) return { sql: "", params: [] };
+  return { sql: ` WHERE ${cols.map((c) => `${c} = ?`).join(" AND ")}`, params: cols.map((c) => filter[c]) };
+}
+
+function limitSql(limit: unknown): { sql: string; params: any[] } {
+  if (limit === undefined || limit === null) return { sql: "", params: [] };
+  const n = Number(limit);
+  if (!Number.isInteger(n) || n <= 0) throw new UnsupportedFilterError(`db.query: invalid limit ${String(limit)}`);
+  return { sql: " LIMIT ?", params: [n] };
+}
+
+function find(table: string, opts: { where?: unknown; limit?: unknown } | undefined, allowed: string[], required: string[], order: string): Row[] {
+  const f = whereSql(table, filterOf(table, opts?.where, allowed), required);
+  const l = limitSql(opts?.limit);
+  return getRawDb().prepare(`SELECT * FROM ${table}${f.sql} ORDER BY ${order}${l.sql}`).all(...f.params, ...l.params) as Row[];
+}
+
+const ALLOWED_TABLES = new Set([
+  "brands", "competitors", "prompts", "crawl_batches", "prompt_runs", "citations", "entity_mentions", "reverse_rag_chunks", "opportunities", "system_settings",
+]);
+
+function tableName(tableObj: any): string {
+  const name = tableObj?.name || tableObj?._table;
+  if (!ALLOWED_TABLES.has(name)) throw new Error(`Invalid table: ${name}`);
+  return name;
+}
+
+function columnId(k: string): string {
+  const s = camelToSnake(k);
+  if (!/^[a-z0-9_]+$/.test(s)) throw new Error(`Invalid column identifier: ${s}`);
+  return s;
+}
+
+const sqlValue = (v: unknown): any => (typeof v === "boolean" ? (v ? 1 : 0) : v ?? null);
+
+type FindOpts = { where?: any; limit?: number; orderBy?: any };
+
 export const db = {
   get raw() {
     return getRawDb();
@@ -424,360 +524,41 @@ export const db = {
 
   query: {
     brands: {
-      findMany: (): BrandRecord[] => {
-        return getAllBrands();
-      },
-      findFirst: (options?: { where?: any }): BrandRecord | undefined => {
-        const sqlite = getRawDb();
-        if (options?.where?.slug) {
-          const row = sqlite.prepare("SELECT * FROM brands WHERE slug = ? LIMIT 1").get(options.where.slug) as any;
-          if (!row) return undefined;
-          return {
-            id: row.id,
-            slug: row.slug,
-            name: row.name,
-            domain: row.domain,
-            description: row.description,
-            aliasesJson: row.aliases_json,
-            valuePropsJson: row.value_props_json,
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-          };
-        }
-        if (options?.where?.id) {
-          const row = sqlite.prepare("SELECT * FROM brands WHERE id = ? LIMIT 1").get(options.where.id) as any;
-          if (!row) return undefined;
-          return {
-            id: row.id,
-            slug: row.slug,
-            name: row.name,
-            domain: row.domain,
-            description: row.description,
-            aliasesJson: row.aliases_json,
-            valuePropsJson: row.value_props_json,
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-          };
-        }
-        if (options?.where) {
-          // Explicit where filter provided but did not match slug or id
-          return undefined;
-        }
-        const row = sqlite.prepare("SELECT * FROM brands LIMIT 1").get() as any;
-        if (!row) return undefined;
-        return {
-          id: row.id,
-          slug: row.slug,
-          name: row.name,
-          domain: row.domain,
-          description: row.description,
-          aliasesJson: row.aliases_json,
-          valuePropsJson: row.value_props_json,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        };
-      },
+      findMany: (opts?: FindOpts): BrandRecord[] => find("brands", opts, ["id", "slug"], [], "name ASC").map(rowToBrand),
+      findFirst: (opts?: FindOpts): BrandRecord | undefined => find("brands", { ...opts, limit: 1 }, ["id", "slug"], [], "created_at ASC").map(rowToBrand)[0],
     },
-
     competitors: {
-      findFirst: (options?: { where?: any }): CompetitorRecord | undefined => {
-        const sqlite = getRawDb();
-        const domain = options?.where?.domain;
-        if (domain) {
-          const row = sqlite.prepare("SELECT * FROM competitors WHERE domain = ? LIMIT 1").get(domain) as any;
-          if (!row) return undefined;
-          return {
-            id: row.id,
-            brandId: row.brand_id,
-            name: row.name,
-            domain: row.domain,
-            aliasesJson: row.aliases_json,
-            active: Boolean(row.active),
-            createdAt: row.created_at,
-          };
-        }
-        return undefined;
-      },
-      findMany: (options?: { where?: any; orderBy?: any; limit?: number }): CompetitorRecord[] => {
-        const sqlite = getRawDb();
-        let rows: any[];
-        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
-        if (brandId) {
-          rows = sqlite.prepare("SELECT * FROM competitors WHERE brand_id = ?").all(brandId) as any[];
-        } else {
-          rows = sqlite.prepare("SELECT * FROM competitors").all() as any[];
-        }
-        return rows.map((r) => ({
-          id: r.id,
-          brandId: r.brand_id,
-          name: r.name,
-          domain: r.domain,
-          aliasesJson: r.aliases_json,
-          active: Boolean(r.active),
-          createdAt: r.created_at,
-        }));
-      },
+      findFirst: (opts?: FindOpts): CompetitorRecord | undefined =>
+        find("competitors", { ...opts, limit: 1 }, ["id", "brand_id", "domain", "name"], ["id", "brand_id"], "created_at ASC").map(rowToCompetitor)[0],
+      findMany: (opts?: FindOpts): CompetitorRecord[] =>
+        find("competitors", opts, ["brand_id", "active"], ["brand_id"], "created_at ASC").map(rowToCompetitor),
     },
-
     prompts: {
-      findFirst: (options?: { where?: any }): PromptRecord | undefined => {
-        const sqlite = getRawDb();
-        const queryText = options?.where?.queryText ?? options?.where?.query_text;
-        if (queryText) {
-          const row = sqlite.prepare("SELECT * FROM prompts WHERE query_text = ? LIMIT 1").get(queryText) as any;
-          if (!row) return undefined;
-          return {
-            id: row.id,
-            brandId: row.brand_id,
-            queryText: row.query_text,
-            intentType: row.intent_type,
-            personaDimension: row.persona_dimension,
-            active: Boolean(row.active),
-            createdAt: row.created_at,
-          };
-        }
-        return undefined;
-      },
-      findMany: (options?: { where?: any; orderBy?: any; limit?: number }): PromptRecord[] => {
-        const sqlite = getRawDb();
-        let rows: any[];
-        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
-        if (brandId) {
-          rows = sqlite.prepare("SELECT * FROM prompts WHERE brand_id = ?").all(brandId) as any[];
-        } else {
-          rows = sqlite.prepare("SELECT * FROM prompts").all() as any[];
-        }
-        return rows.map((r) => ({
-          id: r.id,
-          brandId: r.brand_id,
-          queryText: r.query_text,
-          intentType: r.intent_type,
-          personaDimension: r.persona_dimension,
-          active: Boolean(r.active),
-          createdAt: r.created_at,
-        }));
-      },
+      findFirst: (opts?: FindOpts): PromptRecord | undefined =>
+        find("prompts", { ...opts, limit: 1 }, ["id", "brand_id", "query_text"], ["id", "brand_id"], "created_at ASC").map(rowToPrompt)[0],
+      findMany: (opts?: FindOpts): PromptRecord[] => find("prompts", opts, ["brand_id", "active"], ["brand_id"], "created_at ASC").map(rowToPrompt),
     },
-
     crawlBatches: {
-      findFirst: (options?: { where?: any }): CrawlBatchRecord | undefined => {
-        const sqlite = getRawDb();
-        let row: any;
-        const id = options?.where?.id;
-        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
-        if (id) {
-          row = sqlite.prepare("SELECT * FROM crawl_batches WHERE id = ? LIMIT 1").get(id);
-        } else if (brandId) {
-          row = sqlite.prepare("SELECT * FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1").get(brandId);
-        } else {
-          row = sqlite.prepare("SELECT * FROM crawl_batches ORDER BY created_at DESC LIMIT 1").get();
-        }
-        if (!row) return undefined;
-        return {
-          id: row.id,
-          brandId: row.brand_id,
-          status: row.status,
-          sampleSize: row.sample_size,
-          totalRuns: row.total_runs ?? 0,
-          completedRuns: row.completed_runs,
-          currentPrompt: row.current_prompt ?? null,
-          currentEngine: row.current_engine ?? null,
-          failedRuns: row.failed_runs ?? 0,
-          errorsJson: row.errors_json ?? "[]",
-          createdAt: row.created_at,
-          finishedAt: row.finished_at,
-        };
-      },
-      findMany: (options?: { where?: any; limit?: number; orderBy?: any }): CrawlBatchRecord[] => {
-        const sqlite = getRawDb();
-        const limit = options?.limit || 50;
-        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
-        let rows: any[];
-        if (brandId) {
-          rows = sqlite.prepare("SELECT * FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT ?").all(brandId, limit) as any[];
-        } else {
-          rows = sqlite.prepare("SELECT * FROM crawl_batches ORDER BY created_at DESC LIMIT ?").all(limit) as any[];
-        }
-        return rows.map((r) => ({
-          id: r.id,
-          brandId: r.brand_id,
-          status: r.status,
-          sampleSize: r.sample_size,
-          totalRuns: r.total_runs ?? 0,
-          completedRuns: r.completed_runs,
-          currentPrompt: r.current_prompt ?? null,
-          currentEngine: r.current_engine ?? null,
-          failedRuns: r.failed_runs ?? 0,
-          errorsJson: r.errors_json ?? "[]",
-          createdAt: r.created_at,
-          finishedAt: r.finished_at,
-        }));
-      },
+      findFirst: (opts?: FindOpts): CrawlBatchRecord | undefined =>
+        find("crawl_batches", { ...opts, limit: 1 }, ["id", "brand_id", "status"], ["id", "brand_id"], "created_at DESC").map(rowToBatch)[0],
+      findMany: (opts?: FindOpts): CrawlBatchRecord[] =>
+        find("crawl_batches", { ...opts, limit: opts?.limit ?? 50 }, ["brand_id", "status"], ["brand_id"], "created_at DESC").map(rowToBatch),
     },
-
     promptRuns: {
-      findMany: (options?: { limit?: number; where?: any; orderBy?: any }): PromptRunRecord[] => {
-        const sqlite = getRawDb();
-        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
-        const promptId = options?.where?.promptId ?? options?.where?.prompt_id;
-        const batchId = options?.where?.batchId ?? options?.where?.batch_id;
-
-        const clauses: string[] = [];
-        const params: any[] = [];
-
-        if (brandId) {
-          clauses.push("brand_id = ?");
-          params.push(brandId);
-        }
-        if (promptId) {
-          clauses.push("prompt_id = ?");
-          params.push(promptId);
-        }
-        if (batchId) {
-          clauses.push("batch_id = ?");
-          params.push(batchId);
-        }
-
-        let sql = "SELECT * FROM prompt_runs";
-        if (clauses.length > 0) {
-          sql += ` WHERE ${clauses.join(" AND ")}`;
-        }
-        sql += " ORDER BY created_at DESC";
-        if (options?.limit) {
-          sql += " LIMIT ?";
-          params.push(options.limit);
-        }
-
-        const rows = (params.length > 0 ? sqlite.prepare(sql).all(...params) : sqlite.prepare(sql).all()) as any[];
-        return rows.map((r) => ({
-          id: r.id,
-          brandId: r.brand_id,
-          batchId: r.batch_id,
-          promptId: r.prompt_id,
-          engine: r.engine,
-          runIndex: r.run_index,
-          responseText: r.response_text,
-          subQueriesJson: r.sub_queries_json,
-          promptTokens: r.prompt_tokens,
-          executionMs: r.execution_ms,
-          captureMethod: r.capture_method ?? "browser",
-          createdAt: r.created_at,
-        }));
-      },
+      findMany: (opts?: FindOpts): PromptRunRecord[] =>
+        find("prompt_runs", opts, ["brand_id", "prompt_id", "batch_id", "engine"], ["brand_id", "prompt_id", "batch_id"], "created_at DESC").map(rowToRun),
     },
-
     citations: {
-      findMany: (options?: { where?: any; limit?: number; orderBy?: any }): CitationRecord[] => {
-        const sqlite = getRawDb();
-        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
-        const runId = options?.where?.runId ?? options?.where?.run_id;
-        const isBrand = options?.where?.isBrandDomain ?? options?.where?.is_brand_domain;
-        const isComp = options?.where?.isCompetitorDomain ?? options?.where?.is_competitor_domain;
-
-        const clauses: string[] = [];
-        const params: any[] = [];
-
-        if (brandId) {
-          clauses.push("brand_id = ?");
-          params.push(brandId);
-        }
-        if (runId) {
-          clauses.push("run_id = ?");
-          params.push(runId);
-        }
-        if (isBrand !== undefined) {
-          clauses.push("is_brand_domain = ?");
-          params.push(isBrand ? 1 : 0);
-        }
-        if (isComp !== undefined) {
-          clauses.push("is_competitor_domain = ?");
-          params.push(isComp ? 1 : 0);
-        }
-
-        let sql = "SELECT * FROM citations";
-        if (clauses.length > 0) {
-          sql += ` WHERE ${clauses.join(" AND ")}`;
-        }
-        sql += " ORDER BY created_at DESC";
-        if (options?.limit) {
-          sql += " LIMIT ?";
-          params.push(options.limit);
-        }
-
-        const rows = (params.length > 0 ? sqlite.prepare(sql).all(...params) : sqlite.prepare(sql).all()) as any[];
-        return rows.map((r) => ({
-          id: r.id,
-          brandId: r.brand_id,
-          runId: r.run_id,
-          domain: r.domain,
-          url: r.url,
-          title: r.title,
-          snippet: r.snippet,
-          anchorText: r.anchor_text,
-          rank: r.rank,
-          isBrandDomain: Boolean(r.is_brand_domain),
-          isCompetitorDomain: Boolean(r.is_competitor_domain),
-          createdAt: r.created_at,
-        }));
-      },
+      findMany: (opts?: FindOpts): CitationRecord[] =>
+        find("citations", opts, ["brand_id", "run_id", "is_brand_domain", "is_competitor_domain"], ["brand_id", "run_id"], "created_at DESC").map(rowToCitation),
     },
-
     entityMentions: {
-      findMany: (options?: { where?: any; limit?: number; orderBy?: any }): EntityMentionRecord[] => {
-        const sqlite = getRawDb();
-        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
-        const runId = options?.where?.runId ?? options?.where?.run_id;
-
-        const clauses: string[] = [];
-        const params: any[] = [];
-
-        if (brandId) {
-          clauses.push("brand_id = ?");
-          params.push(brandId);
-        }
-        if (runId) {
-          clauses.push("run_id = ?");
-          params.push(runId);
-        }
-
-        let sql = "SELECT * FROM entity_mentions";
-        if (clauses.length > 0) {
-          sql += ` WHERE ${clauses.join(" AND ")}`;
-        }
-        sql += " ORDER BY created_at DESC";
-        if (options?.limit) {
-          sql += " LIMIT ?";
-          params.push(options.limit);
-        }
-
-        const rows = (params.length > 0 ? sqlite.prepare(sql).all(...params) : sqlite.prepare(sql).all()) as any[];
-        return rows.map((r) => ({
-          id: r.id,
-          brandId: r.brand_id,
-          runId: r.run_id,
-          entityName: r.entity_name,
-          isTargetBrand: Boolean(r.is_target_brand),
-          isCompetitor: Boolean(r.is_competitor),
-          sentiment: r.sentiment,
-          prominenceScore: r.prominence_score,
-          positionRank: r.position_rank,
-          createdAt: r.created_at,
-        }));
-      },
+      findMany: (opts?: FindOpts): EntityMentionRecord[] =>
+        find("entity_mentions", opts, ["brand_id", "run_id", "competitor_id"], ["brand_id", "run_id"], "created_at DESC").map(rowToMention),
     },
-
     reverseRagChunks: {
-      findMany: (options?: { where?: any; limit?: number }): any[] => {
-        const sqlite = getRawDb();
-        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
-        const limit = options?.limit || 50;
-        let rows: any[];
-        if (brandId) {
-          rows = sqlite.prepare("SELECT * FROM reverse_rag_chunks WHERE brand_id = ? ORDER BY created_at DESC LIMIT ?").all(brandId, limit) as any[];
-        } else {
-          rows = sqlite.prepare("SELECT * FROM reverse_rag_chunks ORDER BY created_at DESC LIMIT ?").all(limit) as any[];
-        }
-        return rows.map((r) => ({
+      findMany: (opts?: FindOpts): any[] =>
+        find("reverse_rag_chunks", { ...opts, limit: opts?.limit ?? 50 }, ["brand_id", "run_id"], ["brand_id", "run_id"], "created_at DESC").map((r) => ({
           id: r.id,
           runId: r.run_id,
           citationId: r.citation_id,
@@ -785,158 +566,57 @@ export const db = {
           matchedChunkText: r.matched_chunk_text,
           similarityScore: r.similarity_score,
           selfContainedScore: r.self_contained_score,
+          answerSentence: r.answer_sentence ?? null,
+          sharedShingles: r.shared_shingles ?? null,
           createdAt: r.created_at,
-        }));
-      },
+        })),
     },
-
     opportunities: {
-      findFirst: (options?: { where?: { title?: string } }): OpportunityRecord | undefined => {
-        const sqlite = getRawDb();
-        if (options?.where?.title) {
-          const row = sqlite.prepare("SELECT * FROM opportunities WHERE title = ? LIMIT 1").get(options.where.title) as any;
-          if (!row) return undefined;
-          return {
-            id: row.id,
-            brandId: row.brand_id,
-            title: row.title,
-            subQueryTarget: row.sub_query_target,
-            gapType: row.gap_type,
-            recommendedAction: row.recommended_action,
-            estimatedImpact: row.estimated_impact,
-            status: row.status,
-            createdAt: row.created_at,
-          };
-        }
-        return undefined;
-      },
-      findMany: (options?: { where?: any; limit?: number; orderBy?: any }): OpportunityRecord[] => {
-        const sqlite = getRawDb();
-        const limit = options?.limit || 50;
-        let rows: any[];
-        const brandId = options?.where?.brandId ?? options?.where?.brand_id;
-        if (brandId) {
-          rows = sqlite.prepare("SELECT * FROM opportunities WHERE brand_id = ? ORDER BY created_at DESC LIMIT ?").all(brandId, limit) as any[];
-        } else {
-          rows = sqlite.prepare("SELECT * FROM opportunities ORDER BY created_at DESC LIMIT ?").all(limit) as any[];
-        }
-        return rows.map((r) => ({
-          id: r.id,
-          brandId: r.brand_id,
-          title: r.title,
-          subQueryTarget: r.sub_query_target,
-          gapType: r.gap_type,
-          recommendedAction: r.recommended_action,
-          estimatedImpact: r.estimated_impact,
-          status: r.status,
-          createdAt: r.created_at,
-        }));
-      },
+      findFirst: (opts?: FindOpts): OpportunityRecord | undefined =>
+        find("opportunities", { ...opts, limit: 1 }, ["id", "brand_id", "title"], ["id", "brand_id"], "created_at DESC").map(rowToOpportunity)[0],
+      findMany: (opts?: FindOpts): OpportunityRecord[] =>
+        find("opportunities", { ...opts, limit: opts?.limit ?? 50 }, ["brand_id", "status"], ["brand_id"], "created_at DESC").map(rowToOpportunity),
     },
   },
 
-  // Insert helpers
+  /** Insert (upsert on id/key) helper. */
   insert: (tableObj: any) => ({
     values: async (data: any) => {
+      const table = tableName(tableObj);
       const sqlite = getRawDb();
-      const rawTableName = tableObj.name || tableObj._table;
-      const ALLOWED_TABLES = new Set([
-        "brands", "competitors", "prompts", "crawl_batches",
-        "prompt_runs", "citations", "entity_mentions",
-        "reverse_rag_chunks", "opportunities", "system_settings"
-      ]);
-      if (!ALLOWED_TABLES.has(rawTableName)) {
-        throw new Error(`Invalid table for insertion: ${rawTableName}`);
-      }
-
-      const insertRecord = (record: any) => {
+      for (const record of Array.isArray(data) ? data : [data]) {
         const keys = Object.keys(record);
-        if (keys.length === 0) return;
-
-        const snakeKeys = keys.map((k) => {
-          const s = k.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
-          if (!/^[a-z0-9_]+$/.test(s)) {
-            throw new Error(`Invalid column identifier: ${s}`);
-          }
-          return s;
-        });
-
-        const placeholders = keys.map(() => "?").join(", ");
-        const values = keys.map((k) => (typeof record[k] === "boolean" ? (record[k] ? 1 : 0) : record[k] ?? null));
-
-        const conflictCol = snakeKeys.includes("id") ? "id" : snakeKeys.includes("key") ? "key" : null;
-        let conflictClause = "";
+        if (keys.length === 0) continue;
+        const cols = keys.map(columnId);
+        const conflictCol = cols.includes("id") ? "id" : cols.includes("key") ? "key" : null;
+        let conflict = "";
         if (conflictCol) {
-          const updateCols = snakeKeys.filter((k) => k !== conflictCol);
-          if (updateCols.length > 0) {
-            conflictClause = ` ON CONFLICT(${conflictCol}) DO UPDATE SET ${updateCols.map((k) => `${k} = excluded.${k}`).join(", ")}`;
-          } else {
-            conflictClause = ` ON CONFLICT(${conflictCol}) DO NOTHING`;
-          }
+          const updates = cols.filter((c) => c !== conflictCol);
+          conflict = updates.length
+            ? ` ON CONFLICT(${conflictCol}) DO UPDATE SET ${updates.map((c) => `${c} = excluded.${c}`).join(", ")}`
+            : ` ON CONFLICT(${conflictCol}) DO NOTHING`;
         }
-
-        const sql = `INSERT INTO ${rawTableName} (${snakeKeys.join(", ")}) VALUES (${placeholders})${conflictClause}`;
-        sqlite.prepare(sql).run(...values);
-      };
-
-      if (Array.isArray(data)) {
-        for (const item of data) {
-          insertRecord(item);
-        }
-      } else {
-        insertRecord(data);
+        sqlite
+          .prepare(`INSERT INTO ${table} (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})${conflict}`)
+          .run(...keys.map((k) => sqlValue(record[k])));
       }
     },
   }),
 
-  // Update helpers
+  /** Update helper; the condition is required and must name at least one column. */
   update: (tableObj: any) => ({
     set: (data: any) => ({
       where: (condition: any) => {
-        const sqlite = getRawDb();
-        const rawTableName = tableObj.name || tableObj._table;
-        const ALLOWED_TABLES = new Set([
-          "brands", "competitors", "prompts", "crawl_batches",
-          "prompt_runs", "citations", "entity_mentions",
-          "reverse_rag_chunks", "opportunities", "system_settings"
-        ]);
-        if (!ALLOWED_TABLES.has(rawTableName)) {
-          throw new Error(`Invalid table for update: ${rawTableName}`);
-        }
-
-        const keys = Object.keys(data);
-        if (keys.length === 0) {
-          return;
-        }
-
-        const snakeKeys = keys.map((k) => {
-          const s = k.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
-          if (!/^[a-z0-9_]+$/.test(s)) {
-            throw new Error(`Invalid column identifier: ${s}`);
-          }
-          return s;
-        });
-        const setClauses = snakeKeys.map((k) => `${k} = ?`).join(", ");
-        const values = keys.map((k) => (typeof data[k] === "boolean" ? (data[k] ? 1 : 0) : data[k] ?? null));
-
+        const table = tableName(tableObj);
+        const keys = Object.keys(data || {});
+        if (keys.length === 0) return;
         if (!condition || typeof condition !== "object" || Object.keys(condition).length === 0) {
           throw new Error("Missing condition for UPDATE statement");
         }
-        const conditionKeys = Object.keys(condition);
-        const whereClauses: string[] = [];
-        const whereValues: any[] = [];
-        for (const k of conditionKeys) {
-          const s = k.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
-          if (!/^[a-z0-9_]+$/.test(s)) {
-            throw new Error(`Invalid column identifier for where clause: ${s}`);
-          }
-          whereClauses.push(`${s} = ?`);
-          const val = condition[k];
-          whereValues.push(typeof val === "boolean" ? (val ? 1 : 0) : val ?? null);
-        }
-
-        const sql = `UPDATE ${rawTableName} SET ${setClauses} WHERE ${whereClauses.join(" AND ")}`;
-        sqlite.prepare(sql).run(...values, ...whereValues);
+        const condKeys = Object.keys(condition);
+        getRawDb()
+          .prepare(`UPDATE ${table} SET ${keys.map((k) => `${columnId(k)} = ?`).join(", ")} WHERE ${condKeys.map((k) => `${columnId(k)} = ?`).join(" AND ")}`)
+          .run(...keys.map((k) => sqlValue(data[k])), ...condKeys.map((k) => sqlValue(condition[k])));
       },
     }),
   }),
@@ -945,22 +625,24 @@ export const db = {
 // Schema compatibility proxies
 export const schema = {
   brands: { name: "brands", slug: "slug", id: "id" },
-  competitors: { name: "competitors", domain: "domain", brandId: "brand_id" },
-  prompts: { name: "prompts", queryText: "query_text", brandId: "brand_id" },
-  crawlBatches: { name: "crawl_batches", id: "id", brandId: "brand_id", createdAt: "created_at" },
-  promptRuns: { name: "prompt_runs", id: "id", promptId: "prompt_id", brandId: "brand_id", createdAt: "created_at" },
-  citations: { name: "citations", id: "id", brandId: "brand_id", isBrandDomain: "is_brand_domain", isCompetitorDomain: "is_competitor_domain", createdAt: "created_at" },
-  entityMentions: { name: "entity_mentions", id: "id", brandId: "brand_id" },
-  reverseRagChunks: { name: "reverse_rag_chunks", id: "id", brandId: "brand_id" },
+  competitors: { name: "competitors", id: "id", domain: "domain", brandId: "brand_id", active: "active" },
+  prompts: { name: "prompts", id: "id", queryText: "query_text", brandId: "brand_id", active: "active" },
+  crawlBatches: { name: "crawl_batches", id: "id", brandId: "brand_id", status: "status", createdAt: "created_at" },
+  promptRuns: { name: "prompt_runs", id: "id", promptId: "prompt_id", batchId: "batch_id", brandId: "brand_id", engine: "engine", createdAt: "created_at" },
+  citations: { name: "citations", id: "id", runId: "run_id", brandId: "brand_id", isBrandDomain: "is_brand_domain", isCompetitorDomain: "is_competitor_domain", createdAt: "created_at" },
+  entityMentions: { name: "entity_mentions", id: "id", runId: "run_id", brandId: "brand_id", competitorId: "competitor_id" },
+  reverseRagChunks: { name: "reverse_rag_chunks", id: "id", runId: "run_id", brandId: "brand_id" },
   opportunities: { name: "opportunities", id: "id", title: "title", brandId: "brand_id" },
   systemSettings: { name: "system_settings", key: "key" },
 };
 
-export function eq(column: any, value: any) {
-  if (typeof column === "string") return { [column]: value };
-  return { id: value };
+/** `eq(schema.table.column, value)`: a single-column equality filter for the shim. */
+export function eq(column: unknown, value: unknown): Record<string, unknown> {
+  if (typeof column !== "string" || !column) throw new UnsupportedFilterError("eq(): the column must be a schema column name such as schema.prompts.brandId");
+  return { [column]: value };
 }
 
-export function desc(column: any) {
+/** Accepted for API compatibility; ordering is fixed per finder. */
+export function desc(column: unknown) {
   return column;
 }

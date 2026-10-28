@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 import fs from "node:fs";
 import path from "node:path";
-import { getDbPath } from "@prismgeo/db";
+import { getDbPath, ensurePrivateDir, PRIVATE_FILE_MODE } from "@prismgeo/db";
 import { getChromiumExecutablePath } from "../stealth/fingerprint";
 
 /**
@@ -36,10 +36,18 @@ export interface ProfileStatus {
   connected: boolean;
   connecting: boolean;
   connectedAt: string | null;
+  /** Why the last sign-in window failed (e.g. no display on a headless server); cleared on success. */
+  lastError: string | null;
 }
 
 const MARKER_FILE = "prismgeo-profile.json";
 const connecting = new Set<ProfileEngine>();
+const lastErrors: Map<ProfileEngine, string> = ((globalThis as any).__prismProfileErrors ??= new Map<ProfileEngine, string>());
+
+/** The last sign-in window failure for an engine, or null. */
+export function profileLastError(engine: ProfileEngine): string | null {
+  return lastErrors.get(engine) ?? null;
+}
 
 export function profileDir(engine: ProfileEngine): string {
   return path.join(path.dirname(getDbPath()), "browser-profiles", engine);
@@ -60,7 +68,7 @@ export function isProfileConnected(engine: ProfileEngine): boolean {
 export function getProfileStatuses(): ProfileStatus[] {
   return PROFILE_ENGINES.map((engine) => {
     const marker = readProfile(engine);
-    return { engine, connected: marker !== null, connecting: connecting.has(engine), connectedAt: marker?.connectedAt ?? null };
+    return { engine, connected: marker !== null, connecting: connecting.has(engine), connectedAt: marker?.connectedAt ?? null, lastError: lastErrors.get(engine) ?? null };
   });
 }
 
@@ -76,7 +84,9 @@ export async function openSignInWindow(engine: ProfileEngine): Promise<void> {
   connecting.add(engine);
   try {
     const dir = profileDir(engine);
-    fs.mkdirSync(dir, { recursive: true });
+    // Profiles hold session cookies: owner-only access
+    ensurePrivateDir(path.dirname(dir));
+    ensurePrivateDir(dir);
     const context = await chromium.launchPersistentContext(dir, {
       headless: false,
       executablePath: getChromiumExecutablePath(),
@@ -90,7 +100,11 @@ export async function openSignInWindow(engine: ProfileEngine): Promise<void> {
     const userAgent = (await page.evaluate(() => navigator.userAgent).catch(() => "")) as string;
     await new Promise<void>((resolve) => context.on("close", () => resolve()));
     const marker: ProfileMarker = { engine, connectedAt: new Date().toISOString(), userAgent };
-    fs.writeFileSync(path.join(dir, MARKER_FILE), JSON.stringify(marker, null, 2));
+    fs.writeFileSync(path.join(dir, MARKER_FILE), JSON.stringify(marker, null, 2), { mode: PRIVATE_FILE_MODE });
+    lastErrors.delete(engine);
+  } catch (err) {
+    lastErrors.set(engine, ((err as Error).message || String(err)).replace(/\u001b\[[0-9;]*m/g, "").split("\n")[0].slice(0, 300));
+    throw err;
   } finally {
     connecting.delete(engine);
   }

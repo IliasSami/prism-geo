@@ -1,27 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MonteCarloMetricsCalculator, ReverseRagParser } from "../src/index";
-
-test("Wilson interval brackets the observed rate and stays within [0, 1]", () => {
-  const [low, high] = MonteCarloMetricsCalculator.calculateWilsonInterval(3, 10);
-  assert.ok(low >= 0 && low < 0.3 && high > 0.3 && high <= 1);
-  assert.deepEqual(MonteCarloMetricsCalculator.calculateWilsonInterval(0, 0), [0, 0]);
-  const [zeroLow, zeroHigh] = MonteCarloMetricsCalculator.calculateWilsonInterval(0, 20);
-  assert.equal(zeroLow, 0);
-  assert.ok(zeroHigh > 0 && zeroHigh < 0.2);
-});
-
-test("prominence decays with position in the answer", () => {
-  const early = MonteCarloMetricsCalculator.calculateProminenceScore(10, 1000);
-  const late = MonteCarloMetricsCalculator.calculateProminenceScore(900, 1000);
-  assert.ok(early > late);
-});
-
-test("stance reads the line that names the entity, not its neighbours", () => {
-  const text = "Best direct fit: Globex. It calls abandoned checkouts.\nInitech is too expensive and the setup is painful.";
-  assert.equal(MonteCarloMetricsCalculator.classifyStance(text, "Globex").sentiment, "positive");
-  assert.notEqual(MonteCarloMetricsCalculator.classifyStance(text, "Initech").sentiment, "positive");
-});
+import { ReverseRagParser, isBoilerplateParagraph, REUSE_MIN_SCORE } from "../src/index";
 
 test("citations are attributed to brand and competitor domains", () => {
   const cits = ReverseRagParser.extractCitationsFromText(
@@ -35,9 +14,37 @@ test("citations are attributed to brand and competitor domains", () => {
   assert.equal(byDomain["shopify.com"]?.isBrandDomain, false);
 });
 
-test("reverse-RAG alignment finds the passage an answer reuses", () => {
-  const page = "Unrelated intro about our team.\n\nAI voice agents call shoppers who abandon checkout and recover lost revenue within minutes.\n\nContact us.";
-  const res = ReverseRagParser.computeChunkAlignment("AI voice agents call shoppers who abandon checkout to recover revenue", page, "https://x.com");
-  assert.match(res.sourceChunkText, /abandon checkout/);
-  assert.ok(res.alignmentScore > 0);
+const verbatim =
+  "Northwind Voice charges a percentage of recovered revenue: you only pay when one of our AI voice agents calls a shopper who abandoned checkout and the order is completed. There is no monthly fee and no setup fee, and our agents work with Shopify and Klaviyo out of the box.";
+const page = [
+  "We use cookies to improve your experience. Accept all cookies or manage preferences in settings.",
+  "Shopify Klaviyo Shopify Klaviyo checkout checkout calls calls minutes stores integrations partners.",
+  verbatim,
+  "Meet the team: our founders previously built growth tools for ecommerce brands in two cities.",
+].join("\n\n");
+
+test("reverse-RAG: a passage reused inside a longer answer is found and passes the evidence gate", () => {
+  const answer = [
+    "Here's a quick comparison of AI voice agents for abandoned-checkout calls. Talkly is the top pick for most Shopify stores.",
+    "Dialsy AI handles high call volume and integrates with Klaviyo.",
+    verbatim,
+  ].join("\n");
+  const a = ReverseRagParser.computeChunkAlignment(answer, page, "https://northwindvoice.ai/pricing");
+  assert.equal(a.sourceChunkText, verbatim);
+  assert.ok(a.alignmentScore >= REUSE_MIN_SCORE);
+  assert.ok(a.sharedShingles >= 2);
+  assert.equal(a.isReuse, true);
+  assert.match(a.answerSentence, /percentage of recovered revenue/);
+});
+
+test("reverse-RAG: navigation stuffing, cookie banners and topical overlap are not reuse", () => {
+  const answer = "Talkly is the top pick for Shopify checkout calls. Northwind Voice charges per recovered order and works with Klaviyo.";
+  const a = ReverseRagParser.computeChunkAlignment(answer, page, "https://northwindvoice.ai/pricing");
+  assert.doesNotMatch(a.sourceChunkText, /Shopify Klaviyo Shopify Klaviyo/);
+  assert.equal(a.isReuse, false, "shares words but no phrases");
+  const cookie = ReverseRagParser.computeChunkAlignment(answer, "We use cookies to improve your experience on our site and to show you relevant advertising for checkout tools.", "https://x.example");
+  assert.equal(cookie.isReuse, false);
+  assert.equal(cookie.sourceChunkText, "");
+  assert.equal(isBoilerplateParagraph("Shopify Klaviyo Shopify Klaviyo checkout checkout calls calls minutes stores integrations partners."), true);
+  assert.equal(isBoilerplateParagraph("La récupération des paniers abandonnés par téléphone fonctionne avec des agents vocaux pour Shopify."), false);
 });

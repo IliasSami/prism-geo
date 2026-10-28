@@ -15,6 +15,8 @@ const BLOCK_REMEDIES: Record<string, string> = {
 };
 
 export function engineRemedy(engine: string, kind: FailureKind): string | null {
+  if (kind === "skipped_after_network") kind = "network";
+  if (kind === "skipped_setup") kind = "setup";
   if (kind === "blocked" || kind === "skipped_after_blocks" || kind === "unavailable") return BLOCK_REMEDIES[engine] ?? null;
   if (kind === "no_ai_overview") return "Google showed no AI Overview for this search. That is a real result, not an error.";
   if (kind === "no_answer") return "The page loaded without a readable answer. If this repeats, the engine's page may have changed; check data/crawl-debug/.";

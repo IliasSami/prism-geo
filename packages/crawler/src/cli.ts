@@ -1,12 +1,12 @@
 import { getActiveBrand, getAllBrands, installFileLogging } from "@prismgeo/db";
-import { CrawlerOrchestrator } from "./queue/crawler-orchestrator";
-import { stalestPromptIds } from "./queue/scheduler";
+import { CrawlerOrchestrator, BatchRunningError, recoverInterruptedBatches } from "./queue/crawler-orchestrator";
+import { stalestPromptIdsByEngine } from "./queue/scheduler";
 
 /**
  * Headless crawl entry point, for servers and cron.
  *
  *   pnpm crawl                          all active prompts, every engine, 1 run each
- *   pnpm crawl --rolling=15             the 15 prompts measured longest ago (daily cron job)
+ *   pnpm crawl --rolling=15             per engine, the 15 prompts it measured longest ago (daily cron job)
  *   pnpm crawl --engines=chatgpt,gemini --samples=3 --limit=10 --brand=<id or slug>
  */
 async function main() {
@@ -29,14 +29,23 @@ async function main() {
   const sampleSize = Math.max(1, parseInt(arg("samples") || "1", 10));
   const rolling = arg("rolling") ? parseInt(arg("rolling")!, 10) : undefined;
   const promptLimit = arg("limit") ? parseInt(arg("limit")!, 10) : undefined;
-  const promptIds = rolling ? stalestPromptIds(brand.id, rolling) : undefined;
+  const promptIdsByEngine = rolling ? stalestPromptIdsByEngine(brand.id, engines, rolling) : undefined;
+  recoverInterruptedBatches();
 
   console.log(
-    `[PrismGEO CLI] ${brand.name}: ${promptIds ? `${promptIds.length} stalest prompts` : promptLimit ? `first ${promptLimit} prompts` : "all active prompts"}, ` +
+    `[PrismGEO CLI] ${brand.name}: ${promptIdsByEngine ? `${rolling} stalest prompts per engine` : promptLimit ? `first ${promptLimit} prompts` : "all active prompts"}, ` +
       `engines ${engines.join(", ")}, ${sampleSize} run(s) each`
   );
-  const batchId = await CrawlerOrchestrator.executeBatch({ brandId: brand.id, sampleSize, promptLimit, promptIds, engines });
-  console.log(`[PrismGEO CLI] Batch ${batchId} finished`);
+  try {
+    const batchId = await CrawlerOrchestrator.executeBatch({ brandId: brand.id, sampleSize, promptLimit, promptIdsByEngine, engines });
+    console.log(`[PrismGEO CLI] Batch ${batchId} finished`);
+  } catch (err) {
+    if (err instanceof BatchRunningError) {
+      console.error(`[PrismGEO CLI] ${err.message}`);
+      process.exit(2);
+    }
+    throw err;
+  }
 }
 
 main().catch((err) => {

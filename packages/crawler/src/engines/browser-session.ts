@@ -1,7 +1,8 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import fs from "node:fs";
 import path from "node:path";
-import { getDbPath, getSettings } from "@prismgeo/db";
+import { getDbPath, getSettings, ensurePrivateDir, PRIVATE_FILE_MODE } from "@prismgeo/db";
+import { canonicalUrl } from "@prismgeo/core";
 import { generateStealthProfile, STEALTH_INJECTION_SCRIPT, getChromiumExecutablePath } from "../stealth/fingerprint";
 import { readProfile, profileDir, PROFILE_ARGS, type ProfileEngine } from "./profiles";
 
@@ -53,6 +54,7 @@ const BLOCK_SIGNALS = [
   "just a moment",
   "verify you are human",
   "unusual traffic",
+  "unusual activity",
   "are you a robot",
   "captcha",
   "sign up and repeat your request",
@@ -130,11 +132,12 @@ export async function withStealthPage<T>(
 async function saveFailureSnapshot(page: Page, tag: string): Promise<void> {
   try {
     const dir = path.join(path.dirname(getDbPath()), "crawl-debug");
-    fs.mkdirSync(dir, { recursive: true });
+    ensurePrivateDir(dir);
     pruneSnapshots(dir);
     const base = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${tag}`);
     await page.screenshot({ path: `${base}.png`, timeout: 5000 });
-    fs.writeFileSync(`${base}.html`, await page.content());
+    fs.chmodSync(`${base}.png`, PRIVATE_FILE_MODE);
+    fs.writeFileSync(`${base}.html`, await page.content(), { mode: PRIVATE_FILE_MODE });
   } catch {
     // Diagnostics are best-effort and must never mask the original failure
   }
@@ -156,23 +159,48 @@ export function pruneSnapshots(dir: string, now = Date.now()): void {
   });
 }
 
-/** Short replies engines give instead of an answer when throttled or failing (seen live on Gemini). */
-const THROTTLE_REPLIES = [/^i'?m having a hard time fulfilling your request/i, /^you'?ve reached your (daily|usage) limit/i];
-const ERROR_REPLIES = [/^sorry, something went wrong/i, /^something went wrong/i, /^an error occurred/i, /^network error/i];
+/**
+ * Replies engines show instead of an answer. They are short (under REPLY_MAX_CHARS), so the
+ * patterns are only applied to short texts: a real answer that happens to begin with "An error
+ * occurred in many checkouts..." is never rejected.
+ */
+const REPLY_MAX_CHARS = 400;
+/** Rate limits and abuse checks: the engine is refusing us, so these count as blocks. */
+const THROTTLE_REPLIES = [
+  /i'?m having a hard time fulfilling your request/i,
+  /you'?ve (reached|hit) (your|the) (daily |usage |message |free[- ]plan |hourly )?limit/i,
+  /unusual activity (has been )?detected/i,
+  /(pro )?search limit reached/i,
+  /too many requests/i,
+  /\brate limit(ed)?\b/i,
+];
+/** Engine-side failures with no answer in them. */
+const ERROR_REPLIES = [
+  /^(hmm[.…]*\s*)?something (seems to have )?(went|gone) wrong/i,
+  /^sorry,? something went wrong/i,
+  /there was an error generating a response/i,
+  /^network error/i,
+  /^an error occurred\.?\s*(please|try|$)/i,
+  /^error in (message|body) stream/i,
+  /^(i'?m )?unable to (load|generate) (a )?(response|conversation)/i,
+];
 
 /**
  * Rejects text that is an engine's error or throttle message rather than an answer, so it is
  * recorded as a failure instead of being stored and scored as a real response.
  */
 export function assertRealAnswer(text: string, tag: string, query: string): void {
-  const head = text.trim().slice(0, 200);
-  if (THROTTLE_REPLIES.some((r) => r.test(head))) {
-    throw new EngineBlockedError(`[${tag}] Throttled reply instead of an answer ("${head.slice(0, 60)}")`);
+  const t = (text || "").trim();
+  const head = t.slice(0, 80).replace(/\s+/g, " ");
+  if (t.length < REPLY_MAX_CHARS) {
+    if (THROTTLE_REPLIES.some((r) => r.test(t))) {
+      throw new EngineBlockedError(`[${tag}] Throttled reply instead of an answer ("${head.slice(0, 60)}")`);
+    }
+    if (ERROR_REPLIES.some((r) => r.test(t))) {
+      throw new Error(`[${tag}] No extractable response for "${query}" (engine error: "${head.slice(0, 60)}")`);
+    }
   }
-  if (ERROR_REPLIES.some((r) => r.test(head))) {
-    throw new Error(`[${tag}] No extractable response for "${query}" (engine error: "${head.slice(0, 60)}")`);
-  }
-  if (head.length < 50) {
+  if (t.length < 50) {
     throw new Error(`[${tag}] No extractable response for "${query}"`);
   }
 }
@@ -184,9 +212,14 @@ export async function assertNotBlocked(page: Page, tag: string): Promise<void> {
   if (hit) throw new EngineBlockedError(`[${tag}] Blocked by engine ("${hit}")`);
 }
 
+/** The answer was still streaming when the wait ran out; storing it would undercount late mentions. */
+export class AnswerNotFinishedError extends Error {}
+
 /**
  * Polls the last element matching `selector` until its text stops changing for `stableMs`
- * (i.e. the engine finished streaming). Returns false if nothing usable appeared in time.
+ * (i.e. the engine finished streaming). Returns false if nothing usable appeared in time, and
+ * throws AnswerNotFinishedError (classified as no_answer, retried once) when text appeared but
+ * was still changing or marked busy at the deadline: a truncated answer is never stored.
  */
 export async function waitForStableAnswer(
   page: Page,
@@ -222,7 +255,10 @@ export async function waitForStableAnswer(
     last = text;
     await page.waitForTimeout(750);
   }
-  return last.length >= minLength;
+  if (last.length >= minLength) {
+    throw new AnswerNotFinishedError(`No extractable response: answer did not finish streaming within ${Math.round(timeoutMs / 1000)} s`);
+  }
+  return false;
 }
 
 /**
@@ -268,10 +304,24 @@ export async function extractAnswer(page: Page, selector: string, excludeHosts: 
         if (url.startsWith("http") && !exclude.some((h: string) => new URL(url).hostname.endsWith(h))) {
           if (!links.some((l) => l.url === url)) links.push({ url, title: label || url });
         }
-        // Citation chips: short source labels such as "loopwork", "retentionharbor+1", "Shopify App +1"
-        // A short link that is the whole content of its block is a source card, not prose
-        const standalone = (a.parentElement?.textContent || "").replace(/\s+/g, " ").trim() === label;
-        if (label.length <= 40 && (/\+\s?\d+$/.test(label) || /^[a-z0-9.\-]+$/i.test(label) || standalone)) a.remove();
+        // Remove source chips only: a host-like label ("help.example.com"), a counted chip
+        // ("Reddit +1"), or a lone one-word label that is part of its link's host ("examplehq" ->
+        // examplehq.com). A linked product name ("<a>Dialsy</a> - ...") is prose and stays in the
+        // text: it is both a mention and a citation.
+        let host = "";
+        try {
+          host = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+        } catch {
+          host = "";
+        }
+        const bare = label.toLowerCase().replace(/\s*\+\s?\d+$/, "").replace(/[\s.-]+/g, "");
+        const blockText = (a.parentElement?.textContent || "").replace(/\s+/g, " ").trim();
+        // Chips are lower-case hosts; a capitalised "Callora.io" is a product name
+        const hostLike = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(label);
+        const counted = /\+\s?\d+$/.test(label);
+        const loneHostLabel =
+          blockText === label && bare.length > 0 && !/\s/.test(label) && label.length <= 25 && /^[a-z0-9-]+$/.test(label) && host.replace(/[.-]/g, "").includes(bare);
+        if (label.length <= 40 && (hostLike || counted || loneHostLabel)) a.remove();
       });
       clone.querySelectorAll("td, th").forEach((n) => n.insertAdjacentText("afterend", " | "));
       clone.querySelectorAll("p, li, h1, h2, h3, h4, h5, h6, tr, br, div").forEach((n) => n.insertAdjacentText("afterend", "\n"));
@@ -279,7 +329,7 @@ export async function extractAnswer(page: Page, selector: string, excludeHosts: 
         .split("\n")
         .map((l) => l.replace(/\s+/g, " ").trim())
         // Drop UI chrome and non-link source pills ("+1", "help.skio.com") that render as text
-        .filter((l) => l && !/^\+\s?\d+$/.test(l) && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(l) && !/^ChatGPT said:?$/i.test(l))
+        .filter((l) => l && !/^\+\s?\d+$/.test(l) && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(l) && !/^ChatGPT said:?$/i.test(l))
         .join("\n");
       return { text, links };
     },
@@ -287,13 +337,7 @@ export async function extractAnswer(page: Page, selector: string, excludeHosts: 
   )) as ExtractedAnswer;
 }
 
-/** Strips tracking params engines append to cited URLs (e.g. ?utm_source=chatgpt.com). */
+/** Canonical form of a cited URL (tracking parameters, fragment and trailing slash removed); see canonicalUrl. */
 export function cleanCitationUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    [...u.searchParams.keys()].filter((k) => k.startsWith("utm_") || k === "srsltid").forEach((k) => u.searchParams.delete(k));
-    return u.toString();
-  } catch {
-    return url;
-  }
+  return canonicalUrl(url) ?? url;
 }

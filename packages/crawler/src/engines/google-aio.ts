@@ -15,6 +15,10 @@ export interface GoogleAioResult {
 export class NoAiOverviewError extends Error {}
 
 const AIO_SELECTOR = "#m-x-content, [data-subtree='aimc']";
+/** How long Google may take to start showing an AI Overview before the search counts as "no Overview". */
+export const AIO_APPEAR_TIMEOUT_MS = 25000;
+/** Placeholder text of an Overview that is still being generated. */
+export const AIO_PENDING = /^(AI Overview\s*)?(Thinking|Generating|Searching|Loading|Looking)\b/i;
 
 export class GoogleAioCrawler {
   /**
@@ -37,12 +41,13 @@ export class GoogleAioCrawler {
       }
       await assertNotBlocked(page, "GoogleAioCrawler");
 
-      // The Overview is streamed in after the page loads ("Thinking a little longer").
-      const appeared = await page.waitForSelector(AIO_SELECTOR, { timeout: 12000 }).catch(() => null);
+      // The Overview is streamed in after the page loads; slow ones show a "Thinking a little
+      // longer" / "Generating" placeholder first, which is still pending, not "no Overview".
+      const appeared = await page.waitForSelector(AIO_SELECTOR, { timeout: AIO_APPEAR_TIMEOUT_MS }).catch(() => null);
       if (!appeared) {
-        throw new NoAiOverviewError(`[GoogleAioCrawler] No AI Overview shown for "${query}"`);
+        throw new NoAiOverviewError(`[GoogleAioCrawler] No AI Overview shown for "${query}" within ${AIO_APPEAR_TIMEOUT_MS / 1000} s`);
       }
-      await waitForStableAnswer(page, AIO_SELECTOR, { timeoutMs: 45000, stableMs: 2500, busyText: /Thinking/i });
+      await waitForStableAnswer(page, AIO_SELECTOR, { timeoutMs: 45000, stableMs: 2500, busyText: AIO_PENDING });
 
       const showMore = page.locator(`${AIO_SELECTOR.split(",")[0]} [role='button']:has-text("Show more"), div[aria-label*='Show more']`).first();
       if (await showMore.isVisible({ timeout: 1000 }).catch(() => false)) {
