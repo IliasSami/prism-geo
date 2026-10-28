@@ -104,3 +104,13 @@ test("entity confusion: look-alike domains in text and citations", () => {
   assert.deepEqual(lookalikeDomains("see northwind-voice.io and app.northwindvoice.ai", [], "https://www.northwindvoice.ai"), ["northwind-voice.io"]);
   assert.deepEqual(lookalikeDomains("anything", [], "ab.io"), [], "stems under 4 characters are not compared");
 });
+
+test("accented brand names match with or without accents and case, at the original positions", () => {
+  const terms = entityTerms("Équipe Délice", [], "equipedelice.ca");
+  const text = "Pour Québec, on recommande equipe delice ou ÉQUIPE DÉLICE; évitez Équipe Délicesse.";
+  const hits = findEntityHits(text, terms);
+  assert.equal(hits.length, 2);
+  for (const h of hits) assert.match(text.slice(h.index, h.index + h.length), /^(equipe delice|ÉQUIPE DÉLICE)$/);
+  assert.ok(namesEntity("équipe délice avis", terms));
+  assert.ok(!namesEntity("Équipe Délicesse avis", terms));
+});

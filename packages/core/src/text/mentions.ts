@@ -99,13 +99,28 @@ export function entityTerms(name: string, aliases: string[] | null | undefined, 
 }
 
 /**
+ * Removes accents letter by letter ("Équipe Délice" -> "Equipe Delice"), keeping the string's
+ * length and every position unchanged, so hit offsets still point into the original text. A
+ * character that does not fold to exactly one character is kept as it is.
+ */
+export function foldAccents(text: string): string {
+  let out = "";
+  for (const ch of text) {
+    const folded = ch.normalize("NFD").replace(/\p{M}+/gu, "");
+    out += folded.length === ch.length ? folded : ch;
+  }
+  return out;
+}
+
+/**
  * Whole-word matcher for one term. Dashes in the term match any dash with optional spaces
  * ("Hoop – AI" = "Hoop - AI" = "Hoop—AI"), whitespace matches any whitespace, and a match never
  * starts inside a URL/domain/path segment or ends where a domain or path continues ("dialsy.ai/blog",
  * "northwind-voice" path parts and "northwindvoiceai.com" do not match "Northwind Voice").
  */
 export function termRegex(term: string, flags = "gi"): RegExp {
-  const body = escapeRegex(term.replace(DASHES, "-").replace(ODD_SPACES, " ").trim())
+  // Callers match against foldAccents(text): buyers often type brand names without accents
+  const body = escapeRegex(foldAccents(term).replace(DASHES, "-").replace(ODD_SPACES, " ").trim())
     .replace(/\s*-\s*/g, "\\s*-\\s*")
     .replace(/\s+/g, "\\s+");
   return new RegExp(`(?<![\\w./@-])${body}(?![\\w/-]|\\.[a-z0-9])`, flags);
@@ -119,8 +134,9 @@ export interface Hit {
 /** Every occurrence of any of the terms in a (prose) text, merged and sorted by position. */
 export function findEntityHits(prose: string, terms: string[]): Hit[] {
   const hits: Hit[] = [];
+  const folded = foldAccents(prose);
   for (const term of terms) {
-    for (const m of prose.matchAll(termRegex(term))) {
+    for (const m of folded.matchAll(termRegex(term))) {
       const index = m.index ?? 0;
       // Keep the longest match at a position, drop matches nested in an earlier, longer one
       const overlap = hits.find((h) => index >= h.index && index < h.index + h.length);
@@ -136,7 +152,7 @@ export function findEntityHits(prose: string, terms: string[]): Hit[] {
 
 /** True when a short text (a prompt) names the entity. */
 export function namesEntity(text: string, terms: string[]): boolean {
-  const prose = proseOf(text);
+  const prose = foldAccents(proseOf(text));
   return terms.some((t) => termRegex(t, "i").test(prose));
 }
 
