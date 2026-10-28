@@ -1,9 +1,10 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Check, Loader2, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Loader2, Plus, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { Button, Card, Field, IconButton, Notice, cn, inputClass, textareaClass, buttonClass } from "@/components/ui";
+import { cleanDomain, cleanedHint, domainError } from "@/components/domain";
 
 interface CompetitorInput {
   name: string;
@@ -16,12 +17,10 @@ const STEPS = [
   { num: 3, title: "Questions", desc: "What buyers ask AI" },
 ] as const;
 
-const cleanDomainOf = (raw: string) =>
-  raw.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
-
 /**
  * Three-step onboarding: client profile, competitors, and the questions to track. Engine access
- * (sessions, API keys) is configured later in Settings → Engines & access, after a first audit.
+ * (sessions, API keys) is configured later on Engines and in Settings, after a first audit.
+ * Generated questions are shown for review on the Prompts page right after the client is created.
  */
 export default function SetupWizardPage() {
   const [step, setStep] = useState(1);
@@ -49,11 +48,21 @@ export default function SetupWizardPage() {
   const [ownQuestions, setOwnQuestions] = useState("");
   const [repeats, setRepeats] = useState(1);
 
-  const cleanDomain = cleanDomainOf(brandDomain);
+  const brandClean = cleanDomain(brandDomain);
   const nameValid = brandName.trim().length > 0;
-  const domainValid = cleanDomain.includes(".");
+  const brandDomainError = brandDomain.trim() ? domainError(brandDomain) : "Enter the website, e.g. example.com";
+  const domainValid = !brandDomainError;
   const step1Valid = nameValid && domainValid;
-  const halfFilled = competitors.some((c) => Boolean(c.name.trim()) !== Boolean(c.domain.trim()));
+  const [touched2, setTouched2] = useState(false);
+  const rowProblem = (c: CompetitorInput): string | null => {
+    const name = c.name.trim();
+    const domain = c.domain.trim();
+    if (!name && !domain) return null;
+    if (name && !domain) return `Add ${name}'s website, or remove the row.`;
+    if (!name && domain) return "Add the company name, or remove the row.";
+    return domainError(domain);
+  };
+  const step2Valid = competitors.every((c) => !rowProblem(c));
   const ownList = ownQuestions
     .split("\n")
     .map((q) => q.trim())
@@ -73,9 +82,12 @@ export default function SetupWizardPage() {
   function next() {
     if (step === 1 && !step1Valid) {
       setTouched(true);
-      return setError("Enter the brand name and a domain like example.com.");
+      return setError(!nameValid && !domainValid ? "Enter the brand name and its website." : !nameValid ? "Enter the brand name." : `Website: ${brandDomainError}`);
     }
-    if (step === 2 && halfFilled) return setError("Complete or remove the competitor rows that have only a name or only a domain.");
+    if (step === 2 && !step2Valid) {
+      setTouched2(true);
+      return setError("Fix the highlighted competitor rows, or remove them.");
+    }
     setError(null);
     setStep(step + 1);
   }
@@ -83,7 +95,8 @@ export default function SetupWizardPage() {
   async function finish() {
     if (!step1Valid) {
       setStep(1);
-      return setError("Enter the brand name and a domain like example.com.");
+      setTouched(true);
+      return setError("Enter the brand name and its website.");
     }
     if (!step3Valid) return setError("Add at least one question (5 characters or more), or let PrismGEO write them.");
     setSubmitting(true);
@@ -92,12 +105,12 @@ export default function SetupWizardPage() {
       const payload = {
         brand: {
           name: brandName.trim(),
-          domain: cleanDomain,
+          domain: brandClean,
           description: description.trim(),
           aliases: brandAliases.split(",").map((a) => a.trim()).filter(Boolean),
           valueProps: valueProps.split("\n").map((v) => v.trim()).filter(Boolean),
         },
-        competitors: competitors.filter((c) => c.name.trim() && c.domain.trim()),
+        competitors: competitors.filter((c) => c.name.trim() && c.domain.trim()).map((c) => ({ name: c.name.trim(), domain: cleanDomain(c.domain) })),
         crawler: { sampleSize: repeats },
         ...(questionSource === "own"
           ? { prompts: ownList.map((query) => ({ query, intent: "category", persona: "buyer" })) }
@@ -109,7 +122,8 @@ export default function SetupWizardPage() {
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not create the client");
-      window.location.href = "/";
+      // Written questions are reviewed before the first audit; own questions were already read
+      window.location.href = questionSource === "generate" ? "/prompts?review=1" : "/";
     } catch (e) {
       setError((e as Error).message);
       setSubmitting(false);
@@ -120,9 +134,9 @@ export default function SetupWizardPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 py-2">
-      <header className="animate-fade-up">
+      <header>
         <h1 className="text-xl font-semibold tracking-tight text-zinc-900 sm:text-2xl">Add a client</h1>
-        <p className="mt-1 text-base text-zinc-500">Three short steps. You can change everything later in Settings.</p>
+        <p className="mt-1 text-base text-zinc-500">Three short steps. You can change these later in Settings.</p>
       </header>
 
       {/* Progress */}
@@ -171,16 +185,16 @@ export default function SetupWizardPage() {
             else finish();
           }}
         >
-          <div key={step} className="space-y-5 p-5 sm:p-6 animate-fade-up">
+          <div key={step} className="space-y-5 p-5 sm:p-6">
             <div>
-              <h2 ref={heading} tabIndex={-1} className="text-lg font-semibold text-zinc-900 focus:outline-none">
+              <h2 ref={heading} tabIndex={-1} className="scroll-mt-24 text-lg font-semibold text-zinc-900 focus:outline-none">
                 Step {step} of 3 · {current.title}
               </h2>
               <p className="text-base text-zinc-500">{current.desc}</p>
             </div>
 
             {error && (
-              <Notice tone="danger" action={<IconButton aria-label="Dismiss error" onClick={() => setError(null)}>×</IconButton>}>
+              <Notice tone="danger" action={<IconButton aria-label="Dismiss error" onClick={() => setError(null)}><X className="h-4 w-4" /></IconButton>}>
                 {error}
               </Notice>
             )}
@@ -193,18 +207,28 @@ export default function SetupWizardPage() {
                     autoFocus
                     required
                     aria-invalid={touched && !nameValid}
-                    className={cn(inputClass, touched && !nameValid && "border-red-300")}
+                    className={cn(inputClass, touched && !nameValid && "border-red-400")}
                     placeholder="e.g. Acme Analytics"
                     value={brandName}
                     onChange={(e) => setBrandName(e.target.value)}
                   />
                 </Field>
-                <Field label="Website domain" htmlFor="brand-domain" hint={touched && !domainValid ? "Enter a domain like example.com" : "e.g. acme.com"}>
+                <Field
+                  label="Website domain"
+                  htmlFor="brand-domain"
+                  hintId="brand-domain-hint"
+                  hint={
+                    <span className={touched && !domainValid ? "text-red-700" : undefined}>
+                      {touched && !domainValid ? brandDomainError : cleanedHint(brandDomain) || "e.g. acme.com"}
+                    </span>
+                  }
+                >
                   <input
                     id="brand-domain"
                     required
                     aria-invalid={touched && !domainValid}
-                    className={cn(inputClass, "font-mono", touched && !domainValid && "border-red-300")}
+                    aria-describedby="brand-domain-hint"
+                    className={cn(inputClass, touched && !domainValid && "border-red-400")}
                     placeholder="acme.com"
                     value={brandDomain}
                     onChange={(e) => setBrandDomain(e.target.value)}
@@ -221,7 +245,7 @@ export default function SetupWizardPage() {
                       id="brand-description"
                       rows={2}
                       className={textareaClass}
-                      placeholder="e.g. AI voice agents that call shoppers who abandon checkout"
+                      placeholder="e.g. Accounting software for small online shops"
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
                     />
@@ -233,7 +257,7 @@ export default function SetupWizardPage() {
                       id="brand-values"
                       rows={3}
                       className={textareaClass}
-                      placeholder={"e.g. Calls within 5 minutes\nWorks with Shopify and Klaviyo"}
+                      placeholder={"e.g. Set up in 10 minutes\nWorks with Shopify and Stripe"}
                       value={valueProps}
                       onChange={(e) => setValueProps(e.target.value)}
                     />
@@ -245,33 +269,51 @@ export default function SetupWizardPage() {
             {step === 2 && (
               <div className="space-y-3">
                 <p className="text-base text-zinc-600">Add the companies buyers compare you with. You can skip this and add them later.</p>
-                <ul className="space-y-2">
-                  {competitors.map((c, i) => (
-                    <li key={i} className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
-                      <input
-                        aria-label={`Competitor ${i + 1} name`}
-                        className={inputClass}
-                        placeholder="Name"
-                        value={c.name}
-                        onChange={(e) => setCompetitors(competitors.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
-                      />
-                      <input
-                        aria-label={`Competitor ${i + 1} domain`}
-                        className={cn(inputClass, "font-mono")}
-                        placeholder="domain.com"
-                        value={c.domain}
-                        onChange={(e) => setCompetitors(competitors.map((x, j) => (j === i ? { ...x, domain: e.target.value } : x)))}
-                      />
-                      <IconButton
-                        aria-label={`Remove competitor ${i + 1}`}
-                        tone="danger"
-                        disabled={competitors.length === 1}
-                        onClick={() => setCompetitors(competitors.filter((_, j) => j !== i))}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </IconButton>
-                    </li>
-                  ))}
+                <ul className="space-y-3">
+                  {competitors.map((c, i) => {
+                    const problem = rowProblem(c);
+                    const show = Boolean(problem) && (touched2 || Boolean(c.domain.trim() && c.name.trim()));
+                    const hint = !problem ? cleanedHint(c.domain) : null;
+                    const nameBad = show && !c.name.trim();
+                    const domainBad = show && Boolean(c.name.trim());
+                    return (
+                      <li key={i}>
+                        <div className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
+                          <input
+                            aria-label={`Competitor ${i + 1} name`}
+                            aria-invalid={nameBad}
+                            aria-describedby={show || hint ? `competitor-${i}-hint` : undefined}
+                            className={cn(inputClass, nameBad && "border-red-400")}
+                            placeholder="Name"
+                            value={c.name}
+                            onChange={(e) => setCompetitors(competitors.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+                          />
+                          <input
+                            aria-label={`Competitor ${i + 1} website`}
+                            aria-invalid={domainBad}
+                            aria-describedby={show || hint ? `competitor-${i}-hint` : undefined}
+                            className={cn(inputClass, domainBad && "border-red-400")}
+                            placeholder="example.com"
+                            value={c.domain}
+                            onChange={(e) => setCompetitors(competitors.map((x, j) => (j === i ? { ...x, domain: e.target.value } : x)))}
+                          />
+                          <IconButton
+                            aria-label={`Remove competitor ${i + 1}`}
+                            tone="danger"
+                            disabled={competitors.length === 1}
+                            onClick={() => setCompetitors(competitors.filter((_, j) => j !== i))}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </IconButton>
+                        </div>
+                        {(show || hint) && (
+                          <p id={`competitor-${i}-hint`} className={cn("mt-1 text-xs", show ? "text-red-700" : "text-zinc-500")}>
+                            {show ? problem : hint}
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
                 <Button size="sm" variant="ghost" onClick={() => setCompetitors([...competitors, { name: "", domain: "" }])}>
                   <Plus className="h-4 w-4" aria-hidden />
@@ -325,9 +367,13 @@ export default function SetupWizardPage() {
                       step={5}
                       value={promptCount}
                       onChange={(e) => setPromptCount(Number(e.target.value))}
+                      aria-valuetext={`${promptCount} questions`}
                       className="w-full accent-accent-600"
                     />
-                    <p className="text-xs text-zinc-500">You can review, edit and pause each one on the Prompts page before the first audit.</p>
+                    <p className="text-xs text-zinc-500">
+                      After you create the client, the questions open on the Prompts page so you can read them and edit or pause any that don&apos;t sound
+                      like your buyers, before the first audit.
+                    </p>
                   </div>
                 ) : (
                   <Field label="Your questions" htmlFor="own-questions" hint={`One per line, written the way a buyer would ask an AI assistant. ${ownList.length} ready.`}>
@@ -342,19 +388,28 @@ export default function SetupWizardPage() {
                   </Field>
                 )}
 
-                <Field label="Repeats per question" htmlFor="repeats" hint="Answers vary between runs. Start with 1 and let the daily schedule add more over time.">
+                <Field
+                  label="Ask each question"
+                  htmlFor="repeats"
+                  hint={
+                    <>
+                      AI answers vary between asks; asking more often gives a steadier picture. Start with 1. To re-check questions every day, turn on the
+                      daily schedule in Settings → Schedule after setup (it is off until you do).
+                    </>
+                  }
+                >
                   <select id="repeats" className={cn(inputClass, "w-32")} value={repeats} onChange={(e) => setRepeats(Number(e.target.value))}>
                     {[1, 2, 3, 4, 5].map((n) => (
                       <option key={n} value={n}>
-                        {n}×
+                        {n === 1 ? "Once" : `${n} times`}
                       </option>
                     ))}
                   </select>
                 </Field>
 
                 <Notice tone="info" title="After your first audit">
-                  Connect your own engine accounts or add free API keys in Settings → Engines &amp; access, so engines that rate-limit
-                  anonymous use keep answering.
+                  If an engine limits anonymous use, connect your own account on the Engines page or add a free API key in Settings, so it keeps
+                  answering.
                 </Notice>
               </div>
             )}

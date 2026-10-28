@@ -1,20 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Building2, Cpu, CalendarClock, Plug, Database, Download, Plus, Check } from "lucide-react";
-import EngineSessionsPanel from "@/components/EngineSessionsPanel";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Building2, Users, Cpu, CalendarClock, Plug, Database, Download, Plus, Check, ArrowRight, ShieldAlert } from "lucide-react";
 import ClaudeConnectorPanel from "@/components/ClaudeConnectorPanel";
 import CompetitorsPanel from "@/components/CompetitorsPanel";
-import { Badge, Button, Card, CardHeader, Field, LinkButton, Notice, PageHeader, cn, inputClass, textareaClass } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, Field, LinkButton, Notice, PageHeader, buttonClass, cn, inputClass, textareaClass } from "@/components/ui";
 import { Tabs, TabPanel, type TabItem } from "@/components/settings/Tabs";
 import { SaveBar, Toast, type ToastState } from "@/components/settings/Feedback";
 import { ApiKeyField } from "@/components/settings/ApiKeyField";
 import { LogViewer } from "@/components/settings/LogViewer";
+import { cleanedHint, domainError } from "@/components/domain";
 
-type TabId = "client" | "engines" | "schedule" | "claude" | "data";
+type TabId = "client" | "competitors" | "engines" | "schedule" | "claude" | "data";
 
 const TABS: TabItem<TabId>[] = [
   { id: "client", label: "Client", icon: <Building2 className="h-4 w-4" aria-hidden /> },
+  { id: "competitors", label: "Competitors", icon: <Users className="h-4 w-4" aria-hidden /> },
   { id: "engines", label: "Engines & access", icon: <Cpu className="h-4 w-4" aria-hidden /> },
   { id: "schedule", label: "Schedule & network", icon: <CalendarClock className="h-4 w-4" aria-hidden /> },
   { id: "claude", label: "Claude connector", icon: <Plug className="h-4 w-4" aria-hidden /> },
@@ -70,8 +73,32 @@ const EMPTY: Snapshot = {
   crawler: { sampleSize: 1, proxyUrl: "", scheduleEnabled: false, schedulePromptsPerDay: 15, scheduleHour: 9 },
 };
 
+const isTab = (v: string | null): v is TabId => TABS.some((t) => t.id === v);
+
 export default function SettingsPage() {
-  const [tab, setTab] = useState<TabId>("client");
+  return (
+    <Suspense fallback={null}>
+      <Settings />
+    </Suspense>
+  );
+}
+
+function Settings() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const tabParam = searchParams.get("tab");
+  const [tab, setTabState] = useState<TabId>(isTab(tabParam) ? tabParam : "client");
+  // Deep links (/settings?tab=engines) open that tab; switching tabs updates the URL
+  useEffect(() => {
+    if (isTab(tabParam)) setTabState(tabParam);
+  }, [tabParam]);
+  const setTab = (id: TabId) => {
+    setTabState(id);
+    router.replace(`${pathname}?tab=${id}`, { scroll: false });
+  };
+  const [backupConfirm, setBackupConfirm] = useState(false);
+  const [valueProps, setValueProps] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -96,6 +123,9 @@ export default function SettingsPage() {
         setBrands(brandData.brands || []);
         setActiveBrandId(brandData.activeBrandId || "");
         setDbPath(s.dbPath || "");
+        try {
+          setValueProps(active ? JSON.parse(active.valuePropsJson || "[]") : []);
+        } catch {}
         setSavedKeys(s.hasRawByok || {});
         const snap: Snapshot = {
           brandForm: active
@@ -187,10 +217,11 @@ export default function SettingsPage() {
   }
 
   const { brandForm, byok, crawler } = draft;
+  const brandDomainError = domainError(brandForm.domain);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 pb-8">
-      <PageHeader title="Settings" description="Client profile, how each engine is reached, the audit schedule, and your data." />
+    <div className={cn("mx-auto max-w-6xl space-y-6", dirty ? "pb-28" : "pb-8")}>
+      <PageHeader title="Settings" description="Client profile, competitors, how each engine is reached, the audit schedule, and your data." />
 
       <Tabs tabs={TABS} active={tab} onChange={setTab} label="Settings sections" />
 
@@ -211,10 +242,17 @@ export default function SettingsPage() {
                 <Field label="Brand name" htmlFor="brand-name">
                   <input id="brand-name" className={inputClass} value={brandForm.name} onChange={(e) => set("brandForm", { name: e.target.value })} />
                 </Field>
-                <Field label="Website domain" htmlFor="brand-domain" hint="Without https://, e.g. example.com">
+                <Field
+                  label="Website domain"
+                  htmlFor="brand-domain"
+                  hintId="brand-domain-hint"
+                  hint={<span className={brandDomainError ? "text-red-700" : undefined}>{brandDomainError || cleanedHint(brandForm.domain) || "e.g. example.com"}</span>}
+                >
                   <input
                     id="brand-domain"
-                    className={cn(inputClass, "font-mono")}
+                    aria-invalid={Boolean(brandDomainError)}
+                    aria-describedby="brand-domain-hint"
+                    className={cn(inputClass, brandDomainError && "border-red-400")}
                     value={brandForm.domain}
                     onChange={(e) => set("brandForm", { domain: e.target.value })}
                   />
@@ -237,15 +275,26 @@ export default function SettingsPage() {
                       rows={3}
                       className={textareaClass}
                       value={brandForm.description}
-                      placeholder="e.g. AI voice agents that call shoppers who abandon checkout"
+                      placeholder="e.g. Accounting software for small online shops"
                       onChange={(e) => set("brandForm", { description: e.target.value })}
                     />
                   </Field>
                 </div>
+                <div className="md:col-span-2">
+                  <div className="text-sm font-medium text-zinc-700">What makes you different</div>
+                  {valueProps.length ? (
+                    <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-base text-zinc-800">
+                      {valueProps.map((v) => (
+                        <li key={v}>{v}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-1 text-sm text-zinc-500">None given during setup.</p>
+                  )}
+                  <p className="mt-1 text-xs text-zinc-500">From setup; used when writing new questions. These can&apos;t be edited here yet.</p>
+                </div>
               </div>
             </Card>
-
-            <CompetitorsPanel />
 
             <Card>
               <CardHeader
@@ -265,7 +314,7 @@ export default function SettingsPage() {
                     <li key={b.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
                       <div className="min-w-0">
                         <div className="truncate font-medium text-zinc-900">{b.name}</div>
-                        <div className="truncate font-mono text-sm text-zinc-500">{b.domain}</div>
+                        <div className="truncate text-sm text-zinc-500">{b.domain}</div>
                       </div>
                       {isActive ? (
                         <Badge tone="accent">
@@ -287,6 +336,10 @@ export default function SettingsPage() {
                 })}
               </ul>
             </Card>
+          </TabPanel>
+
+          <TabPanel id="competitors" active={tab}>
+            <CompetitorsPanel />
           </TabPanel>
 
           <TabPanel id="engines" active={tab}>
@@ -324,12 +377,22 @@ export default function SettingsPage() {
               </fieldset>
             </Card>
 
-            <EngineSessionsPanel />
+            <Card>
+              <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+                <div>
+                  <h2 className="text-md font-semibold text-zinc-900">Signed-in sessions</h2>
+                  <p className="mt-0.5 text-sm text-zinc-500">Connect your own engine accounts on the Engines page, next to each engine&apos;s status.</p>
+                </div>
+                <Link href="/engines#sessions" className={buttonClass("secondary", "sm")}>
+                  Open Engines <ArrowRight className="h-4 w-4" aria-hidden />
+                </Link>
+              </div>
+            </Card>
 
             <Card>
               <CardHeader
                 title="Your API keys"
-                description="Optional. Stored unencrypted in the local database on this machine; never sent anywhere except the engine's own API."
+                description="Optional. Add a key if the browser keeps getting blocked: answers then come from the engine's official API, which can differ slightly from the app your buyers use. Stored unencrypted in the local database on this machine; never sent anywhere except the engine's own API."
               />
               <div className="grid grid-cols-1 gap-5 p-5 md:grid-cols-2">
                 <ApiKeyField
@@ -338,7 +401,7 @@ export default function SettingsPage() {
                   label={
                     <>
                       Google Gemini{" "}
-                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="font-normal text-accent-600 hover:underline">
+                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="font-normal text-accent-700 hover:underline">
                         free tier
                       </a>
                     </>
@@ -355,7 +418,7 @@ export default function SettingsPage() {
                   label={
                     <>
                       SerpApi for Google AI Overviews{" "}
-                      <a href="https://serpapi.com/users/sign_up" target="_blank" rel="noreferrer" className="font-normal text-accent-600 hover:underline">
+                      <a href="https://serpapi.com/users/sign_up" target="_blank" rel="noreferrer" className="font-normal text-accent-700 hover:underline">
                         free tier
                       </a>
                     </>
@@ -369,7 +432,14 @@ export default function SettingsPage() {
                 <ApiKeyField
                   id="key-openai"
                   service="OpenAI key"
-                  label="OpenAI (ChatGPT)"
+                  label={
+                    <>
+                      OpenAI (ChatGPT){" "}
+                      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="font-normal text-accent-700 hover:underline">
+                        get a key (paid)
+                      </a>
+                    </>
+                  }
                   placeholder="sk-…"
                   value={byok.openai}
                   saved={Boolean(savedKeys.openai)}
@@ -378,7 +448,14 @@ export default function SettingsPage() {
                 <ApiKeyField
                   id="key-perplexity"
                   service="Perplexity key"
-                  label="Perplexity"
+                  label={
+                    <>
+                      Perplexity{" "}
+                      <a href="https://www.perplexity.ai/settings/api" target="_blank" rel="noreferrer" className="font-normal text-accent-700 hover:underline">
+                        get a key (paid)
+                      </a>
+                    </>
+                  }
                   placeholder="pplx-…"
                   value={byok.perplexity}
                   saved={Boolean(savedKeys.perplexity)}
@@ -426,10 +503,11 @@ export default function SettingsPage() {
                 title="Rolling daily audit"
                 description="Recommended and free. Each day, re-asks the questions measured longest ago instead of everything at once, so engines see a small, human-paced number of queries. Runs while PrismGEO is running."
                 actions={
-                  <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-zinc-700">
+                  <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 text-sm font-medium text-zinc-700">
                     <input
                       type="checkbox"
                       role="switch"
+                      aria-label="Rolling daily audit"
                       aria-checked={crawler.scheduleEnabled}
                       checked={crawler.scheduleEnabled}
                       onChange={(e) => set("crawler", { scheduleEnabled: e.target.checked })}
@@ -447,6 +525,7 @@ export default function SettingsPage() {
                 <Field label="Questions per day" htmlFor="per-day" hint="1–200">
                   <input
                     id="per-day"
+                    disabled={!crawler.scheduleEnabled}
                     type="number"
                     min={1}
                     max={200}
@@ -458,6 +537,7 @@ export default function SettingsPage() {
                 <Field label="Start after (hour, local time)" htmlFor="start-hour" hint="0–23">
                   <input
                     id="start-hour"
+                    disabled={!crawler.scheduleEnabled}
                     type="number"
                     min={0}
                     max={23}
@@ -475,7 +555,7 @@ export default function SettingsPage() {
                 <Field label="Proxy URL" htmlFor="proxy" hint="http://user:pass@host:port or socks5://host:port">
                   <input
                     id="proxy"
-                    className={cn(inputClass, "font-mono")}
+                    className={inputClass}
                     placeholder="http://username:password@proxy.example.com:8080"
                     value={crawler.proxyUrl}
                     onChange={(e) => set("crawler", { proxyUrl: e.target.value })}
@@ -510,24 +590,64 @@ export default function SettingsPage() {
                 {[
                   { href: "/api/export?format=csv&type=citations", title: "Cited pages", desc: "Every cited URL with title and rank.", label: "Download CSV" },
                   { href: "/api/export?format=json&type=full", title: "Full results", desc: "Audits, answers, citations, mentions and matched passages.", label: "Download JSON" },
-                  { href: "/api/backup", title: "Database backup", desc: "The whole database, all clients, including API keys.", label: "Download .db" },
                 ].map((x) => (
                   <a
                     key={x.href}
                     href={x.href}
-                    className="group flex flex-col justify-between gap-3 rounded-xl border border-zinc-200 p-4 transition duration-150 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-pop"
+                    className="group flex flex-col justify-between gap-3 rounded-xl border border-zinc-200 p-4 transition duration-150 hover:border-zinc-300 hover:shadow-pop"
                   >
                     <span>
                       <span className="block font-semibold text-zinc-900">{x.title}</span>
                       <span className="mt-1 block text-sm text-zinc-500">{x.desc}</span>
                     </span>
-                    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-600">
+                    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-700">
                       <Download className="h-4 w-4" aria-hidden />
                       {x.label}
                     </span>
                   </a>
                 ))}
+                <button
+                  type="button"
+                  aria-expanded={backupConfirm}
+                  aria-controls="backup-confirm"
+                  onClick={() => setBackupConfirm(true)}
+                  className="group flex flex-col justify-between gap-3 rounded-xl border border-zinc-200 p-4 text-left transition duration-150 hover:border-zinc-300 hover:shadow-pop"
+                >
+                  <span>
+                    <span className="block font-semibold text-zinc-900">Database backup</span>
+                    <span className="mt-1 block text-sm text-zinc-500">The whole database, all clients, including API keys and the connector token.</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-700">
+                    <Download className="h-4 w-4" aria-hidden />
+                    Download .db
+                  </span>
+                </button>
               </div>
+              {backupConfirm && (
+                <div id="backup-confirm" className="px-5 pb-5">
+                  <Notice
+                    tone="warning"
+                    title={
+                      <span className="inline-flex items-center gap-2">
+                        <ShieldAlert className="h-4 w-4" aria-hidden /> This file holds your secrets
+                      </span>
+                    }
+                  >
+                    <p>
+                      The backup contains every client&apos;s data, your saved API keys and the Claude connector token, unencrypted. Keep it somewhere private and
+                      don&apos;t share it.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <a href="/api/backup" onClick={() => setBackupConfirm(false)} className={buttonClass("primary", "sm")}>
+                        <Download className="h-4 w-4" aria-hidden /> Download backup
+                      </a>
+                      <Button size="sm" onClick={() => setBackupConfirm(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </Notice>
+                </div>
+              )}
             </Card>
 
             <LogViewer />

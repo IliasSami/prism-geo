@@ -1,22 +1,24 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users, Target, Quote, MessageSquareText, ListChecks, Cpu, Settings, Menu, X, BookOpen } from "lucide-react";
+import { LayoutDashboard, Users, Target, Link2, MessageSquareText, ListChecks, Cpu, Settings, Menu, X, BookOpen, ChevronDown } from "lucide-react";
 import { BrandSwitcher } from "./BrandSwitcher";
+import { LogoMark } from "./brand/Logo";
 
 /**
- * Five decision pages plus setup. Old URLs (/sov, /competitors, /fan-out, /brand) redirect, see next.config.
+ * Five decision pages plus setup. Labels are the page titles. Old URLs (/sov, /competitors,
+ * /fan-out, /brand) redirect, see next.config.
  */
-const navigationGroups = [
+export const navigationGroups = [
   {
     title: "Insights",
     items: [
       { label: "Overview", href: "/", icon: LayoutDashboard },
       { label: "Competitors", href: "/visibility", icon: Users },
       { label: "Gaps", href: "/opportunities", icon: Target },
-      { label: "Sources", href: "/citations", icon: Quote },
+      { label: "Sources", href: "/citations", icon: Link2 },
       { label: "Answers", href: "/responses", icon: MessageSquareText },
     ],
   },
@@ -30,12 +32,23 @@ const navigationGroups = [
   },
 ];
 
+/** A thin bar at the top of the window while the clicked page loads. */
+function PendingBar() {
+  const { pending } = useLinkStatus();
+  if (!pending) return null;
+  return (
+    <span className="pointer-events-none fixed inset-x-0 top-0 z-[150] h-0.5 overflow-hidden bg-accent-100" role="progressbar" aria-label="Loading page">
+      <span className="block h-full w-2/5 bg-accent-600 animate-nav-progress" />
+    </span>
+  );
+}
+
 function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
   return (
     <div className="space-y-5">
       {navigationGroups.map((group) => (
         <div key={group.title}>
-          <div className="px-2.5 pb-1.5 text-xs font-medium text-zinc-400">{group.title}</div>
+          <div className="px-2.5 pb-1.5 text-xs font-medium text-zinc-500">{group.title}</div>
           <ul className="space-y-0.5">
             {group.items.map((item) => {
               const isActive = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
@@ -49,8 +62,9 @@ function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () 
                       isActive ? "bg-white font-medium text-zinc-900 shadow-card ring-1 ring-zinc-200" : "text-zinc-600 hover:bg-zinc-200/50 hover:text-zinc-900"
                     }`}
                   >
-                    <item.icon className={`h-4 w-4 shrink-0 transition-colors ${isActive ? "text-accent-600" : "text-zinc-400 group-hover:text-zinc-600"}`} />
+                    <item.icon className={`h-4 w-4 shrink-0 transition-colors ${isActive ? "text-accent-600" : "text-zinc-500 group-hover:text-zinc-700"}`} aria-hidden />
                     {item.label}
+                    <PendingBar />
                   </Link>
                 </li>
               );
@@ -64,9 +78,11 @@ function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () 
 
 function Logo() {
   return (
-    <Link href="/" className="flex min-h-9 items-center gap-2.5 rounded-lg">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-accent-500 to-accent-700 text-sm font-bold text-white shadow-sm">P</span>
-      <span className="text-md font-semibold tracking-tight text-zinc-900">PrismGEO</span>
+    <Link href="/" className="flex min-h-9 items-center gap-2 rounded-lg text-zinc-900" aria-label="PrismGEO home">
+      <LogoMark className="h-7 w-7" />
+      <span className="text-md font-semibold tracking-tight">
+        Prism<span className="text-zinc-500">GEO</span>
+      </span>
     </Link>
   );
 }
@@ -86,43 +102,96 @@ export function Navigation({
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
 
-  // Escape closes the drawer; body scroll is locked while it is open
+  // Any navigation closes the menu (including "Add a client" from the switcher)
+  useEffect(() => setMobileOpen(false), [pathname]);
+
+  // While open: body scroll locked, focus trapped inside, Escape closes; focus returns on close
   useEffect(() => {
-    if (!mobileOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMobileOpen(false);
+    if (!mobileOpen) {
+      if (wasOpen.current) openerRef.current?.focus();
+      wasOpen.current = false;
+      return;
+    }
+    wasOpen.current = true;
+    const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKey);
     closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") return setMobileOpen(false);
+      if (e.key !== "Tab" || !panelRef.current) return;
+      const items = [...panelRef.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), [tabindex]:not([tabindex='-1'])")].filter((el) => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) (e.preventDefault(), last.focus());
+      else if (!e.shiftKey && document.activeElement === last) (e.preventDefault(), first.focus());
+    };
+    window.addEventListener("keydown", onKey);
     return () => {
-      document.body.style.overflow = "";
+      document.body.style.overflow = prev;
       window.removeEventListener("keydown", onKey);
     };
   }, [mobileOpen]);
 
+  const openMenu = (e: React.MouseEvent<HTMLElement>) => {
+    openerRef.current = e.currentTarget;
+    setMobileOpen(true);
+  };
+
   const footer = (
-    <div className="flex items-center justify-between px-2.5 text-xs text-zinc-400">
+    <div className="flex items-center justify-between px-2.5 text-xs text-zinc-500">
       <span>Self-hosted · MIT</span>
-      <a href="https://github.com/IliasSami/prism-geo" target="_blank" rel="noreferrer" className="tap-target inline-flex h-9 w-9 items-center justify-center rounded-lg hover:bg-zinc-200/60 hover:text-zinc-700" aria-label="PrismGEO documentation on GitHub">
-        <BookOpen className="h-4 w-4" />
+      <a
+        href="https://github.com/IliasSami/prism-geo"
+        target="_blank"
+        rel="noreferrer"
+        className="tap-target inline-flex h-9 w-9 items-center justify-center rounded-lg hover:bg-zinc-200/60 hover:text-zinc-700"
+        aria-label="PrismGEO documentation on GitHub"
+      >
+        <BookOpen className="h-4 w-4" aria-hidden />
       </a>
     </div>
   );
 
   return (
     <>
-      {/* Mobile top bar */}
-      <div className="sticky top-0 z-40 flex h-14 items-center justify-between gap-2 border-b border-zinc-200 bg-white/90 px-3 backdrop-blur md:hidden">
-        <div className="flex items-center gap-1">
+      {/* Mobile top bar: menu, the client being viewed, and Run */}
+      <div className="sticky top-0 z-40 flex h-14 items-center justify-between gap-2 border-b border-zinc-200 bg-white/95 px-2 backdrop-blur md:hidden">
+        <div className="flex min-w-0 items-center gap-1">
           <button
-            onClick={() => setMobileOpen(true)}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-zinc-600 hover:bg-zinc-100"
+            type="button"
+            onClick={openMenu}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-zinc-600 hover:bg-zinc-100"
             aria-label="Open menu"
             aria-expanded={mobileOpen}
           >
-            <Menu className="h-5 w-5" />
+            <Menu className="h-5 w-5" aria-hidden />
           </button>
-          <Logo />
+          <Link href="/" className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-zinc-900" aria-label="PrismGEO home">
+            <LogoMark className="h-6 w-6" />
+          </Link>
+          {brandName ? (
+            <button
+              type="button"
+              onClick={openMenu}
+              className="flex min-w-0 items-center gap-1 rounded-lg px-1.5 text-left hover:bg-zinc-100"
+              aria-label={`Client: ${brandName}. Open menu to switch client`}
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold leading-tight text-zinc-900">{brandName}</span>
+                {brandDomain && <span className="block truncate text-xs leading-tight text-zinc-500">{brandDomain}</span>}
+              </span>
+              <ChevronDown className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden />
+            </button>
+          ) : (
+            <span className="text-md font-semibold tracking-tight text-zinc-900">
+              Prism<span className="text-zinc-500">GEO</span>
+            </span>
+          )}
         </div>
         {mobileActions}
       </div>
@@ -130,15 +199,21 @@ export function Navigation({
       {mobileOpen && (
         <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Menu">
           <div className="absolute inset-0 bg-zinc-900/30 backdrop-blur-[2px] animate-fade-in" onClick={() => setMobileOpen(false)} aria-hidden="true" />
-          <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col gap-4 bg-zinc-50 p-3 shadow-pop animate-fade-up">
+          <div ref={panelRef} className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col gap-4 overflow-y-auto bg-zinc-50 p-3 shadow-pop animate-drawer-in">
             <div className="flex items-center justify-between">
               <Logo />
-              <button ref={closeRef} onClick={() => setMobileOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-200/60" aria-label="Close menu">
-                <X className="h-5 w-5" />
+              <button
+                ref={closeRef}
+                type="button"
+                onClick={() => setMobileOpen(false)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-200/60"
+                aria-label="Close menu"
+              >
+                <X className="h-5 w-5" aria-hidden />
               </button>
             </div>
-            <BrandSwitcher currentBrandId={brandId} currentBrandName={brandName} currentBrandDomain={brandDomain} />
-            <nav className="flex-1 overflow-y-auto" aria-label="Main">
+            <BrandSwitcher currentBrandId={brandId} currentBrandName={brandName} currentBrandDomain={brandDomain} onNavigate={() => setMobileOpen(false)} />
+            <nav className="flex-1" aria-label="Main">
               <NavLinks pathname={pathname} onNavigate={() => setMobileOpen(false)} />
             </nav>
             {footer}
