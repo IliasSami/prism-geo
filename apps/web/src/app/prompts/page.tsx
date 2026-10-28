@@ -1,12 +1,16 @@
 import { db, schema, eq, getActiveBrand, getRawDb } from "@prismgeo/db";
 import { Compass } from "lucide-react";
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
+import { Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
+import { RunAuditButton } from "@/components/CrawlModal";
 import { PromptsClient } from "./PromptsClient";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Prompts" };
 
-export default async function PromptsPage() {
+export default async function PromptsPage({ searchParams }: { searchParams: Promise<{ review?: string }> }) {
+  const params = await searchParams;
   const brand = getActiveBrand();
   // Without a workspace there is nothing to show (and unscoped queries would mix brands)
   if (!brand) redirect("/setup");
@@ -21,10 +25,21 @@ export default async function PromptsPage() {
     }>).map((r) => [r.prompt_id, Number(r.n)])
   );
   const prompts = rawPrompts.map((p) => ({ ...p, runCount: runCounts.get(p.id) || 0 }));
+  const review = params.review === "1" && prompts.length > 0;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <PageHeader title="Prompts" description="The questions your buyers ask. Every audit sends each active prompt to every selected engine." />
+      {review && (
+        <Notice
+          tone="accent"
+          title={`PrismGEO wrote ${prompts.length} ${prompts.length === 1 ? "question" : "questions"} for ${brand.name}`}
+          action={<RunAuditButton label="They look right: run an audit" />}
+        >
+          Read them before the first audit: they are what every number is measured on. Edit any that don&apos;t sound like your buyers, pause the ones that
+          don&apos;t fit, or add your own.
+        </Notice>
+      )}
       {prompts.length === 0 ? (
         <Card>
           <EmptyState

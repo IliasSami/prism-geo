@@ -2,6 +2,7 @@
 
 import { useRef, type ReactNode } from "react";
 import { cn } from "@/components/ui";
+import { ScrollArea } from "@/components/ScrollArea";
 
 export interface TabItem<T extends string> {
   id: T;
@@ -33,7 +34,7 @@ export function Tabs<T extends string>({
   };
 
   return (
-    <div className="-mx-1 overflow-x-auto px-1">
+    <ScrollArea hint={false} region={false} className="-mx-1 px-1">
       <div role="tablist" aria-label={label} className="flex min-w-max gap-1 border-b border-zinc-200">
         {tabs.map((tab, i) => {
           const selected = tab.id === active;
@@ -49,7 +50,10 @@ export function Tabs<T extends string>({
               aria-selected={selected}
               aria-controls={`panel-${tab.id}`}
               tabIndex={selected ? 0 : -1}
-              onClick={() => onChange(tab.id)}
+              onClick={(e) => {
+                onChange(tab.id);
+                e.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" });
+              }}
               onKeyDown={(e) => {
                 if (e.key === "ArrowRight") (e.preventDefault(), focusTab(i + 1));
                 else if (e.key === "ArrowLeft") (e.preventDefault(), focusTab(i - 1));
@@ -67,14 +71,14 @@ export function Tabs<T extends string>({
           );
         })}
       </div>
-    </div>
+    </ScrollArea>
   );
 }
 
 export function TabPanel({ id, active, children }: { id: string; active: string; children: ReactNode }) {
   if (id !== active) return null;
   return (
-    <div role="tabpanel" id={`panel-${id}`} aria-labelledby={`tab-${id}`} tabIndex={0} className="space-y-6 pt-6 focus:outline-none stagger">
+    <div role="tabpanel" id={`panel-${id}`} aria-labelledby={`tab-${id}`} tabIndex={0} className="space-y-6 pt-6 focus:outline-none">
       {children}
     </div>
   );

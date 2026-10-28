@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronLeft, ChevronRight, Lock, Pause, Pencil, Play, Plus, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Lock, PauseCircle, Pencil, PlayCircle, Plus, Search, Trash2, X } from "lucide-react";
 import { Badge, Button, Card, IconButton, Notice, cn, inputClass, textareaClass } from "@/components/ui";
 
 interface PromptItem {
@@ -74,6 +74,9 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
   const visible = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
   const filtersOn = searchQuery || intent !== "all" || persona !== "all" || status !== "all";
   const allVisibleSelected = visible.length > 0 && visible.every((p) => selected.has(p.id));
+  // A column whose value is the same on every row says nothing; it stays available as a filter
+  const showIntent = intents.length > 1;
+  const showPersona = personas.length > 1;
 
   const resetPage = () => setPage(1);
 
@@ -237,7 +240,7 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
           disabled={busy !== null}
           onClick={() => run(p.id, async () => (await call("PATCH", { id: p.id, active: !p.active }), p.active ? "Prompt paused" : "Prompt resumed"))}
         >
-          {p.active ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+          {p.active ? <PauseCircle className="h-4 w-4" /> : <PlayCircle className="h-4 w-4" />}
         </IconButton>
         <IconButton aria-label="Delete prompt" tone="danger" disabled={busy !== null} onClick={() => remove(p)}>
           <Trash2 className="h-4 w-4" />
@@ -250,6 +253,7 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
       <div className="space-y-2">
         <textarea
           rows={2}
+          autoFocus={p.runCount === 0}
           value={editing.queryText}
           disabled={p.runCount > 0}
           onChange={(e) => setEditing({ ...editing, queryText: e.target.value })}
@@ -268,7 +272,8 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
             value={editing.intentType}
             onChange={(e) => setEditing({ ...editing, intentType: e.target.value })}
             list="prompt-intents"
-            className={cn(inputClass, "h-8 w-40")}
+            autoFocus={p.runCount > 0}
+            className={cn(inputClass, "w-40")}
           />
         </label>
       </div>
@@ -278,13 +283,20 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
 
   const meta = (p: PromptItem) => (
     <div className="flex flex-wrap items-center gap-1.5">
-      {p.intentType === "direct" ? <Badge tone="accent">Branded</Badge> : <Badge>{humanize(p.intentType)}</Badge>}
-      {p.personaDimension && <span className="text-xs text-zinc-500">{humanize(p.personaDimension)}</span>}
+      {p.intentType === "direct" ? <Badge tone="accent">Branded</Badge> : showIntent && <Badge tone="outline">{humanize(p.intentType)}</Badge>}
+      {showPersona && p.personaDimension && <span className="text-xs text-zinc-500">{humanize(p.personaDimension)}</span>}
     </div>
   );
 
-  const statusCell = (p: PromptItem) =>
-    p.active ? <Badge tone="success">Active</Badge> : <Badge tone="neutral">Paused</Badge>;
+  // Active is the default; only a paused prompt gets a badge
+  const statusCell = (p: PromptItem) => (p.active ? null : <Badge tone="warning">Paused</Badge>);
+
+  /** Checkbox with a 24px+ hit area (44px on touch screens). */
+  const check = (p: PromptItem) => (
+    <label className="-m-2 inline-flex cursor-pointer items-center justify-center p-2 tap-target">
+      <input type="checkbox" aria-label={`Select prompt: ${p.queryText}`} checked={selected.has(p.id)} onChange={() => toggle(p.id)} className="h-5 w-5 accent-accent-600" />
+    </label>
+  );
 
   return (
     <div className="space-y-4">
@@ -303,11 +315,11 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
         </Notice>
       )}
 
-      <Card className="overflow-hidden">
+      <Card className="overflow-clip">
         {/* Filters */}
         <div className="flex flex-col gap-2 border-b border-zinc-100 p-3 md:flex-row md:items-center">
           <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" aria-hidden />
             <input
               type="search"
               value={searchQuery}
@@ -317,7 +329,7 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
               className={cn(inputClass, "pl-9")}
             />
           </div>
-          <div className="grid grid-cols-3 gap-2 md:flex">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 md:flex">
             <select aria-label="Filter by intent" value={intent} onChange={(e) => (setIntent(e.target.value), resetPage())} className={cn(inputClass, "md:w-40")}>
               <option value="all">All intents</option>
               {intents.map((i) => (
@@ -357,20 +369,20 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
           )}
         </div>
 
-        {/* Bulk bar */}
+        {/* Bulk bar: sticks to the top of the screen while you scroll and select */}
         {selected.size > 0 && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-accent-100 bg-accent-50 px-3 py-2 animate-fade-in" role="region" aria-label="Bulk actions">
+          <div className="sticky top-14 z-20 flex flex-wrap items-center gap-2 border-b border-accent-200 bg-accent-50/95 px-3 py-2 backdrop-blur" role="region" aria-label="Bulk actions">
             <span className="mr-1 text-sm font-medium text-accent-700 tabular">
               {progress ? `${progress.label} ${progress.done + 1} of ${progress.total}…` : `${selected.size} selected`}
             </span>
             <Button size="sm" onClick={() => bulk("pause")} disabled={busy !== null}>
-              <Pause className="h-3.5 w-3.5" /> Pause
+              <PauseCircle className="h-4 w-4" aria-hidden /> Pause
             </Button>
             <Button size="sm" onClick={() => bulk("resume")} disabled={busy !== null}>
-              <Play className="h-3.5 w-3.5" /> Resume
+              <PlayCircle className="h-4 w-4" aria-hidden /> Resume
             </Button>
             <Button size="sm" variant="danger" onClick={() => bulk("delete")} disabled={busy !== null}>
-              <Trash2 className="h-3.5 w-3.5" /> Delete
+              <Trash2 className="h-4 w-4" aria-hidden /> Delete
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} disabled={busy !== null}>
               Clear selection
@@ -388,30 +400,32 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
             {/* Desktop table */}
             <table className="hidden w-full text-left text-base md:table">
               <thead>
-                <tr className="border-b border-zinc-200 bg-zinc-50/80 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                  <th className="w-10 px-4 py-2.5">
-                    <input type="checkbox" aria-label="Select all prompts on this page" checked={allVisibleSelected} onChange={toggleVisible} className="h-4 w-4 accent-accent-600" />
+                <tr className="border-b border-zinc-200 bg-zinc-50/80 text-xs font-medium text-zinc-500">
+                  <th className="w-12 px-4 py-2.5">
+                    <label className="-m-2 inline-flex cursor-pointer p-2">
+                      <input type="checkbox" aria-label="Select all prompts on this page" checked={allVisibleSelected} onChange={toggleVisible} className="h-5 w-5 accent-accent-600" />
+                    </label>
                   </th>
                   <th className="px-2 py-2.5">Prompt</th>
-                  <th className="w-48 px-4 py-2.5">Intent</th>
+                  {(showIntent || showPersona || prompts.some((p) => p.intentType === "direct")) && <th className="w-44 px-4 py-2.5">{showIntent ? "Intent" : ""}</th>}
                   <th className="w-24 px-4 py-2.5 text-right">Answers</th>
-                  <th className="w-24 px-4 py-2.5">Status</th>
+                  <th className="w-24 px-4 py-2.5">
+                    <span className="sr-only">Status</span>
+                  </th>
                   <th className="w-32 px-4 py-2.5">
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
               </thead>
-              <tbody className="stagger">
+              <tbody>
                 {visible.map((p) => (
                   <tr
                     key={p.id}
                     className={cn("border-b border-zinc-100 transition-colors last:border-0 hover:bg-zinc-50/70", selected.has(p.id) && "bg-accent-50/40", busy === p.id && "opacity-60")}
                   >
-                    <td className="px-4 py-3 align-top">
-                      <input type="checkbox" aria-label={`Select prompt: ${p.queryText}`} checked={selected.has(p.id)} onChange={() => toggle(p.id)} className="mt-1 h-4 w-4 accent-accent-600" />
-                    </td>
+                    <td className="px-4 py-3 align-top">{check(p)}</td>
                     <td className="px-2 py-3 align-top">{promptCell(p)}</td>
-                    <td className="px-4 py-3 align-top">{meta(p)}</td>
+                    {(showIntent || showPersona || prompts.some((x) => x.intentType === "direct")) && <td className="px-4 py-3 align-top">{meta(p)}</td>}
                     <td className="px-4 py-3 text-right align-top text-zinc-700 tabular">{p.runCount}</td>
                     <td className="px-4 py-3 align-top">{statusCell(p)}</td>
                     <td className="px-4 py-2 align-top">
@@ -423,14 +437,20 @@ export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptIte
             </table>
 
             {/* Mobile cards */}
+            <div className="flex items-center gap-3 border-b border-zinc-100 px-4 py-1 md:hidden">
+              <label className="-ml-2 inline-flex min-h-11 cursor-pointer items-center gap-3 px-2 text-sm font-medium text-zinc-700">
+                <input type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} className="h-5 w-5 accent-accent-600" />
+                Select all {visible.length} on this page
+              </label>
+            </div>
             <ul className="divide-y divide-zinc-100 md:hidden">
               {visible.map((p) => (
                 <li key={p.id} className={cn("space-y-2 p-4", selected.has(p.id) && "bg-accent-50/40", busy === p.id && "opacity-60")}>
                   <div className="flex items-start gap-3">
-                    <input type="checkbox" aria-label={`Select prompt: ${p.queryText}`} checked={selected.has(p.id)} onChange={() => toggle(p.id)} className="mt-1 h-5 w-5 shrink-0 accent-accent-600" />
+                    <span className="shrink-0">{check(p)}</span>
                     <div className="min-w-0 flex-1">{promptCell(p)}</div>
                   </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 pl-8">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pl-10">
                     <div className="flex flex-wrap items-center gap-2">
                       {meta(p)}
                       {statusCell(p)}

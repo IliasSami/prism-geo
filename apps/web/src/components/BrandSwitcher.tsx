@@ -15,10 +15,13 @@ export function BrandSwitcher({
   currentBrandId,
   currentBrandName,
   currentBrandDomain,
+  onNavigate,
 }: {
   currentBrandId?: string;
   currentBrandName?: string;
   currentBrandDomain?: string;
+  /** Called when a link inside the switcher navigates (closes the mobile menu). */
+  onNavigate?: () => void;
 }) {
   const [brands, setBrands] = useState<BrandItem[]>([]);
   const [open, setOpen] = useState(false);
@@ -50,6 +53,8 @@ export function BrandSwitcher({
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && open) {
+        // Close only the switcher, not the menu around it
+        event.stopPropagation();
         setOpen(false);
         triggerRef.current?.focus();
       }
@@ -101,6 +106,7 @@ export function BrandSwitcher({
       optionRefs.current[prevIndex]?.focus();
     } else if (e.key === "Escape") {
       e.preventDefault();
+      e.nativeEvent.stopImmediatePropagation();
       setOpen(false);
       triggerRef.current?.focus();
     }
@@ -121,9 +127,11 @@ export function BrandSwitcher({
       });
       if (res.ok) {
         window.location.reload();
+        return;
       }
-    } catch (e) {
-      console.error(e);
+      setLoading(false);
+      setSwitchingId(null);
+    } catch {
       setLoading(false);
       setSwitchingId(null);
     } finally {
@@ -145,7 +153,7 @@ export function BrandSwitcher({
         aria-expanded={open}
         aria-haspopup="listbox"
         aria-label={`Client: ${activeName}. Switch client`}
-        className="group flex h-12 w-full items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 text-left shadow-sm transition duration-150 hover:border-zinc-300 disabled:opacity-70"
+        className="group flex h-12 w-full items-center justify-between gap-2 rounded-lg border border-zinc-300 bg-white px-2.5 text-left shadow-sm transition duration-150 hover:border-zinc-300 disabled:opacity-70"
       >
         <span className="flex min-w-0 items-center gap-2.5">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-50 text-sm font-semibold text-accent-700 ring-1 ring-inset ring-accent-200">
@@ -156,7 +164,7 @@ export function BrandSwitcher({
             {activeDomain && <span className="block truncate text-xs text-zinc-500">{activeDomain}</span>}
           </span>
         </span>
-        <ChevronDown className={`h-4 w-4 shrink-0 text-zinc-400 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+        <ChevronDown aria-hidden className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
       </button>
 
       {open && (
@@ -201,7 +209,10 @@ export function BrandSwitcher({
           <div className="mt-1 border-t border-zinc-100 pt-1">
             <Link
               href="/setup"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                setOpen(false);
+                onNavigate?.();
+              }}
               className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-accent-700 transition hover:bg-accent-50"
             >
               <Plus className="h-4 w-4" />
