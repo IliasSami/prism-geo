@@ -12,7 +12,8 @@ export const crawlStartSchema = z.object({
     .min(1, "Select at least one engine")
     .optional(),
   sampleSize: intSchema(1, 20, "Runs per question").optional(),
-  promptLimit: z.union([z.null(), intSchema(1, 100_000, "The number of questions")]).optional(),
+  // null means "all questions", like leaving it out
+  promptLimit: z.preprocess((v) => (v === null ? undefined : v), intSchema(1, 100_000, "The number of questions").optional()),
 });
 export type CrawlStartInput = z.output<typeof crawlStartSchema>;
 

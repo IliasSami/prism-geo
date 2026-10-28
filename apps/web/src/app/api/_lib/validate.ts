@@ -89,7 +89,12 @@ export const intSchema = (min: number, max: number, what: string) =>
         .max(max, `${what} must be between ${min} and ${max}`),
     );
 
-export const idSchema = (what: string) => z.string({ error: `${what} is required` }).trim().min(1, `${what} is required`).max(200);
+export const idSchema = (what: string) =>
+  z
+    .string({ error: (issue) => (issue.input === undefined ? `${what} is required` : `${what} must be text`) })
+    .trim()
+    .min(1, `${what} is required`)
+    .max(200, `${what} is too long`);
 
 /** Optional brand id: when present it must be a non-empty string. */
 export const brandIdSchema = idSchema("brandId").optional();
