@@ -136,6 +136,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.2
         version: 1.32.2(zod@4.6.7)
+      '@prismgeo/core':
+        specifier: workspace:*
+        version: link:../core
       '@prismgeo/db':
         specifier: workspace:*
         version: link:../db

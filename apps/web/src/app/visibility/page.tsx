@@ -1,4 +1,4 @@
-import { getActiveBrand } from "@prismgeo/db";
+import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import type { Metadata } from "next";
@@ -6,7 +6,7 @@ import { ArrowRight, BarChart3, ChevronRight } from "lucide-react";
 import { buildReport, type EntityRow, type PromptRow } from "@/lib/report";
 import { Badge, Card, CardHeader, LinkButton, PageHeader, Table, td, th, cn, engineLabel, meterScale, plural, type Tone } from "@/components/ui";
 import { LastAuditFailed, NoAnswers, Pager, RateMeter, RateText, ScaleNote, SegmentLinks } from "@/components/insights/parts";
-import { brandNamedByPrompt, entitiesForEngine, trackedCompetitors } from "@/components/insights/data";
+import { trackedCompetitors } from "@/components/insights/data";
 import { getLatestAudit } from "@/components/insights/engine-state";
 
 export const dynamic = "force-dynamic";
@@ -90,7 +90,7 @@ function CompanyTable({ entities, brandDomainNote }: { entities: EntityRow[]; br
  */
 export default async function VisibilityPage({ searchParams }: { searchParams: Promise<{ engine?: string; page?: string }> }) {
   const params = await searchParams;
-  const brand = getActiveBrand();
+  const brand = await activeBrandFromCookies();
   if (!brand) redirect("/setup");
   const report = buildReport(brand);
 
@@ -127,11 +127,11 @@ export default async function VisibilityPage({ searchParams }: { searchParams: P
 
   const engineIds = report.engines.map((e) => e.engine);
   const engine = engineIds.includes(params.engine || "") ? params.engine! : "all";
-  const scoped = engine === "all" ? null : entitiesForEngine(brand, engine);
-  const entities = scoped ? scoped.entities : report.entities;
-  const answers = scoped ? scoped.answers : report.totalAnswers;
-
-  const brandedNamed = brandNamedByPrompt(brand.id);
+  // Per-engine rows come from the same report computation as the headline, so the two never disagree
+  const engineRow = engine === "all" ? null : report.engines.find((e) => e.engine === engine) || null;
+  const entities = engineRow ? report.entitiesByEngine[engine] || [] : report.entities;
+  const answers = engineRow ? engineRow.answers : report.totalAnswers;
+  const withSources = engineRow ? engineRow.youCited.n : report.answersWithSources;
   const organic = report.prompts.filter((p) => p.answers > 0 && !p.branded);
   const branded = report.prompts.filter((p) => p.answers > 0 && p.branded);
   const totalPages = Math.max(1, Math.ceil(organic.length / PAGE_SIZE));
@@ -165,7 +165,7 @@ export default async function VisibilityPage({ searchParams }: { searchParams: P
 
       <Card className="overflow-hidden">
         <CardHeader title="You vs competitors" description="Named in answers, and cited among answers that show sources" />
-        <CompanyTable entities={entities} brandDomainNote={(scoped ? scoped.withSources : report.answersWithSources) === 0 ? "No sources shown" : "–"} />
+        <CompanyTable entities={entities} brandDomainNote={withSources === 0 ? "No sources shown" : "–"} />
       </Card>
 
       {engine === "all" && (
@@ -281,7 +281,7 @@ export default async function VisibilityPage({ searchParams }: { searchParams: P
                     {!p.active && <div className="mt-0.5 text-xs text-zinc-500">paused</div>}
                   </td>
                   <td className={cn(td, "whitespace-nowrap tabular text-zinc-500")}>
-                    {brandedNamed.get(p.id) || 0} of {p.answers} (branded)
+                    {p.brandedNamedRuns ?? p.youMentioned} of {p.answers} (branded)
                   </td>
                   <td className={cn(td, "text-sm text-zinc-700")}>{p.competitors.length ? p.competitors.map((c) => `${c.name} (${c.answers})`).join(", ") : <span className="text-zinc-500">–</span>}</td>
                   <td className={td}>

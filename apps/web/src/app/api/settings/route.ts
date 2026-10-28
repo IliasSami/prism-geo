@@ -31,6 +31,8 @@ const DEFAULT_CRAWLER = {
   scheduleEnabled: false,
   schedulePromptsPerDay: 15,
   scheduleHour: 9,
+  // IANA zone the start hour is in; the browser sends its own, the scheduler falls back to the server's
+  scheduleTimeZone: "",
 };
 
 const crawlerSchema = z.object({
@@ -47,6 +49,20 @@ const crawlerSchema = z.object({
   scheduleEnabled: z.boolean({ error: "scheduleEnabled must be true or false" }).optional(),
   schedulePromptsPerDay: intSchema(1, 200, "Questions per day").optional(),
   scheduleHour: intSchema(0, 23, "The start hour").optional(),
+  scheduleTimeZone: z
+    .string({ error: "The time zone must be text" })
+    .trim()
+    .max(64)
+    .refine((tz) => {
+      if (tz === "") return true;
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: tz });
+        return true;
+      } catch {
+        return false;
+      }
+    }, "Unknown time zone")
+    .optional(),
 });
 
 const settingsSchema = z

@@ -1,7 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { getRawDb, getDbPath, getActiveBrand, getAllBrands, getSettings, setSettings, type BrandRecord } from "@prismgeo/db";
+import { getRawDb, getDbPath, getActiveBrand, getAllBrands, getSettings, setSettings, loadReportInput, type BrandRecord } from "@prismgeo/db";
+import { buildVisibilityReport } from "@prismgeo/core";
 import crypto from "node:crypto";
 import pkg from "../package.json";
 import { MAX_ROWS, runGuardedQuery } from "./sql";
@@ -191,7 +192,37 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
         ...params
       );
       const methods = all(`SELECT r.capture_method, COUNT(*) AS runs FROM prompt_runs r WHERE ${W} GROUP BY r.capture_method`, ...params);
-      return json({ brand: brand.name, domain: brand.domain, totalRuns, captureMethods: methods, byEngine, entities, topCitedDomains: topDomains, prompts });
+      // The dashboard's own numbers (unbranded answers only, prompt-clustered ranges, per-entity
+      // denominators), so Claude and the dashboard never disagree. The raw* fields below count every
+      // stored answer, branded prompts included, and are only for drilling into specifics.
+      const report = buildVisibilityReport(loadReportInput(brand.id));
+      const dashboard = {
+        note: "Headline numbers as shown in the PrismGEO dashboard. Unbranded questions only; percentages are means over questions with 95% ranges.",
+        totalQuestions: report.totalQuestions,
+        totalAnswers: report.totalAnswers,
+        answersWithSources: report.answersWithSources,
+        headline: report.headline,
+        branded: report.branded,
+        entities: engine ? (report.entitiesByEngine[engine] ?? []) : report.entities,
+        engines: report.engines,
+        coverage: report.coverage,
+        captureMethods: report.captureMethods,
+        aioTrigger: report.aioTrigger,
+        brandAccuracy: report.brandAccuracy,
+        failures: report.failures,
+        topSources: report.topSources.slice(0, 15),
+      };
+      return json({
+        brand: brand.name,
+        domain: brand.domain,
+        dashboard: batch_id ? undefined : dashboard,
+        rawTotalRuns: totalRuns,
+        rawCaptureMethods: methods,
+        rawByEngine: byEngine,
+        rawEntities: entities,
+        rawTopCitedDomains: topDomains,
+        rawPrompts: prompts,
+      });
     }
   );
 

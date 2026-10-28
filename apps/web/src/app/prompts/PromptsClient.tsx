@@ -23,7 +23,7 @@ const SUGGESTED_INTENTS = ["category", "dilemma", "comparison", "alternatives", 
 
 const humanize = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-async function call(method: Method, body: unknown) {
+async function callApi(method: Method, body: unknown) {
   const res = await fetch("/api/prompts", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -34,7 +34,9 @@ async function call(method: Method, body: unknown) {
  * Tracked prompts: add (one per line), edit, pause/resume and delete, singly or in bulk.
  * Filtering and paging happen in the browser; every change goes through /api/prompts.
  */
-export function PromptsClient({ prompts, addOnly = false }: { prompts: PromptItem[]; addOnly?: boolean }) {
+export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: PromptItem[]; addOnly?: boolean; brandId?: string }) {
+  // Every write names the client this page shows, so another tab switching clients can't redirect it
+  const call = (method: Method, body: object) => callApi(method, brandId ? { ...body, brandId } : body);
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
   const [intent, setIntent] = useState("all");

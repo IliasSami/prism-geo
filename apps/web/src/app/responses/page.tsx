@@ -1,4 +1,5 @@
-import { getActiveBrand, getRawDb } from "@prismgeo/db";
+import { getRawDb } from "@prismgeo/db";
+import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { MessageSquare } from "lucide-react";
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/ui";
@@ -19,7 +20,7 @@ export default async function ResponsesPage({
   searchParams: Promise<{ engine?: string; q?: string; page?: string }>;
 }) {
   const params = await searchParams;
-  const brand = getActiveBrand();
+  const brand = await activeBrandFromCookies();
   // Without a workspace there is nothing to show (and unscoped queries would mix brands)
   if (!brand) redirect("/setup");
   const brandId = brand?.id || "";

@@ -245,8 +245,13 @@ export function AuditProvider({
   const running = audit.status === "running";
   const finished = audit.status === "completed" || audit.status === "failed";
   const done = audit.completedRuns + audit.failedRuns;
-  const noOverview = audit.issues.filter((i) => isRealOutcome(i.kind)).reduce((s, i) => s + i.count, 0);
-  const outcome = finished ? auditOutcome(audit.completedRuns + noOverview, Math.max(0, audit.failedRuns - noOverview), audit.issues) : null;
+  const countOf = (pred: (kind: string) => boolean) => audit.issues.filter((i) => pred(i.kind)).reduce((s, i) => s + i.count, 0);
+  // "No AI Overview" is a real answer from Google; questions deleted or paused mid-audit were skipped
+  // as asked. Neither is a failure, so they are taken out of "not captured".
+  const noOverview = countOf((k) => k === "no_ai_overview");
+  const skippedByEdit = countOf((k) => isRealOutcome(k) && k !== "no_ai_overview");
+  const notCaptured = Math.max(0, audit.failedRuns - noOverview - skippedByEdit);
+  const outcome = finished ? auditOutcome(audit.completedRuns + noOverview, notCaptured, audit.issues) : null;
   const realIssues = audit.issues.filter((i) => !isRealOutcome(i.kind));
 
   const title = running ? "Audit in progress" : outcome ? outcome.title : "Run an audit";
@@ -394,7 +399,8 @@ export function AuditProvider({
               <div>
                 <div className="flex items-baseline justify-between text-sm">
                   <span className="font-medium text-zinc-900 tabular">
-                    {audit.completedRuns} captured · {audit.failedRuns} not captured
+                    {audit.completedRuns + noOverview} captured · {notCaptured} not captured
+                    {skippedByEdit > 0 && <> · {skippedByEdit} skipped (question edited)</>}
                   </span>
                   <span className="text-zinc-500 tabular">
                     {done} of {audit.totalRuns || "…"}

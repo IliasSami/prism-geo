@@ -86,6 +86,7 @@ export const POST = route("setup/wizard", async (request: Request) => {
       brandName: brand.name,
       domain: brand.domain,
       niche,
+      category: brand.category,
       aliases: brand.aliases ?? [],
       competitors: competitors.map((c) => ({ name: c.name, domain: c.domain })),
       valuePropositions: brand.valueProps ?? [],

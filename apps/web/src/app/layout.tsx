@@ -4,7 +4,8 @@ import Link from "next/link";
 import { Navigation } from "@/components/Navigation";
 import { AuditProvider, AuditTrigger } from "@/components/CrawlModal";
 import { HideOn } from "@/components/HideOn";
-import { getActiveBrand, getRawDb } from "@prismgeo/db";
+import { getRawDb } from "@prismgeo/db";
+import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { engineSummary, getEngineViews, getLatestAudit } from "@/components/insights/engine-state";
 import { formatWhen } from "@/components/ui";
 
@@ -35,7 +36,7 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1, them
 const DOT: Record<string, string> = { success: "bg-emerald-500", warning: "bg-amber-500", danger: "bg-red-500", neutral: "bg-zinc-400" };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const brand = getActiveBrand();
+  const brand = await activeBrandFromCookies();
   const activePromptCount = brand
     ? Number((getRawDb().prepare("SELECT COUNT(*) AS n FROM prompts WHERE brand_id = ? AND active = 1").get(brand.id) as { n: number }).n)
     : 0;

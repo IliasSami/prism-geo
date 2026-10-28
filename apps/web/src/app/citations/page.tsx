@@ -1,4 +1,5 @@
-import { getActiveBrand, getRawDb } from "@prismgeo/db";
+import { getRawDb } from "@prismgeo/db";
+import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { Download, Link2 } from "lucide-react";
 import type { Metadata } from "next";
 import { PageHeader, buttonClass } from "@/components/ui";
@@ -31,7 +32,7 @@ export default async function CitationsPage({
   searchParams: Promise<{ type?: string; q?: string; page?: string; pp?: string; view?: string }>;
 }) {
   const params = await searchParams;
-  const brand = getActiveBrand();
+  const brand = await activeBrandFromCookies();
   // Without a workspace there is nothing to show (and unscoped queries would mix brands)
   if (!brand) redirect("/setup");
   const brandId = brand.id;
@@ -110,6 +111,9 @@ export default async function CitationsPage({
           sourceUrl: String(c.source_url),
           matchedChunkText: String(c.matched_chunk_text),
           similarityScore: Number(c.similarity_score),
+          // Stored before the reuse check (shared phrases + minimum score) existed: not evidence of reuse
+          verified: c.shared_shingles !== null && c.shared_shingles !== undefined,
+          answerSentence: c.answer_sentence ? String(c.answer_sentence) : null,
         }))
       : [];
 

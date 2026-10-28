@@ -21,7 +21,7 @@ const label = "mb-1 block text-xs font-medium text-zinc-600 md:sr-only";
  * use for a company; mention detection uses all of them. Each row is saved with its own ✓
  * button, independent of the Settings save bar.
  */
-export default function CompetitorsPanel() {
+export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
   const [items, setItems] = useState<Competitor[] | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [form, setForm] = useState<Draft>({ name: "", domain: "", aliases: "" });
@@ -29,12 +29,14 @@ export default function CompetitorsPanel() {
   const [message, setMessage] = useState<{ ok: boolean; text: string; at: string } | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/competitors", { cache: "no-store" }).catch(() => null);
+    // The client is named explicitly so another tab switching clients can't redirect these edits
+    const qs = brandId ? `?brandId=${encodeURIComponent(brandId)}` : "";
+    const res = await fetch(`/api/competitors${qs}`, { cache: "no-store" }).catch(() => null);
     if (!res?.ok) return setItems([]);
     const list: Competitor[] = (await res.json()).competitors;
     setItems(list);
     setDrafts(Object.fromEntries(list.map((c) => [c.id, { name: c.name, domain: c.domain, aliases: c.aliases.join(", ") }])));
-  }, []);
+  }, [brandId]);
 
   useEffect(() => {
     load();
@@ -44,7 +46,7 @@ export default function CompetitorsPanel() {
     setMessage(null);
     setBusy(key);
     try {
-      const res = await fetch("/api/competitors", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const res = await fetch("/api/competitors", { method, headers: { "content-type": "application/json" }, body: JSON.stringify({ ...(body as object), ...(brandId ? { brandId } : {}) }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return setMessage({ ok: false, text: data.error || "Request failed", at: key });
       setMessage({ ok: true, text: ok, at: key });

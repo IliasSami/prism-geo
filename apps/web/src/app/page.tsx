@@ -1,10 +1,10 @@
-import { getActiveBrand } from "@prismgeo/db";
+import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { ArrowRight, Lightbulb } from "lucide-react";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { buildReport, findOpportunities } from "@/lib/report";
-import { Badge, Card, CardHeader, EntityBadge, Notice, PageHeader, Stat, entityOf, formatWhen, meterScale, plural } from "@/components/ui";
+import { Badge, Card, CardHeader, EntityBadge, Notice, PageHeader, Stat, engineLabel, entityOf, formatWhen, meterScale, plural } from "@/components/ui";
 import { EngineIssues, FirstRunChecklist, LastAuditFailed, RateMeter, ScaleNote } from "@/components/insights/parts";
 import { setupCounts } from "@/components/insights/data";
 import { getEngineViews, getLatestAudit } from "@/components/insights/engine-state";
@@ -17,7 +17,7 @@ const linkCls = "tap-target inline-flex h-9 items-center gap-1 text-sm font-medi
 
 /** Overview: where the brand stands in AI answers today and the few things to do next. */
 export default async function OverviewPage() {
-  const brand = getActiveBrand();
+  const brand = await activeBrandFromCookies();
   // Fresh install: no client workspace yet, send the user through onboarding
   if (!brand) redirect("/setup");
   const report = buildReport(brand);
@@ -60,6 +60,36 @@ export default async function OverviewPage() {
       {report.totalAnswers === 0 && (
         <Notice tone="info" title="Only branded questions have answers so far">
           Every captured answer came from a question that names {brand.name}. Add or run unbranded buyer questions to measure organic visibility.
+        </Notice>
+      )}
+
+      {report.brandAccuracy.confusedAnswers > 0 && (
+        <Notice
+          tone="warning"
+          title={`Some answers mix ${brand.name} up with ${report.brandAccuracy.lookalikeDomains.map((d) => d.domain).slice(0, 2).join(" and ")}`}
+          action={
+            report.brandAccuracy.examples[0] ? (
+              <Link
+                href={`/responses?q=${encodeURIComponent(report.brandAccuracy.examples[0].prompt.slice(0, 120))}`}
+                className="inline-flex min-h-9 items-center gap-1 whitespace-nowrap text-sm font-medium text-amber-900 underline underline-offset-2"
+              >
+                See the answers <ArrowRight className="h-4 w-4" aria-hidden />
+              </Link>
+            ) : undefined
+          }
+        >
+          {report.brandAccuracy.confusedAnswers} of {plural(report.brandAccuracy.answersNamingBrand, "answer")} that name you cite or name a
+          look-alike domain, so buyers asking about you may be reading about another company. Make your official name and domain unambiguous
+          on your site (About page, structured data, the profiles you control), and ask review sites to link the right domain.
+        </Notice>
+      )}
+
+      {report.headline.excluded.length > 0 && report.headline.engines.length > 0 && (
+        <Notice tone="neutral" title="Some engines answered too few questions to compare">
+          {report.headline.excluded
+            .map((e) => `${engineLabel(e.engine)} answered ${Math.round(e.share * 100)}% of the questions`)
+            .join("; ")}
+          . Comparisons across engines lean on {report.headline.engines.map(engineLabel).join(" and ")}; see Engines for coverage.
         </Notice>
       )}
 

@@ -1,4 +1,5 @@
-import { db, schema, eq, getActiveBrand, getRawDb } from "@prismgeo/db";
+import { db, schema, eq, getRawDb } from "@prismgeo/db";
+import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { Compass } from "lucide-react";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
@@ -11,7 +12,7 @@ export const metadata: Metadata = { title: "Prompts" };
 
 export default async function PromptsPage({ searchParams }: { searchParams: Promise<{ review?: string }> }) {
   const params = await searchParams;
-  const brand = getActiveBrand();
+  const brand = await activeBrandFromCookies();
   // Without a workspace there is nothing to show (and unscoped queries would mix brands)
   if (!brand) redirect("/setup");
   const rawPrompts = await db.query.prompts.findMany({
@@ -48,7 +49,7 @@ export default async function PromptsPage({ searchParams }: { searchParams: Prom
             description="Add the questions your buyers ask an AI assistant, or let the setup wizard draft them from your client profile."
             action={
               <div className="flex flex-wrap justify-center gap-2">
-                <PromptsClient prompts={[]} addOnly />
+                <PromptsClient prompts={[]} addOnly brandId={brand.id} />
                 <LinkButton href="/setup" variant="secondary">
                   Open setup wizard
                 </LinkButton>
@@ -57,7 +58,7 @@ export default async function PromptsPage({ searchParams }: { searchParams: Prom
           />
         </Card>
       ) : (
-        <PromptsClient prompts={prompts} />
+        <PromptsClient prompts={prompts} brandId={brand.id} />
       )}
     </div>
   );

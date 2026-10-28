@@ -28,6 +28,10 @@ interface ChunkItem {
   sourceUrl: string;
   matchedChunkText: string;
   similarityScore: number;
+  /** Passed the reuse check; false for passages stored by older versions. */
+  verified: boolean;
+  /** The sentence of the answer that reused the passage, when recorded. */
+  answerSentence: string | null;
 }
 
 const TYPE_LABEL: Record<SourceType, string> = { all: "All", brand: "Your site", competitor: "Competitors", editorial: "Third-party" };
@@ -249,12 +253,24 @@ export function CitationsClient({
                         <span className="block truncate text-sm font-medium text-zinc-900">{chunk.sourceUrl}</span>
                         <span className="block truncate text-sm text-zinc-500">{chunk.matchedChunkText}</span>
                       </span>
-                      <span className="shrink-0 text-sm text-zinc-700 tabular" title="How closely the passage matches the answer">
-                        <span className="hidden sm:inline">Match </span>
-                        {strength}%
-                      </span>
+                      {chunk.verified ? (
+                        <span className="shrink-0 text-sm text-zinc-700 tabular" title="How closely the passage matches the answer">
+                          <span className="hidden sm:inline">Match </span>
+                          {strength}%
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-sm text-zinc-500" title="Stored by an older version, before passages had to share phrases with the answer">
+                          Unverified
+                        </span>
+                      )}
                     </summary>
                     <div className="space-y-3 px-4 pb-4 sm:pl-11">
+                      {chunk.answerSentence && (
+                        <p className="text-sm text-zinc-600">
+                          <span className="font-medium text-zinc-700">The answer said: </span>
+                          {chunk.answerSentence}
+                        </p>
+                      )}
                       <blockquote className="whitespace-pre-wrap rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-base leading-relaxed text-zinc-800">
                         {chunk.matchedChunkText}
                       </blockquote>

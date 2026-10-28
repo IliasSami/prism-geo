@@ -1,12 +1,14 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { getActiveBrand, getRawDb, getSettings } from "@prismgeo/db";
+import { getRawDb, getSettings } from "@prismgeo/db";
+import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { isProfileConnected, apiKeyFor, type ApiKeys } from "@prismgeo/crawler";
 import EngineSessionsPanel from "@/components/EngineSessionsPanel";
 import { CopyButton } from "@/components/CopyButton";
 import { Badge, Card, CardHeader, Dot, Meter, Notice, PageHeader, buttonClass, engineLabel, formatWhen, plural, type Tone } from "@/components/ui";
 import { getEngineViews, getLatestAudit } from "@/components/insights/engine-state";
 import { kindPhrase, isRealOutcome } from "@/components/engine-copy";
+import { buildReport } from "@/lib/report";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Engines" };
@@ -32,9 +34,12 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-export default function EnginesPage() {
-  const brand = getActiveBrand();
+export default async function EnginesPage() {
+  const brand = await activeBrandFromCookies();
   const sqlite = getRawDb();
+  const report = brand ? buildReport(brand) : null;
+  const coverage = report ? report.coverage.filter((c) => c.activeUnbrandedPrompts > 0) : [];
+  const mixed = report ? report.captureMethods.filter((m) => m.mixed) : [];
 
   const batches = brand
     ? (sqlite
@@ -239,6 +244,45 @@ export default function EnginesPage() {
           </dl>
         </details>
       </Card>
+
+      {coverage.length > 0 && report && (
+        <Card className="overflow-hidden">
+          <CardHeader
+            title="Question coverage"
+            description="How many of your active unbranded questions each engine has answered at least once. Engines under half are left out of cross-engine comparisons."
+          />
+          <ul className="divide-y divide-zinc-100">
+            {coverage.map((c) => (
+              <li key={c.engine} className="grid grid-cols-1 gap-2 px-5 py-3 sm:grid-cols-[12rem_1fr_auto] sm:items-center">
+                <span className="font-medium text-zinc-900">{engineLabel(c.engine)}</span>
+                <Meter value={c.share} tone={c.inHeadline ? "accent" : "neutral"} label={`${engineLabel(c.engine)} coverage`} />
+                <span className="text-sm text-zinc-600 tabular">
+                  {c.promptsCovered} of {c.activeUnbrandedPrompts}
+                  {!c.inHeadline && " · too few to compare"}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {(report.aioTrigger.overviews + report.aioTrigger.noOverview > 0 || mixed.length > 0) && (
+            <div className="space-y-1 border-t border-zinc-100 px-5 py-3 text-sm text-zinc-600">
+              {report.aioTrigger.overviews + report.aioTrigger.noOverview > 0 && (
+                <p className="tabular">
+                  Google showed an AI Overview for {report.aioTrigger.overviews} of{" "}
+                  {plural(report.aioTrigger.overviews + report.aioTrigger.noOverview, "search", "searches")} ({report.aioTrigger.rate.pct}%, likely{" "}
+                  {report.aioTrigger.rate.low}–{report.aioTrigger.rate.high}%). Searches without one are a real result, not a failure.
+                </p>
+              )}
+              {mixed.map((m) => (
+                <p key={m.engine}>
+                  {engineLabel(m.engine)} answers mix capture methods ({Object.entries(m.byMethod)
+                    .map(([k, n]) => `${n} ${k === "api" ? "via API" : k === "browser_signed_in" ? "signed in" : "browser"}`)
+                    .join(", ")}). The app and the API can answer differently, so compare like with like.
+                </p>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       <div id="sessions" className="scroll-mt-20">
         <EngineSessionsPanel />

@@ -13,6 +13,7 @@
     { "path": "./packages/core" },
     { "path": "./packages/db" },
     { "path": "./packages/crawler" },
+    { "path": "./packages/mcp" },
     { "path": "./apps/web" }
   ]
 }

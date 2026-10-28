@@ -50,6 +50,10 @@ interface BrandForm {
   domain: string;
   description: string;
   aliases: string;
+  /** Short product category, 2–8 words; empty when not set. */
+  category: string;
+  /** One per line. */
+  valueProps: string;
 }
 interface Crawler {
   sampleSize: number;
@@ -57,6 +61,7 @@ interface Crawler {
   scheduleEnabled: boolean;
   schedulePromptsPerDay: number;
   scheduleHour: number;
+  scheduleTimeZone?: string;
 }
 type Keys = { openai: string; gemini: string; perplexity: string; serpapi: string };
 interface Snapshot {
@@ -67,13 +72,22 @@ interface Snapshot {
 }
 
 const EMPTY: Snapshot = {
-  brandForm: { name: "", domain: "", description: "", aliases: "" },
+  brandForm: { name: "", domain: "", description: "", aliases: "", category: "", valueProps: "" },
   engines: { mode: "hybrid" },
   byok: { openai: "", gemini: "", perplexity: "", serpapi: "" },
   crawler: { sampleSize: 1, proxyUrl: "", scheduleEnabled: false, schedulePromptsPerDay: 15, scheduleHour: 9 },
 };
 
 const isTab = (v: string | null): v is TabId => TABS.some((t) => t.id === v);
+
+/** The viewer's IANA time zone, so the daily schedule starts at the hour they mean. */
+function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    return "";
+  }
+}
 
 export default function SettingsPage() {
   return (
@@ -98,7 +112,6 @@ function Settings() {
     router.replace(`${pathname}?tab=${id}`, { scroll: false });
   };
   const [backupConfirm, setBackupConfirm] = useState(false);
-  const [valueProps, setValueProps] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -123,9 +136,6 @@ function Settings() {
         setBrands(brandData.brands || []);
         setActiveBrandId(brandData.activeBrandId || "");
         setDbPath(s.dbPath || "");
-        try {
-          setValueProps(active ? JSON.parse(active.valuePropsJson || "[]") : []);
-        } catch {}
         setSavedKeys(s.hasRawByok || {});
         const snap: Snapshot = {
           brandForm: active
@@ -134,6 +144,8 @@ function Settings() {
                 domain: active.domain,
                 description: active.description || "",
                 aliases: JSON.parse(active.aliasesJson || "[]").join(", "),
+                category: active.category || "",
+                valueProps: JSON.parse(active.valuePropsJson || "[]").join("\n"),
               }
             : EMPTY.brandForm,
           engines: { ...EMPTY.engines, ...(s.engines || {}) },
@@ -183,7 +195,7 @@ function Settings() {
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ byok: draft.byok, engines: draft.engines, crawler: draft.crawler }),
+        body: JSON.stringify({ byok: draft.byok, engines: draft.engines, crawler: { ...draft.crawler, scheduleTimeZone: browserTimeZone() } }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not save settings");
 
@@ -192,7 +204,15 @@ function Settings() {
         const brandRes = await fetch("/api/brands", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: activeBrandId, name: b.name, domain: b.domain, description: b.description, aliases: b.aliases }),
+          body: JSON.stringify({
+            id: activeBrandId,
+            name: b.name,
+            domain: b.domain,
+            description: b.description,
+            aliases: b.aliases,
+            category: b.category.trim() || null,
+            valueProps: b.valueProps,
+          }),
         });
         if (!brandRes.ok) throw new Error((await brandRes.json().catch(() => ({}))).error || "Could not save client details");
       }
@@ -281,17 +301,31 @@ function Settings() {
                   </Field>
                 </div>
                 <div className="md:col-span-2">
-                  <div className="text-sm font-medium text-zinc-700">What makes you different</div>
-                  {valueProps.length ? (
-                    <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-base text-zinc-800">
-                      {valueProps.map((v) => (
-                        <li key={v}>{v}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-1 text-sm text-zinc-500">None given during setup.</p>
-                  )}
-                  <p className="mt-1 text-xs text-zinc-500">From setup; used when writing new questions. These can&apos;t be edited here yet.</p>
+                  <Field
+                    label="Category"
+                    htmlFor="brand-category"
+                    hint="2–8 words a buyer would use for what you sell. New questions are written around it."
+                  >
+                    <input
+                      id="brand-category"
+                      className={inputClass}
+                      value={brandForm.category}
+                      placeholder="e.g. accounting software for online shops"
+                      onChange={(e) => set("brandForm", { category: e.target.value })}
+                    />
+                  </Field>
+                </div>
+                <div className="md:col-span-2">
+                  <Field label="What makes you different" htmlFor="brand-values" hint="One per line. Used when writing new questions.">
+                    <textarea
+                      id="brand-values"
+                      rows={3}
+                      className={textareaClass}
+                      value={brandForm.valueProps}
+                      placeholder={"e.g. Connects to Shopify in one click\nFlat monthly price"}
+                      onChange={(e) => set("brandForm", { valueProps: e.target.value })}
+                    />
+                  </Field>
                 </div>
               </div>
             </Card>
@@ -339,7 +373,7 @@ function Settings() {
           </TabPanel>
 
           <TabPanel id="competitors" active={tab}>
-            <CompetitorsPanel />
+            <CompetitorsPanel brandId={activeBrandId || undefined} />
           </TabPanel>
 
           <TabPanel id="engines" active={tab}>
@@ -534,7 +568,7 @@ function Settings() {
                     onChange={(e) => set("crawler", { schedulePromptsPerDay: Number(e.target.value) })}
                   />
                 </Field>
-                <Field label="Start after (hour, local time)" htmlFor="start-hour" hint="0–23">
+                <Field label="Start after (hour)" htmlFor="start-hour" hint={`0–23, in your time zone (${browserTimeZone() || "server time"})`}>
                   <input
                     id="start-hour"
                     disabled={!crawler.scheduleEnabled}

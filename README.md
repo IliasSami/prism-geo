@@ -1,9 +1,16 @@
+<p align="center">
+  <img src="docs/brand/readme-banner.svg" alt="PrismGEO: track how AI assistants name your brand" width="100%">
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/IliasSami/prism-geo/actions/workflows/ci.yml"><img src="https://github.com/IliasSami/prism-geo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/status-public%20beta-5A37EE" alt="Status: public beta">
+</p>
+
 # PrismGEO
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/IliasSami/prism-geo/actions/workflows/ci.yml/badge.svg)](https://github.com/IliasSami/prism-geo/actions/workflows/ci.yml)
-
-**Self-hosted AI search visibility tracking.** PrismGEO asks ChatGPT, Perplexity, Gemini, Google AI Overviews and Microsoft Copilot the questions your buyers ask, stores the real answers, and shows how often each engine names and cites you versus your competitors, and what to do about it.
+**Track how AI assistants name your brand.** PrismGEO asks ChatGPT, Gemini, Perplexity and Google AI Overviews the questions your buyers ask, stores only the answers the engines actually give, and shows how often each one names and cites you versus your competitors, and what to do about it. Microsoft Copilot works once you connect a signed-in session.
 
 Everything runs on your machine: a Next.js dashboard, a Playwright crawler and a single SQLite file. No telemetry, no hosted service.
 
@@ -11,12 +18,12 @@ Everything runs on your machine: a Next.js dashboard, a Playwright crawler and a
 
 | Page | Answers the question |
 | :--- | :--- |
-| **Overview** | Where do we stand? Mention rate, citation rate, prompts you lead, top rival, sources engines cite most. |
-| **Visibility** | Us vs each competitor, by engine and by prompt, with 95% ranges so small samples look small. |
-| **Opportunities** | Which prompts are we losing, to whom, and which sources to get covered on to fix it. |
-| **Sources** | Every page the engines cited, and the passages from them that answers reuse. |
+| **Overview** | Where do we stand? Mention rate, citation rate, questions you lead, top rival, most-cited sites, and a warning when answers confuse you with a look-alike domain. |
+| **Competitors** | You vs each competitor, by engine and by question, with 95% ranges so small samples look small. Questions that name you are shown separately. |
+| **Gaps** | Which questions you are losing, to whom, and which sources to get covered on to fix it. |
+| **Sources** | Every page the engines cited, grouped by page or site, and the passages answers reused (only stored when the answer shares phrases with the page). |
 | **Answers** | The full text each engine returned, with its sources and the web searches it ran (when exposed). |
-| **Prompts / Engines / Settings** | Manage tracked questions, engine access and health, brand, competitors, API keys, schedule, Claude connector. |
+| **Prompts / Engines / Settings** | Manage tracked questions; engine health and question coverage per engine; client profile, competitors, API keys, schedule and the Claude connector. |
 
 **Accuracy rule:** only answers an engine actually returned are stored. Blocks, rate limits, empty pages and "no AI Overview" are recorded as failures with a reason (and a screenshot in `data/crawl-debug/`), never filled in.
 

@@ -32,6 +32,10 @@ export const KIND_PHRASE: Record<string, string> = {
   no_ai_overview: "Google showed no AI Overview",
   network: "couldn't connect from this computer",
   setup: "the crawler's browser isn't installed",
+  skipped_after_network: "skipped after this computer lost its connection",
+  skipped_setup: "skipped because the crawler's browser isn't installed",
+  prompt_removed: "question deleted during the audit",
+  prompt_paused: "question paused during the audit",
   api_key_rejected: "API key rejected",
   unavailable: "needs a signed-in account",
   error: "unexpected error",
@@ -39,11 +43,14 @@ export const KIND_PHRASE: Record<string, string> = {
 
 export const kindPhrase = (kind: string) => KIND_PHRASE[kind] || "unexpected error";
 
-/** Kinds that are not a failure of the run (the search simply had no AI Overview). */
-export const isRealOutcome = (kind: string) => kind === "no_ai_overview";
+/**
+ * Kinds that are not a failure of anything: the search simply had no AI Overview, or the question
+ * was deleted or paused while the audit ran (the audit skipped it, as asked).
+ */
+export const isRealOutcome = (kind: string) => kind === "no_ai_overview" || kind === "prompt_removed" || kind === "prompt_paused";
 
 /** The setup command that installs the browser the crawler drives. */
-export const BROWSER_INSTALL_COMMAND = "pnpm exec playwright install chromium";
+export const BROWSER_INSTALL_COMMAND = "pnpm browsers";
 
 export interface ReasonCopy {
   /** Short plain sentence: what happened. */
@@ -63,6 +70,7 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
   const onEngines = context === "engines-page";
   switch (kind) {
     case "setup":
+    case "skipped_setup":
       return {
         title: "The browser the crawler uses isn't installed",
         next: "Whoever installed PrismGEO can install it with one command on the computer that runs it, then run the audit again. Engines with a saved API key answer without the browser (Gemini's key is free).",
@@ -71,6 +79,7 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
         technical: BROWSER_INSTALL_COMMAND,
       };
     case "network":
+    case "skipped_after_network":
       return {
         title: "This computer couldn't reach the engines",
         next: "The engines are not at fault. Check this computer's internet connection, and the proxy in Settings if you use one, then run the audit again.",

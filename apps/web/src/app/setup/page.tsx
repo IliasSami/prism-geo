@@ -33,6 +33,7 @@ export default function SetupWizardPage() {
   const [brandDomain, setBrandDomain] = useState("");
   const [brandAliases, setBrandAliases] = useState("");
   const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
   const [valueProps, setValueProps] = useState("");
   const [touched, setTouched] = useState(false);
 
@@ -107,6 +108,7 @@ export default function SetupWizardPage() {
           name: brandName.trim(),
           domain: brandClean,
           description: description.trim(),
+          ...(category.trim() ? { category: category.trim() } : {}),
           aliases: brandAliases.split(",").map((a) => a.trim()).filter(Boolean),
           valueProps: valueProps.split("\n").map((v) => v.trim()).filter(Boolean),
         },
@@ -248,6 +250,21 @@ export default function SetupWizardPage() {
                       placeholder="e.g. Accounting software for small online shops"
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
+                    />
+                  </Field>
+                </div>
+                <div className="sm:col-span-2">
+                  <Field
+                    label="Category (optional)"
+                    htmlFor="brand-category"
+                    hint="2–8 words a buyer would use for what you sell. Makes the generated questions sound natural."
+                  >
+                    <input
+                      id="brand-category"
+                      className={inputClass}
+                      placeholder="e.g. accounting software for online shops"
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
                     />
                   </Field>
                 </div>

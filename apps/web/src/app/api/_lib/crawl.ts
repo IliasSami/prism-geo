@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { getRawDb, getSettings, type BrandRecord } from "@prismgeo/db";
-import { CrawlerOrchestrator, closeStaleBatches, isProfileConnected } from "@prismgeo/crawler";
+import { BatchRunningError, CrawlerOrchestrator, closeStaleBatches, isProfileConnected } from "@prismgeo/crawler";
 import { ENGINE_IDS, intSchema, brandIdSchema, type EngineId } from "./validate";
 
 /** Body of POST /api/crawl/start (also used by the MCP start_crawl tool). */
@@ -102,9 +102,17 @@ export function startCrawl(brand: BrandRecord, input: CrawlStartInput): CrawlSta
     .run(batchId, brand.id, sampleSize, totalRuns, new Date().toISOString());
 
   // Runs in the background; progress is read through /api/crawl/status
-  CrawlerOrchestrator.executeBatch({ batchId, brandId: brand.id, sampleSize, engines, promptLimit }).catch((err) =>
-    console.error("[crawl] batch", batchId, "failed:", err),
-  );
+  CrawlerOrchestrator.executeBatch({ batchId, brandId: brand.id, sampleSize, engines, promptLimit }).catch((err) => {
+    // Another start (scheduler, CLI, a second tab) took the brand's lock between the check above
+    // and the orchestrator claiming this row: close the row instead of leaving it "running"
+    if (err instanceof BatchRunningError) {
+      sqlite
+        .prepare("UPDATE crawl_batches SET status = 'failed', current_prompt = ?, finished_at = ? WHERE id = ? AND status = 'running'")
+        .run("Not started: another audit was already running for this client.", new Date().toISOString(), batchId);
+      return;
+    }
+    console.error("[crawl] batch", batchId, "failed:", err);
+  });
 
   return {
     ok: true,

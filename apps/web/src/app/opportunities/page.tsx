@@ -1,4 +1,4 @@
-import { getActiveBrand } from "@prismgeo/db";
+import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import type { Metadata } from "next";
@@ -26,7 +26,7 @@ const COLS = "lg:grid lg:grid-cols-[minmax(14rem,1fr)_180px_120px_80px] lg:items
  */
 export default async function OpportunitiesPage({ searchParams }: { searchParams: Promise<{ priority?: string; page?: string }> }) {
   const params = await searchParams;
-  const brand = getActiveBrand();
+  const brand = await activeBrandFromCookies();
   if (!brand) redirect("/setup");
   const report = buildReport(brand);
   const all = findOpportunities(report, brand.name);
