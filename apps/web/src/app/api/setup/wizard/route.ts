@@ -1,210 +1,159 @@
 import { NextResponse } from "next/server";
-import { getRawDb, setActiveBrand } from "@prismgeo/db";
+import crypto from "node:crypto";
+import { z } from "zod";
+import { getRawDb, getSettings, setActiveBrand } from "@prismgeo/db";
 import { IcpPromptSynthesizer } from "@prismgeo/core";
+import { jsonError, parseBody, route } from "../../_lib/http";
+import { setActiveBrandCookie } from "../../_lib/brand";
+import {
+  LIMITS,
+  byokSchema,
+  categorySchema,
+  competitorSchema,
+  dedupePrompts,
+  domainSchema,
+  engineSettingsSchema,
+  intSchema,
+  nameSchema,
+  promptListSchema,
+  stringListSchema,
+  type PromptInput,
+} from "../../_lib/validate";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(request: Request) {
+const wizardSchema = z.object({
+  brand: z.object(
+    {
+      name: nameSchema("brand name"),
+      domain: domainSchema,
+      description: z
+        .string({ error: "The description must be text" })
+        .trim()
+        .max(LIMITS.description, `The description can be at most ${LIMITS.description} characters`)
+        .optional(),
+      category: categorySchema.optional(),
+      aliases: stringListSchema(LIMITS.aliases, LIMITS.alias).optional(),
+      valueProps: stringListSchema(LIMITS.valueProps, LIMITS.valueProp, "\n").optional(),
+    },
+    { error: "brand must be an object with a name and a domain" },
+  ),
+  competitors: z.array(competitorSchema).max(LIMITS.competitors, `At most ${LIMITS.competitors} competitors`).optional(),
+  prompts: promptListSchema.optional(),
+  promptLimit: intSchema(1, LIMITS.prompts, "The number of questions").optional(),
+  byok: byokSchema.optional(),
+  engines: engineSettingsSchema.optional(),
+  crawler: z.object({ sampleSize: intSchema(1, 20, "Runs per question").optional() }).optional(),
+});
+
+const slugify = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "client";
+
+/**
+ * Creates a client with its competitors and questions in one transaction, saves the optional
+ * keys, engine and audit settings, and selects the client for this browser.
+ *
+ * Prompts may be strings or { query, intent?, persona? } objects. Any invalid input (a bad
+ * competitor domain, a 3-character question) refuses the whole request with the field that is
+ * wrong; nothing is dropped silently. Duplicate questions are skipped and listed in the response.
+ */
+export const POST = route("setup/wizard", async (request: Request) => {
+  const parsed = await parseBody(request, wizardSchema);
+  if (!parsed.ok) return parsed.response;
+  const { brand, competitors = [], prompts, promptLimit, byok, engines, crawler } = parsed.data;
   const sqlite = getRawDb();
-  let inTransaction = false;
 
+  if (sqlite.prepare("SELECT 1 FROM brands WHERE domain = ?").get(brand.domain)) {
+    return jsonError(`A client with the domain ${brand.domain} already exists. Switch to it in the client menu.`, 409);
+  }
+  const seenDomains = new Set<string>();
+  for (const [i, c] of competitors.entries()) {
+    if (c.domain === brand.domain) return jsonError(`competitors.${i}.domain: ${c.domain} is the brand's own domain`, 400);
+    if (seenDomains.has(c.domain)) return jsonError(`competitors.${i}.domain: ${c.domain} is listed twice`, 400);
+    seenDomains.add(c.domain);
+  }
+
+  // The questions: the caller's own, or written from the brand profile
+  let promptList: PromptInput[];
+  let duplicates: string[] = [];
+  if (prompts) {
+    ({ unique: promptList, duplicates } = dedupePrompts(prompts));
+  } else {
+    const niche = brand.description || brand.category || "";
+    if (!niche) {
+      return jsonError("Describe what the brand does (or give its category) so PrismGEO can write the questions, or add your own questions.", 400);
+    }
+    promptList = IcpPromptSynthesizer.generatePrompts({
+      brandName: brand.name,
+      domain: brand.domain,
+      niche,
+      aliases: brand.aliases ?? [],
+      competitors: competitors.map((c) => ({ name: c.name, domain: c.domain })),
+      valuePropositions: brand.valueProps ?? [],
+    }).map((s) => ({ queryText: s.queryText, intentType: s.intentType, personaDimension: s.personaDimension }));
+    if (promptLimit) promptList = promptList.slice(0, promptLimit);
+  }
+
+  const brandId = `brand-${slugify(brand.name).slice(0, 40)}-${crypto.randomBytes(3).toString("hex")}`;
+  const slug = `${slugify(brand.name).slice(0, 60)}-${crypto.randomBytes(3).toString("hex")}`;
+  const now = new Date().toISOString();
+  const hasCategoryColumn = (sqlite.prepare("PRAGMA table_info(brands)").all() as Array<{ name: string }>).some((c) => c.name === "category");
+  const notStored = brand.category && !hasCategoryColumn ? ["brand.category"] : [];
+
+  sqlite.exec("BEGIN IMMEDIATE");
   try {
-    const body = await request.json().catch(() => null);
-    if (!body || typeof body !== "object") {
-      return NextResponse.json({ error: "Invalid JSON request body" }, { status: 400 });
-    }
-
-    const { brand, competitors, prompts, byok, engines, crawler, promptLimit } = body;
-
-    if (!brand || typeof brand !== "object" || !brand.name || typeof brand.name !== "string" || !brand.name.trim()) {
-      return NextResponse.json({ error: "Brand name is required" }, { status: 400 });
-    }
-    if (!brand.domain || typeof brand.domain !== "string" || !brand.domain.trim()) {
-      return NextResponse.json({ error: "Brand domain is required" }, { status: 400 });
-    }
-
-    const cleanName = brand.name.trim();
-    const cleanDomain = brand.domain
-      .trim()
-      .toLowerCase()
-      .replace(/^https?:\/\//i, "")
-      .replace(/^www\./i, "")
-      .replace(/\/.*$/, "");
-
-    if (!cleanDomain || !cleanDomain.includes(".")) {
-      return NextResponse.json({ error: "Valid domain name is required (e.g., example.com)" }, { status: 400 });
-    }
-
-    const brandId = `brand-${cleanName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now().toString(36)}`;
-    const slug = `${cleanName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now().toString(36)}`;
-
-    const cleanAliases = Array.isArray(brand.aliases)
-      ? brand.aliases.filter((a: any) => typeof a === "string" && a.trim()).map((a: string) => a.trim())
-      : [];
-    const cleanValueProps = Array.isArray(brand.valueProps)
-      ? brand.valueProps.filter((v: any) => typeof v === "string" && v.trim()).map((v: string) => v.trim())
-      : [];
-
-    const aliasesJson = JSON.stringify(cleanAliases);
-    const valuePropsJson = JSON.stringify(cleanValueProps);
-    const now = new Date().toISOString();
-
-    // Check duplicate domain
-    const existing = sqlite.prepare("SELECT id FROM brands WHERE domain = ? LIMIT 1").get(cleanDomain);
-    if (existing) {
-      return NextResponse.json(
-        { error: `Brand with domain "${cleanDomain}" already exists` },
-        { status: 409 }
-      );
-    }
-
-    // Begin Atomic SQLite Transaction
-    sqlite.exec("BEGIN TRANSACTION;");
-    inTransaction = true;
-
-    // 1. Insert Brand
     sqlite
       .prepare(
         `INSERT INTO brands (id, slug, name, domain, description, aliases_json, value_props_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(brandId, slug, cleanName, cleanDomain, brand.description?.trim() || "", aliasesJson, valuePropsJson, now, now);
+      .run(brandId, slug, brand.name, brand.domain, brand.description ?? "", JSON.stringify(brand.aliases ?? []), JSON.stringify(brand.valueProps ?? []), now, now);
+    if (brand.category && hasCategoryColumn) sqlite.prepare("UPDATE brands SET category = ? WHERE id = ?").run(brand.category, brandId);
 
-    // 2. Insert Competitors
-    const validCompetitors: Array<{ name: string; domain: string }> = [];
-    if (Array.isArray(competitors)) {
-      const insertComp = sqlite.prepare(
-        `INSERT INTO competitors (id, brand_id, name, domain, aliases_json, active, created_at)
-         VALUES (?, ?, ?, ?, '[]', 1, ?)`
-      );
-      for (const comp of competitors) {
-        if (comp && typeof comp === "object" && typeof comp.name === "string" && comp.name.trim() && typeof comp.domain === "string" && comp.domain.trim()) {
-          const compName = comp.name.trim();
-          const compDomain = comp.domain
-            .trim()
-            .toLowerCase()
-            .replace(/^https?:\/\//i, "")
-            .replace(/^www\./i, "")
-            .replace(/\/.*$/, "");
-          const compId = `comp-${Math.random().toString(36).slice(2, 9)}`;
-          insertComp.run(compId, brandId, compName, compDomain, now);
-          validCompetitors.push({ name: compName, domain: compDomain });
-        }
-      }
-    }
-
-    // 3. Insert Prompts (Use IcpPromptSynthesizer if none supplied)
-    let promptList: Array<{ queryText: string; intentType: string; personaDimension: string }> = [];
-    if (Array.isArray(prompts) && prompts.length > 0) {
-      promptList = prompts
-        .filter((p: any) => p && (p.query || p.queryText))
-        .map((p: any) => ({
-          queryText: String(p.query || p.queryText).trim(),
-          intentType: String(p.intent || p.intentType || "category"),
-          personaDimension: String(p.persona || p.personaDimension || "growth_buyer"),
-        }));
-    } else {
-      const synthesized = IcpPromptSynthesizer.generatePrompts({
-        brandName: cleanName,
-        domain: cleanDomain,
-        niche: brand.description?.trim() || "",
-        aliases: cleanAliases,
-        competitors: validCompetitors,
-        valuePropositions: cleanValueProps,
-      });
-      promptList = synthesized.map((s) => ({
-        queryText: s.queryText,
-        intentType: s.intentType,
-        personaDimension: s.personaDimension,
-      }));
-    }
-
-    if (typeof promptLimit === "number" && promptLimit > 0) {
-      promptList = promptList.slice(0, promptLimit);
+    const insertCompetitor = sqlite.prepare(
+      "INSERT INTO competitors (id, brand_id, name, domain, aliases_json, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+    );
+    for (const c of competitors) {
+      insertCompetitor.run(`cmp-${crypto.randomBytes(6).toString("hex")}`, brandId, c.name, c.domain, JSON.stringify(c.aliases ?? []), now);
     }
 
     const insertPrompt = sqlite.prepare(
-      `INSERT INTO prompts (id, brand_id, query_text, intent_type, persona_dimension, active, created_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)`
+      "INSERT INTO prompts (id, brand_id, query_text, intent_type, persona_dimension, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
     );
-
     for (const p of promptList) {
-      const promptId = `prompt-${Math.random().toString(36).slice(2, 9)}`;
-      insertPrompt.run(promptId, brandId, p.queryText, p.intentType, p.personaDimension, now);
+      insertPrompt.run(`prm-${crypto.randomBytes(6).toString("hex")}`, brandId, p.queryText, p.intentType ?? "category", p.personaDimension ?? "buyer", now);
     }
 
-    // 4. Update BYOK Settings if provided
-    if (byok && typeof byok === "object") {
-      const sanitizedByok = Object.fromEntries(
-        Object.entries(byok as Record<string, string>).filter(
-          ([k, v]) => ["openai", "gemini", "perplexity", "serpapi"].includes(k) && typeof v === "string" && v.trim().length > 0
-        )
-      );
-      if (Object.keys(sanitizedByok).length > 0) {
-        const existingByok = JSON.parse(
-          (sqlite.prepare("SELECT value_json FROM system_settings WHERE key = 'byok_api_keys'").get() as any)?.value_json || "{}"
-        );
-        const mergedByok = { ...existingByok, ...sanitizedByok };
-        sqlite
-          .prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES ('byok_api_keys', ?, CURRENT_TIMESTAMP)")
-          .run(JSON.stringify(mergedByok));
+    const save = sqlite.prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)");
+    if (byok) {
+      const keys = { ...getSettings<Record<string, string>>("byok_api_keys", {}) };
+      for (const [provider, value] of Object.entries(byok)) {
+        // Only new keys are saved here; clearing keys is done in Settings
+        if (typeof value === "string" && value.trim() && !value.includes("••••")) keys[provider] = value.trim();
       }
+      save.run("byok_api_keys", JSON.stringify(keys));
     }
-
-    // 5. Update Engine Settings if provided
-    if (engines && typeof engines === "object") {
-      sqlite
-        .prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES ('engine_settings', ?, CURRENT_TIMESTAMP)")
-        .run(JSON.stringify(engines));
+    if (engines) {
+      save.run("engine_settings", JSON.stringify({ ...getSettings<Record<string, unknown>>("engine_settings", {}), ...engines }));
     }
-
-    // 5b. Update Crawler Settings if provided
-    if (crawler && typeof crawler === "object") {
-      const existingCrawler = JSON.parse(
-        (sqlite.prepare("SELECT value_json FROM system_settings WHERE key = 'crawler_settings'").get() as any)?.value_json || "{}"
-      );
-      // Only known fields, clamped: this becomes the default for every later audit
-      const runs = Number.parseInt(String(crawler.sampleSize ?? ""), 10);
-      const mergedCrawler = {
-        ...existingCrawler,
-        ...(Number.isFinite(runs) ? { sampleSize: Math.min(20, Math.max(1, runs)) } : {}),
-      };
-      sqlite
-        .prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES ('crawler_settings', ?, CURRENT_TIMESTAMP)")
-        .run(JSON.stringify(mergedCrawler));
+    if (crawler?.sampleSize !== undefined) {
+      save.run("crawler_settings", JSON.stringify({ ...getSettings<Record<string, unknown>>("crawler_settings", {}), sampleSize: crawler.sampleSize }));
     }
-
-    // 6. Set Active Brand
     setActiveBrand(brandId);
-
-    // Commit Transaction
-    sqlite.exec("COMMIT;");
-    inTransaction = false;
-
-    const response = NextResponse.json({
-      success: true,
-      brandId,
-      message: `Brand ${cleanName} created and activated successfully`,
-      promptsCount: promptList.length,
-    });
-
-    response.cookies.set("prism_active_brand", brandId, {
-      path: "/",
-      sameSite: "lax",
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 30, // 30 days
-    });
-
-    return response;
-  } catch (error) {
-    if (inTransaction) {
-      try {
-        sqlite.exec("ROLLBACK;");
-      } catch {}
-    }
-    const msg = (error as Error).message || "Internal server error";
-    const status = msg.includes("UNIQUE constraint failed") ? 409 : 500;
-    return NextResponse.json({ error: msg }, { status });
+    sqlite.exec("COMMIT");
+  } catch (err) {
+    sqlite.exec("ROLLBACK");
+    throw err;
   }
-}
+
+  const response = NextResponse.json({
+    success: true,
+    brandId,
+    message: `${brand.name} created`,
+    promptsCount: promptList.length,
+    competitorsCount: competitors.length,
+    duplicates,
+    ...(notStored.length ? { notStored } : {}),
+  });
+  setActiveBrandCookie(response, brandId, request);
+  return response;
+});

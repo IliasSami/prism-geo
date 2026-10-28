@@ -15,6 +15,11 @@ const nextConfig = {
     ];
   },
   transpilePackages: ["@prismgeo/db", "@prismgeo/core", "@prismgeo/crawler", "@prismgeo/mcp"],
+  // Still needed: serverExternalPackages does not cover imports from the transpiled workspace packages
+  webpack: (config, { isServer }) => {
+    if (isServer) config.externals = [...(config.externals || []), "playwright", "playwright-core"];
+    return config;
+  },
 };
 
 export default nextConfig;
