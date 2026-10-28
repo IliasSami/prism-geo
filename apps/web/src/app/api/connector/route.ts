@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { getDbPath } from "@prismgeo/db";
 import { getConnectorToken } from "@prismgeo/mcp";
+import { route } from "../_lib/http";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ function workspaceRoot(): string {
 }
 
 /** Ready-to-paste setup for connecting Claude (Desktop, Code, claude.ai) to this workspace. */
-export async function GET(request: Request) {
+export const GET = route("connector", async (request: Request) => {
   const dbPath = getDbPath();
   // Not derived from dbPath: PRISMGEO_DB_PATH may point anywhere
   const root = workspaceRoot();
@@ -48,4 +49,4 @@ export async function GET(request: Request) {
     httpUrl: `${origin}/api/mcp`,
     token,
   });
-}
+});

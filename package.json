@@ -1,24 +1,41 @@
 {
   "name": "prism-geo-monorepo",
-  "version": "1.0.0",
+  "version": "1.0.0-beta.1",
   "private": true,
-  "description": "PrismGEO: Open-Source Generative Engine Observability & Visibility Suite",
+  "description": "PrismGEO: track how AI assistants name your brand (self-hosted, open source)",
   "scripts": {
     "dev": "pnpm --filter @prismgeo/web dev",
     "build": "pnpm --filter @prismgeo/web build",
     "start": "pnpm --filter @prismgeo/web start",
     "crawl": "tsx packages/crawler/src/cli.ts",
     "mcp": "tsx packages/mcp/src/stdio.ts",
+    "browsers": "pnpm --filter @prismgeo/crawler exec playwright install chromium",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit -p packages/db && tsc --noEmit -p packages/core && tsc --noEmit -p packages/crawler && tsc --noEmit -p packages/mcp && tsc --noEmit -p apps/web",
-    "test": "node --import tsx --test \"packages/*/test/*.test.ts\""
+    "test": "node --import tsx --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\""
+  },
+  "dependencies": {
+    "tsx": "^4.20.5"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
-    "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "@eslint/eslintrc": "^3.3.7",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "15.5.28"
   },
   "engines": {
     "node": ">=22.13"
   },
-  "packageManager": "pnpm@10.34.9"
+  "packageManager": "pnpm@10.34.9",
+  "pnpm": {
+    "overrides": {
+      "undici": "^7.30.1",
+      "postcss": "^8.5.23",
+      "postcss-selector-parser": "^6.1.5"
+    },
+    "ignoredBuiltDependencies": [
+      "unrs-resolver"
+    ]
+  }
 }

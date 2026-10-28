@@ -1,66 +1,54 @@
-import { NextResponse } from "next/server";
-import { getRawDb, getDbPath } from "@prismgeo/db";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import crypto from "node:crypto";
+import { Readable } from "node:stream";
+import { getRawDb, getDbPath } from "@prismgeo/db";
+import { jsonError, route } from "../_lib/http";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  let tempBackupPath: string | null = null;
+/**
+ * Downloads a consistent copy of the whole database (every client, plus the saved API keys and
+ * the Claude connector token: treat the file like a password).
+ *
+ * The snapshot is made with VACUUM INTO next to the database (data/backups/), so it does not fill
+ * the system temp folder, and streamed to the browser without loading it into memory, whatever
+ * its size. The snapshot file is removed as soon as it is open for streaming.
+ */
+export const GET = route("backup", async () => {
+  const dbPath = getDbPath();
+  if (!fs.existsSync(dbPath)) return jsonError("There is no database yet", 404);
+
+  const dir = path.join(path.dirname(dbPath), "backups");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const snapshot = path.join(dir, `download-${stamp}-${crypto.randomBytes(4).toString("hex")}.db`);
+
+  // An atomic, self-contained copy that includes WAL contents; no plain file copy fallback,
+  // because copying a live WAL database can produce a corrupt file
+  getRawDb().exec(`VACUUM INTO '${snapshot.replace(/'/g, "''")}'`);
+  fs.chmodSync(snapshot, 0o600);
+
+  const { size } = fs.statSync(snapshot);
+  const fd = fs.openSync(snapshot, "r");
+  let removed = false;
   try {
-    const sqlite = getRawDb();
-    const dbPath = getDbPath();
+    fs.unlinkSync(snapshot); // POSIX: the open descriptor keeps the data readable
+    removed = true;
+  } catch {}
+  const stream = fs.createReadStream("", { fd });
+  stream.on("close", () => {
+    if (!removed) fs.rm(snapshot, { force: true }, () => {});
+  });
 
-    if (!fs.existsSync(dbPath)) {
-      return NextResponse.json({ error: "Database file not found" }, { status: 404 });
-    }
-
-    // Flush WAL log checkpoint safely
-    try {
-      sqlite.exec("PRAGMA wal_checkpoint(PASSIVE);");
-    } catch {}
-
-    const randomSuffix = crypto.randomBytes(4).toString("hex");
-    tempBackupPath = path.join(os.tmpdir(), `prismgeo-backup-${Date.now()}-${randomSuffix}.db`);
-
-    // VACUUM INTO produces an atomic, consistent, standalone snapshot without WAL race conditions
-    try {
-      const escapedPath = tempBackupPath.replace(/'/g, "''");
-      sqlite.exec(`VACUUM INTO '${escapedPath}'`);
-    } catch {
-      // Fallback if VACUUM INTO fails: checkpoint TRUNCATE and copy
-      sqlite.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-      fs.copyFileSync(dbPath, tempBackupPath);
-    }
-
-    const stat = fs.statSync(tempBackupPath);
-    const MAX_BUFFER_SIZE = 150 * 1024 * 1024; // 150MB limit for in-memory buffer
-    if (stat.size > MAX_BUFFER_SIZE) {
-      return NextResponse.json(
-        { error: "Database backup exceeds maximum download buffer limit (150MB). Please copy the database file from server disk directly." },
-        { status: 413 }
-      );
-    }
-
-    const fileBuffer = fs.readFileSync(tempBackupPath);
-    const filename = `prismgeo-backup-${new Date().toISOString().slice(0, 10)}.db`;
-
-    return new NextResponse(fileBuffer, {
-      headers: {
-        "Content-Type": "application/x-sqlite3",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-        "Content-Length": stat.size.toString(),
-      },
-    });
-  } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
-  } finally {
-    if (tempBackupPath && fs.existsSync(tempBackupPath)) {
-      try {
-        fs.unlinkSync(tempBackupPath);
-      } catch {}
-    }
-  }
-}
+  const filename = `prismgeo-backup-${new Date().toISOString().slice(0, 10)}.db`;
+  return new Response(Readable.toWeb(stream) as ReadableStream, {
+    headers: {
+      "Content-Type": "application/vnd.sqlite3",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Length": String(size),
+      "Cache-Control": "no-store",
+      "X-PrismGEO-Contains-Secrets": "api-keys, mcp-connector-token, proxy-credentials",
+    },
+  });
+});

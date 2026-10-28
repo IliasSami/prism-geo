@@ -1,14 +1,23 @@
-node_modules
+# Dependencies and build output are rebuilt inside the image
 **/node_modules
 **/.next
 **/dist
-*.tsbuildinfo
-data
+**/*.tsbuildinfo
+
+# Never bake data or secrets into an image layer (data/ also holds logs, backups,
+# crawl-debug snapshots and signed-in browser profiles)
+**/data
+**/*.db*
+**/*.sqlite
+**/.env*
+!**/.env.example
+**/*.log
+logs
+
+# Repository and tooling metadata
 .git
 .github
-.env
-.env.*
-!.env.example
-.prismgeo.key
-*.log
-.DS_Store
+.claude
+.vscode
+.idea
+**/.DS_Store

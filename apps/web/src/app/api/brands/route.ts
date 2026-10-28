@@ -1,162 +1,128 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getAllBrands, getActiveBrand, createBrand, setActiveBrand, getRawDb } from "@prismgeo/db";
+import { closeStaleBatches } from "@prismgeo/crawler";
+import { jsonError, parseBody, route } from "../_lib/http";
+import { brandFromRequest, findBrand, setActiveBrandCookie } from "../_lib/brand";
+import { LIMITS, categorySchema, domainSchema, idSchema, nameSchema, stringListSchema } from "../_lib/validate";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  try {
-    const brands = getAllBrands();
-    let activeBrand = getActiveBrand();
-    if (!activeBrand && brands.length > 0) {
-      activeBrand = brands[0];
-    }
-    return NextResponse.json({
-      brands,
-      activeBrandId: activeBrand?.id || null,
-      activeBrand: activeBrand || null,
-    });
-  } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
-  }
+const descriptionSchema = z
+  .string({ error: "The description must be text" })
+  .trim()
+  .max(LIMITS.description, `The description can be at most ${LIMITS.description} characters`);
+
+const createSchema = z.object({
+  name: nameSchema("brand name"),
+  domain: domainSchema,
+  description: descriptionSchema.optional(),
+  aliases: stringListSchema(LIMITS.aliases, LIMITS.alias).optional(),
+  valueProps: stringListSchema(LIMITS.valueProps, LIMITS.valueProp, "\n").optional(),
+  category: categorySchema.optional(),
+  setActive: z.boolean().optional(),
+});
+
+const patchSchema = z.object({
+  id: idSchema("Client id"),
+  name: nameSchema("brand name").optional(),
+  domain: domainSchema.optional(),
+  description: z.union([descriptionSchema, z.null()]).optional(),
+  aliases: stringListSchema(LIMITS.aliases, LIMITS.alias).optional(),
+  valueProps: stringListSchema(LIMITS.valueProps, LIMITS.valueProp, "\n").optional(),
+  category: z.union([categorySchema, z.null()]).optional(),
+});
+
+const deleteSchema = z.object({ id: idSchema("Client id") });
+
+/** Whether the brands table has a column (a category column may be added by a later migration). */
+function brandsHaveColumn(name: string): boolean {
+  return (getRawDb().prepare("PRAGMA table_info(brands)").all() as Array<{ name: string }>).some((c) => c.name === name);
 }
 
-export async function POST(request: Request) {
-  try {
-    const body = await request.json().catch(() => null);
-    if (!body || typeof body !== "object") {
-      return NextResponse.json({ error: "Invalid JSON request body" }, { status: 400 });
-    }
-
-    const { name, domain, description, aliases, valueProps, setActive } = body;
-
-    if (!name || typeof name !== "string" || !name.trim()) {
-      return NextResponse.json({ error: "Brand name is required" }, { status: 400 });
-    }
-    if (!domain || typeof domain !== "string" || !domain.trim()) {
-      return NextResponse.json({ error: "Brand domain is required" }, { status: 400 });
-    }
-
-    const cleanDomain = domain
-      .trim()
-      .toLowerCase()
-      .replace(/^https?:\/\//i, "")
-      .replace(/^www\./i, "")
-      .replace(/\/.*$/, "");
-
-    if (!cleanDomain || !cleanDomain.includes(".")) {
-      return NextResponse.json({ error: "Valid domain name is required (e.g., example.com)" }, { status: 400 });
-    }
-
-    const cleanName = name.trim();
-
-    // Check duplicate domain
-    const sqlite = getRawDb();
-    const existing = sqlite.prepare("SELECT id FROM brands WHERE domain = ? LIMIT 1").get(cleanDomain) as any;
-    if (existing) {
-      return NextResponse.json(
-        { error: `Brand with domain "${cleanDomain}" already exists` },
-        { status: 409 }
-      );
-    }
-
-    const cleanAliases = Array.isArray(aliases)
-      ? aliases.filter((a): a is string => typeof a === "string" && a.trim().length > 0).map((a) => a.trim())
-      : [];
-
-    const cleanValueProps = Array.isArray(valueProps)
-      ? valueProps.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim())
-      : [];
-
-    const brand = createBrand({
-      name: cleanName,
-      domain: cleanDomain,
-      description: typeof description === "string" ? description.trim() : undefined,
-      aliases: cleanAliases,
-      valueProps: cleanValueProps,
-    });
-
-    if (setActive !== false) {
-      setActiveBrand(brand.id);
-    }
-
-    const response = NextResponse.json({ success: true, brand });
-    if (setActive !== false) {
-      response.cookies.set("prism_active_brand", brand.id, {
-        path: "/",
-        sameSite: "lax",
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        maxAge: 60 * 60 * 24 * 30, // 30 days
-      });
-    }
-    return response;
-  } catch (error) {
-    const msg = (error as Error).message || "Internal server error";
-    const status = msg.includes("UNIQUE constraint failed") ? 409 : 500;
-    return NextResponse.json({ error: msg }, { status });
-  }
+function domainTaken(domain: string, exceptId?: string): boolean {
+  return Boolean(getRawDb().prepare("SELECT 1 FROM brands WHERE domain = ? AND id IS NOT ?").get(domain, exceptId ?? null));
 }
 
-/** Updates the profile of an existing client: name, domain, description and aliases. */
-export async function PATCH(request: Request) {
-  try {
-    const body = await request.json().catch(() => null);
-    if (!body || typeof body !== "object" || typeof body.id !== "string") {
-      return NextResponse.json({ error: "Brand id is required" }, { status: 400 });
-    }
-    const sqlite = getRawDb();
-    const current = sqlite.prepare("SELECT * FROM brands WHERE id = ?").get(body.id) as any;
-    if (!current) return NextResponse.json({ error: `Brand ${body.id} not found` }, { status: 404 });
+/** Every client, plus the one this browser has selected. */
+export const GET = route("brands GET", async (request: Request) => {
+  const brands = getAllBrands();
+  const activeBrand = brandFromRequest(request) ?? brands[0] ?? null;
+  return NextResponse.json({ brands, activeBrandId: activeBrand?.id ?? null, activeBrand });
+});
 
-    const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : current.name;
-    const domain =
-      typeof body.domain === "string" && body.domain.trim()
-        ? body.domain.trim().toLowerCase().replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "")
-        : current.domain;
-    if (!domain.includes(".")) {
-      return NextResponse.json({ error: "Valid domain name is required (e.g., example.com)" }, { status: 400 });
-    }
-    if (sqlite.prepare("SELECT 1 FROM brands WHERE domain = ? AND id <> ?").get(domain, body.id)) {
-      return NextResponse.json({ error: `Another client already uses the domain "${domain}"` }, { status: 409 });
-    }
-    // Aliases arrive as an array or as the comma-separated text of the settings form
-    const rawAliases: unknown[] = Array.isArray(body.aliases)
-      ? body.aliases
-      : typeof body.aliases === "string"
-        ? body.aliases.split(",")
-        : JSON.parse(current.aliases_json || "[]");
-    const aliases = [...new Set(rawAliases.filter((a): a is string => typeof a === "string").map((a) => a.trim()).filter(Boolean))];
-    const description = typeof body.description === "string" ? body.description.trim() || null : current.description;
+/** Creates a client and, unless setActive is false, selects it for this browser. */
+export const POST = route("brands POST", async (request: Request) => {
+  const parsed = await parseBody(request, createSchema);
+  if (!parsed.ok) return parsed.response;
+  const { name, domain, description, aliases, valueProps, category, setActive } = parsed.data;
+  if (domainTaken(domain)) return jsonError(`A client with the domain ${domain} already exists`, 409);
 
-    sqlite
-      .prepare(
-        "UPDATE brands SET name = ?, domain = ?, description = ?, aliases_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-      )
-      .run(name, domain, description, JSON.stringify(aliases), body.id);
-    return NextResponse.json({ success: true, brand: sqlite.prepare("SELECT * FROM brands WHERE id = ?").get(body.id) });
-  } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+  const brand = createBrand({ name, domain, description, aliases: aliases ?? [], valueProps: valueProps ?? [] });
+  const notStored: string[] = [];
+  if (category !== undefined) {
+    if (brandsHaveColumn("category")) getRawDb().prepare("UPDATE brands SET category = ? WHERE id = ?").run(category, brand.id);
+    else notStored.push("category");
   }
-}
+
+  const response = NextResponse.json({ success: true, brand: findBrand(brand.id) ?? brand, ...(notStored.length ? { notStored } : {}) });
+  if (setActive !== false) {
+    setActiveBrand(brand.id);
+    setActiveBrandCookie(response, brand.id, request);
+  }
+  return response;
+});
+
+/** Updates a client's profile; only the fields that are sent change. */
+export const PATCH = route("brands PATCH", async (request: Request) => {
+  const parsed = await parseBody(request, patchSchema);
+  if (!parsed.ok) return parsed.response;
+  const { id, name, domain, description, aliases, valueProps, category } = parsed.data;
+  const current = findBrand(id);
+  if (!current || current.id !== id) return jsonError("That client does not exist (it may have been deleted)", 404);
+  if (domain && domainTaken(domain, id)) return jsonError(`Another client already uses the domain ${domain}`, 409);
+
+  const sets: string[] = [];
+  const values: Array<string | null> = [];
+  const set = (column: string, value: string | null) => (sets.push(`${column} = ?`), values.push(value));
+  if (name !== undefined) set("name", name);
+  if (domain !== undefined) set("domain", domain);
+  if (description !== undefined) set("description", description || null);
+  if (aliases !== undefined) set("aliases_json", JSON.stringify(aliases));
+  if (valueProps !== undefined) set("value_props_json", JSON.stringify(valueProps));
+  const notStored: string[] = [];
+  if (category !== undefined) {
+    if (brandsHaveColumn("category")) set("category", category);
+    else notStored.push("category");
+  }
+  if (sets.length === 0 && notStored.length === 0) return jsonError("Nothing to update: send name, domain, description, aliases or valueProps", 400);
+  if (sets.length) {
+    set("updated_at", new Date().toISOString());
+    getRawDb()
+      .prepare(`UPDATE brands SET ${sets.join(", ")} WHERE id = ?`)
+      .run(...values, id);
+  }
+  return NextResponse.json({ success: true, brand: findBrand(id), ...(notStored.length ? { notStored } : {}) });
+});
 
 /**
  * Deletes a client and, through cascades, its prompts, competitors, audits and answers.
- * The active client cannot be deleted; switch to another one first.
+ * The client selected in this browser (or server-wide) cannot be deleted; switch first.
  */
-export async function DELETE(request: Request) {
-  try {
-    const body = await request.json().catch(() => null);
-    if (!body || typeof body.id !== "string") return NextResponse.json({ error: "Expected { id }" }, { status: 400 });
-    if (getActiveBrand()?.id === body.id) {
-      return NextResponse.json({ error: "Switch to another client before deleting this one" }, { status: 409 });
-    }
-    const sqlite = getRawDb();
-    if (sqlite.prepare("SELECT 1 FROM crawl_batches WHERE brand_id = ? AND status = 'running'").get(body.id)) {
-      return NextResponse.json({ error: "An audit is running for this client" }, { status: 409 });
-    }
-    const res = sqlite.prepare("DELETE FROM brands WHERE id = ?").run(body.id);
-    return res.changes ? NextResponse.json({ success: true }) : NextResponse.json({ error: "Client not found" }, { status: 404 });
-  } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+export const DELETE = route("brands DELETE", async (request: Request) => {
+  const parsed = await parseBody(request, deleteSchema);
+  if (!parsed.ok) return parsed.response;
+  const { id } = parsed.data;
+  if (!findBrand(id)) return jsonError("That client does not exist (it may have been deleted)", 404);
+  if (brandFromRequest(request)?.id === id || getActiveBrand()?.id === id) {
+    return jsonError("Switch to another client before deleting this one", 409);
   }
-}
+  // A batch left 'running' by a stopped process must not block the delete
+  closeStaleBatches();
+  const sqlite = getRawDb();
+  if (sqlite.prepare("SELECT 1 FROM crawl_batches WHERE brand_id = ? AND status = 'running'").get(id)) {
+    return jsonError("An audit is running for this client. Wait for it to finish, then delete.", 409);
+  }
+  sqlite.prepare("DELETE FROM brands WHERE id = ?").run(id);
+  return NextResponse.json({ success: true });
+});

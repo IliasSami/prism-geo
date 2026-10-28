@@ -1,27 +1,31 @@
 # Dependencies
 node_modules/
-.pnpm/
 .pnpm-store/
 
-# Next.js & Build Outputs
+# Build output
 .next/
 out/
-build/
 dist/
 *.tsbuildinfo
 
-# SQLite WAL and Temporary Files
+# Local data: databases, logs, backups, crawl-debug snapshots and signed-in browser
+# profiles hold client data and secrets; never commit them
+data/*
+!data/.gitkeep
+*.db
 *.db-wal
 *.db-shm
 *.db-journal
+*.sqlite
+logs/
+*.log
 
-# Environment & Secrets
+# Environment and secrets
 .env
 .env.*
 !.env.example
-.prismgeo.key
 
-# OS & IDE metadata
+# OS and editor files
 .DS_Store
 Thumbs.db
 .idea/
@@ -29,20 +33,7 @@ Thumbs.db
 *.swp
 *.swo
 
-# Logs & Debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-*.log
-
-# Local SQLite database (client data — never commit)
-data/*.db
-data/crawl-debug/
-data/browser-profiles/
-data/backups/
-data/logs/
-*.db
-*.sqlite
-data/ui-audit/
-*.tmp.mts
+# Personal Claude Code settings
+.claude/settings.local.json
+.claude/launch.json
+.claude/worktrees/

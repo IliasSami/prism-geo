@@ -1,8 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { getRawDb, getDbPath, getActiveBrand, getAllBrands, getSettings, setSettings, type BrandRecord } from "@prismgeo/db";
 import crypto from "node:crypto";
+import pkg from "../package.json";
+import { MAX_ROWS, runGuardedQuery } from "./sql";
 
 /**
  * PrismGEO's Claude connector: an MCP server exposing the workspace's real crawl data (answers,
@@ -26,8 +28,26 @@ export function getConnectorToken(): string {
   return token;
 }
 
-const APP_URL = (process.env.PRISMGEO_URL || "http://localhost:3333").replace(/\/$/, "");
+/** Where the stdio connector reaches the running web app (start_crawl). Follows PRISMGEO_PORT. */
+const APP_URL = (process.env.PRISMGEO_URL || `http://127.0.0.1:${process.env.PRISMGEO_PORT || 3333}`).replace(/\/$/, "");
 
+export interface StartCrawlArgs {
+  brandId: string;
+  engines?: string[];
+  sampleSize: number;
+  promptLimit?: number;
+}
+
+export interface PrismMcpOptions {
+  /**
+   * Starts a crawl in this process. The web app's /api/mcp route passes it, so start_crawl acts on
+   * the server that received the call. Without it (the stdio connector), start_crawl posts to the
+   * running app at PRISMGEO_URL. It returns the response body, or throws with a readable message.
+   */
+  startCrawl?: (args: StartCrawlArgs) => Promise<unknown> | unknown;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows are plain SQLite values read by column name
 type Row = Record<string, any>;
 
 const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
@@ -39,8 +59,8 @@ function resolveBrand(brandId?: string): BrandRecord {
   return brand;
 }
 
-const all = (sql: string, ...params: any[]) => getRawDb().prepare(sql).all(...params) as Row[];
-const get = (sql: string, ...params: any[]) => getRawDb().prepare(sql).get(...params) as Row | undefined;
+const all = (sql: string, ...params: SQLInputValue[]) => getRawDb().prepare(sql).all(...params) as Row[];
+const get = (sql: string, ...params: SQLInputValue[]) => getRawDb().prepare(sql).get(...params) as Row | undefined;
 
 let readOnlyDb: DatabaseSync | null = null;
 function readOnly(): DatabaseSync {
@@ -51,7 +71,7 @@ function readOnly(): DatabaseSync {
 const brandArg = { brand_id: z.string().optional().describe("Brand id or slug; defaults to the active brand") };
 const ENGINES = ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"] as const;
 
-async function callApp(path: string, init?: RequestInit): Promise<any> {
+async function callApp(path: string, init?: RequestInit): Promise<unknown> {
   let res: Response;
   try {
     res = await fetch(`${APP_URL}${path}`, { ...init, headers: { "content-type": "application/json", ...(init?.headers || {}) } });
@@ -63,9 +83,9 @@ async function callApp(path: string, init?: RequestInit): Promise<any> {
   return body;
 }
 
-export function createPrismMcpServer(): McpServer {
+export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
   const server = new McpServer(
-    { name: "prismgeo", version: "1.0.0" },
+    { name: "prismgeo", version: pkg.version },
     {
       instructions:
         "PrismGEO tracks how AI answer engines (ChatGPT, Perplexity, Gemini, Google AI Overviews, Copilot) mention and cite a brand versus its competitors. " +
@@ -130,9 +150,15 @@ export function createPrismMcpServer(): McpServer {
     async ({ brand_id, engine, batch_id }) => {
       const brand = resolveBrand(brand_id);
       const where = ["r.brand_id = ?"];
-      const params: any[] = [brand.id];
-      if (engine) (where.push("r.engine = ?"), params.push(engine));
-      if (batch_id) (where.push("r.batch_id = ?"), params.push(batch_id));
+      const params: SQLInputValue[] = [brand.id];
+      if (engine) {
+    where.push("r.engine = ?");
+    params.push(engine);
+  }
+      if (batch_id) {
+    where.push("r.batch_id = ?");
+    params.push(batch_id);
+  }
       const W = where.join(" AND ");
       const totalRuns = Number(get(`SELECT COUNT(*) AS n FROM prompt_runs r WHERE ${W}`, ...params)?.n || 0);
       if (totalRuns === 0) return json({ brand: brand.name, totalRuns: 0, note: "No captured runs match. Start a crawl with start_crawl." });
@@ -187,10 +213,19 @@ export function createPrismMcpServer(): McpServer {
     async ({ brand_id, engine, prompt_id, batch_id, brand_mentioned, limit }) => {
       const brand = resolveBrand(brand_id);
       const where = ["r.brand_id = ?"];
-      const params: any[] = [brand.id];
-      if (engine) (where.push("r.engine = ?"), params.push(engine));
-      if (prompt_id) (where.push("r.prompt_id = ?"), params.push(prompt_id));
-      if (batch_id) (where.push("r.batch_id = ?"), params.push(batch_id));
+      const params: SQLInputValue[] = [brand.id];
+      if (engine) {
+    where.push("r.engine = ?");
+    params.push(engine);
+  }
+      if (prompt_id) {
+    where.push("r.prompt_id = ?");
+    params.push(prompt_id);
+  }
+      if (batch_id) {
+    where.push("r.batch_id = ?");
+    params.push(batch_id);
+  }
       if (brand_mentioned !== undefined) {
         where.push(`${brand_mentioned ? "" : "NOT "}EXISTS(SELECT 1 FROM entity_mentions m WHERE m.run_id = r.id AND m.is_target_brand = 1)`);
       }
@@ -282,7 +317,7 @@ export function createPrismMcpServer(): McpServer {
         "Browser crawls are paced (several seconds per query per engine), so a batch can take many minutes.",
       inputSchema: {
         ...brandArg,
-        engines: z.array(z.enum(ENGINES)).optional().describe("Defaults to every engine"),
+        engines: z.array(z.enum(ENGINES)).min(1).optional().describe("Defaults to the engines enabled in Settings"),
         sample_size: z.number().int().min(1).max(20).default(1).describe("Runs per prompt per engine"),
         prompt_limit: z.number().int().min(1).optional().describe("Only the first N active prompts"),
       },
@@ -291,10 +326,10 @@ export function createPrismMcpServer(): McpServer {
     async ({ brand_id, engines, sample_size, prompt_limit }) => {
       const brand = resolveBrand(brand_id);
       try {
-        const res = await callApp("/api/crawl/start", {
-          method: "POST",
-          body: JSON.stringify({ brandId: brand.id, engines, sampleSize: sample_size, promptLimit: prompt_limit }),
-        });
+        const args: StartCrawlArgs = { brandId: brand.id, engines, sampleSize: sample_size, promptLimit: prompt_limit };
+        const res = options.startCrawl
+          ? await options.startCrawl(args)
+          : await callApp("/api/crawl/start", { method: "POST", body: JSON.stringify(args) });
         return json(res);
       } catch (err) {
         return fail((err as Error).message);
@@ -328,12 +363,15 @@ export function createPrismMcpServer(): McpServer {
       description: "Adds prompts (questions buyers ask AI assistants) to the brand's tracked set. Exact duplicates are skipped.",
       inputSchema: {
         ...brandArg,
-        prompts: z.array(z.string().min(5).max(500)).min(1).max(50),
+        prompts: z.array(z.string().trim().min(5).max(500)).min(1).max(50),
         intent: z
           .string()
+          .trim()
+          .min(1)
+          .max(40)
           .default("category")
           .describe("Intent label, e.g. category, dilemma, comparison, alternatives, pricing, risk, direct (direct = names the brand)"),
-        persona: z.string().default("buyer").describe("Who asks it, e.g. founder, ecom_director, head_of_growth"),
+        persona: z.string().trim().min(1).max(40).default("buyer").describe("Who asks it, e.g. founder, ecom_director, head_of_growth"),
       },
       annotations: { readOnlyHint: false },
     },
@@ -343,7 +381,7 @@ export function createPrismMcpServer(): McpServer {
       const existing = new Set(all("SELECT lower(query_text) AS q FROM prompts WHERE brand_id = ?", brand.id).map((r) => r.q));
       const insert = sqlite.prepare("INSERT INTO prompts (id, brand_id, query_text, intent_type, persona_dimension, active) VALUES (?, ?, ?, ?, ?, 1)");
       const added: string[] = [];
-      for (const text of prompts.map((p) => p.trim())) {
+      for (const text of prompts) {
         if (existing.has(text.toLowerCase())) continue;
         insert.run(`prm-${crypto.randomBytes(6).toString("hex")}`, brand.id, text, intent, persona);
         existing.add(text.toLowerCase());
@@ -374,15 +412,18 @@ export function createPrismMcpServer(): McpServer {
       description: "Tracks a new competitor (name, domain and the other names AI answers use for it) for the brand.",
       inputSchema: {
         ...brandArg,
-        name: z.string().min(2),
-        domain: z.string().min(3).describe("e.g. example.com"),
-        aliases: z.array(z.string()).default([]),
+        name: z.string().trim().min(2).max(120),
+        domain: z.string().min(3).max(253).describe("e.g. example.com"),
+        aliases: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
       },
       annotations: { readOnlyHint: false },
     },
     async ({ brand_id, name, domain, aliases }) => {
       const brand = resolveBrand(brand_id);
-      const clean = domain.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+      const clean = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[/:?#]/)[0];
+      // Same rule as the dashboard's competitor form
+      if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(clean)) return fail(`"${domain}" is not a domain like example.com`);
+      if (clean === brand.domain) return fail(`${clean} is ${brand.name}'s own domain, not a competitor`);
       if (get("SELECT id FROM competitors WHERE brand_id = ? AND lower(domain) = ?", brand.id, clean)) return fail(`${clean} is already tracked`);
       const id = `cmp-${crypto.randomBytes(6).toString("hex")}`;
       getRawDb()
@@ -397,21 +438,21 @@ export function createPrismMcpServer(): McpServer {
     {
       title: "Read-only SQL",
       description:
-        "Runs one read-only SQLite SELECT against the PrismGEO database for analysis the other tools do not cover. " +
-        "Tables: brands, competitors, prompts, crawl_batches, prompt_runs, citations, entity_mentions, reverse_rag_chunks, opportunities. " +
-        "Call describe_database first for the columns. Returns at most 500 rows.",
-      inputSchema: { sql: z.string().min(6) },
+        "Runs one read-only SQLite SELECT (or WITH) statement against the PrismGEO database for analysis the other tools do not cover. " +
+        "Tables: brands, competitors, prompts, crawl_batches, prompt_runs, citations, entity_mentions, reverse_rag_chunks. " +
+        `Call describe_database first for the columns. Returns at most ${MAX_ROWS} rows and stops after a few seconds: aggregate in SQL and use LIMIT.`,
+      inputSchema: { sql: z.string().min(6).max(20_000) },
       annotations: { readOnlyHint: true },
     },
     async ({ sql }) => {
-      if (!/^\s*(select|with)\b/i.test(sql)) return fail("Only SELECT / WITH queries are allowed");
-      if (/system_settings/i.test(sql)) return fail("system_settings holds API keys and is not queryable");
-      try {
-        const rows = readOnly().prepare(sql).all() as Row[];
-        return json({ rowCount: rows.length, rows: rows.slice(0, 500), truncated: rows.length > 500 });
-      } catch (err) {
-        return fail(`SQL error: ${(err as Error).message}`);
-      }
+      const result = await runGuardedQuery(readOnly(), getDbPath(), sql);
+      if (!result.ok) return fail(result.error);
+      return json({
+        rowCount: result.rowCount,
+        rows: result.rows,
+        truncated: result.truncated,
+        ...(result.timedOut ? { note: "Stopped early at the time budget; the rows above are partial. Add a LIMIT or a narrower WHERE." } : {}),
+      });
     }
   );
 

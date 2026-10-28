@@ -1,14 +1,20 @@
 import { NextResponse } from "next/server";
-import { getSettings, setSettings, getDbPath } from "@prismgeo/db";
+import { z } from "zod";
+import { getSettings, getRawDb, getDbPath } from "@prismgeo/db";
+import { parseBody, route } from "../_lib/http";
+import { MASK, isMasked, maskKey, maskProxyUrl, unmaskProxyUrl } from "../_lib/secrets";
+import {
+  BYOK_PROVIDERS,
+  ENGINE_IDS,
+  ENGINE_MODES,
+  LIMITS,
+  byokSchema,
+  engineSettingsSchema,
+  intSchema,
+  type ByokProvider,
+} from "../_lib/validate";
 
 export const dynamic = "force-dynamic";
-
-const DEFAULT_BYOK = {
-  openai: "",
-  gemini: "",
-  perplexity: "",
-  serpapi: "",
-};
 
 const DEFAULT_ENGINES = {
   perplexity: true,
@@ -16,7 +22,7 @@ const DEFAULT_ENGINES = {
   copilot: true,
   gemini: true,
   chatgpt: true,
-  mode: "hybrid", // 'stealth' | 'byok' | 'hybrid'; hybrid equals browser-only until a key is saved
+  mode: "hybrid", // 'stealth' (browser only) | 'byok' | 'hybrid'; hybrid equals browser-only until a key is saved
 };
 
 const DEFAULT_CRAWLER = {
@@ -27,99 +33,94 @@ const DEFAULT_CRAWLER = {
   scheduleHour: 9,
 };
 
-export async function GET() {
-  try {
-    const rawByok = { ...DEFAULT_BYOK, ...getSettings<Record<string, string>>("byok_api_keys", DEFAULT_BYOK) };
-    const engines = { ...DEFAULT_ENGINES, ...getSettings("engine_settings", DEFAULT_ENGINES) };
-    const crawler = { ...DEFAULT_CRAWLER, ...getSettings("crawler_settings", DEFAULT_CRAWLER) };
+const crawlerSchema = z.object({
+  sampleSize: intSchema(1, 20, "Runs per question").optional(),
+  proxyUrl: z
+    .string({ error: "The proxy URL must be text" })
+    .trim()
+    .max(LIMITS.proxyUrl, "The proxy URL is too long")
+    .refine(
+      (v) => v === "" || v.includes(MASK) || /^(https?|socks5?):\/\/[^\s]+$/i.test(v),
+      "Proxy URL must look like http://user:pass@host:port or socks5://host:port",
+    )
+    .optional(),
+  scheduleEnabled: z.boolean({ error: "scheduleEnabled must be true or false" }).optional(),
+  schedulePromptsPerDay: intSchema(1, 200, "Questions per day").optional(),
+  scheduleHour: intSchema(0, 23, "The start hour").optional(),
+});
 
-    // Mask API keys for display safety (show only first 4 and last 4 chars for long keys)
-    const maskedByok: Record<string, string> = {};
-    for (const [k, v] of Object.entries(rawByok)) {
-      if (!v || typeof v !== "string") {
-        maskedByok[k] = "";
-      } else if (v.length <= 10) {
-        maskedByok[k] = "••••••••";
-      } else {
-        maskedByok[k] = `${v.slice(0, 4)}••••${v.slice(-4)}`;
-      }
-    }
+const settingsSchema = z
+  .strictObject({ byok: byokSchema.optional(), engines: engineSettingsSchema.optional(), crawler: crawlerSchema.optional() })
+  .refine((b) => b.byok || b.engines || b.crawler, "Send byok, engines or crawler");
 
-    return NextResponse.json({
-      byok: maskedByok,
-      hasRawByok: {
-        openai: Boolean(rawByok.openai),
-        gemini: Boolean(rawByok.gemini),
-        perplexity: Boolean(rawByok.perplexity),
-        serpapi: Boolean(rawByok.serpapi),
-      },
-      engines,
-      crawler,
-      dbPath: getDbPath(),
-    });
-  } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
-  }
+/** Saved settings, restricted to known keys and types (older versions could store anything). */
+function readSettings() {
+  const rawByok = getSettings<Record<string, unknown>>("byok_api_keys", {});
+  const byok = Object.fromEntries(BYOK_PROVIDERS.map((p) => [p, typeof rawByok[p] === "string" ? (rawByok[p] as string) : ""])) as Record<
+    ByokProvider,
+    string
+  >;
+  const storedEngines = { ...DEFAULT_ENGINES, ...getSettings<Record<string, unknown>>("engine_settings", {}) };
+  const engines: Record<string, unknown> = Object.fromEntries(ENGINE_IDS.map((e) => [e, storedEngines[e] !== false]));
+  engines.mode = (ENGINE_MODES as readonly unknown[]).includes(storedEngines.mode) ? storedEngines.mode : DEFAULT_ENGINES.mode;
+  const crawler = { ...DEFAULT_CRAWLER, ...getSettings<Record<string, unknown>>("crawler_settings", {}) } as typeof DEFAULT_CRAWLER;
+  return { byok, engines, crawler };
 }
 
-export async function POST(request: Request) {
-  try {
-    const body = await request.json().catch(() => null);
-    if (!body || typeof body !== "object") {
-      return NextResponse.json({ error: "Invalid JSON request body" }, { status: 400 });
+export const GET = route("settings GET", async () => {
+  const { byok, engines, crawler } = readSettings();
+  return NextResponse.json({
+    byok: Object.fromEntries(Object.entries(byok).map(([k, v]) => [k, maskKey(v)])),
+    hasRawByok: Object.fromEntries(Object.entries(byok).map(([k, v]) => [k, Boolean(v)])),
+    engines,
+    crawler: { ...crawler, proxyUrl: maskProxyUrl(String(crawler.proxyUrl || "")) },
+    dbPath: getDbPath(),
+  });
+});
+
+/**
+ * Saves { byok?, engines?, crawler? }. The whole body is validated first and written in one
+ * transaction, so a mistake in one field saves nothing. Masked values (as returned by GET) mean
+ * "unchanged"; an empty string or null clears a key.
+ */
+export const POST = route("settings POST", async (request: Request) => {
+  const parsed = await parseBody(request, settingsSchema);
+  if (!parsed.ok) return parsed.response;
+  const { byok, engines, crawler } = parsed.data;
+  const current = readSettings();
+  const writes: Array<[string, unknown]> = [];
+
+  if (byok) {
+    const keys: Record<string, string> = { ...current.byok };
+    for (const [provider, value] of Object.entries(byok)) {
+      if (value === undefined) continue;
+      const trimmed = (value ?? "").trim();
+      if (isMasked(trimmed)) continue; // the masked value shown by GET: unchanged
+      keys[provider] = trimmed;
     }
-
-    const { byok, engines, crawler } = body;
-
-    if (byok && typeof byok === "object") {
-      const existing = getSettings<Record<string, string>>("byok_api_keys", DEFAULT_BYOK);
-      const updated: Record<string, string> = { ...existing };
-      for (const [k, v] of Object.entries(byok as Record<string, any>)) {
-        if (typeof v === "string") {
-          const trimmed = v.trim();
-          if (trimmed === "") {
-            // Explicit clear
-            updated[k] = "";
-          } else if (!trimmed.includes("••••")) {
-            // Updated with new unmasked key
-            updated[k] = trimmed;
-          }
-        } else if (v === null) {
-          updated[k] = "";
-        }
-      }
-      setSettings("byok_api_keys", updated);
-    }
-
-    if (engines && typeof engines === "object") {
-      const existing = getSettings("engine_settings", DEFAULT_ENGINES);
-      setSettings("engine_settings", { ...existing, ...engines });
-    }
-
-    if (crawler && typeof crawler === "object") {
-      const existing = getSettings("crawler_settings", DEFAULT_CRAWLER);
-      const sampleSize = Number.isFinite(crawler.sampleSize)
-        ? Math.min(20, Math.max(1, Number(crawler.sampleSize)))
-        : existing.sampleSize;
-      const proxyUrl = typeof crawler.proxyUrl === "string" ? crawler.proxyUrl.trim() : existing.proxyUrl;
-      if (proxyUrl && !/^(https?|socks5?):\/\/[^\s]+$/i.test(proxyUrl)) {
-        return NextResponse.json({ error: "Proxy URL must look like http://user:pass@host:port or socks5://host:port" }, { status: 400 });
-      }
-
-      const clampInt = (v: unknown, min: number, max: number, fallback: number) =>
-        Number.isFinite(Number(v)) ? Math.min(max, Math.max(min, Math.round(Number(v)))) : fallback;
-      setSettings("crawler_settings", {
-        sampleSize,
-        proxyUrl,
-        scheduleEnabled: typeof crawler.scheduleEnabled === "boolean" ? crawler.scheduleEnabled : Boolean(existing.scheduleEnabled),
-        schedulePromptsPerDay: clampInt(crawler.schedulePromptsPerDay, 1, 200, existing.schedulePromptsPerDay ?? 15),
-        scheduleHour: clampInt(crawler.scheduleHour, 0, 23, existing.scheduleHour ?? 9),
-      });
-    }
-
-
-    return NextResponse.json({ success: true, message: "Settings saved successfully" });
-  } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+    writes.push(["byok_api_keys", keys]);
   }
-}
+
+  if (engines) writes.push(["engine_settings", { ...current.engines, ...engines }]);
+
+  if (crawler) {
+    const { proxyUrl, ...rest } = crawler;
+    const next = { ...current.crawler };
+    for (const [k, v] of Object.entries(rest)) if (v !== undefined) (next as Record<string, unknown>)[k] = v;
+    // The password is never sent to the browser; a masked one means "keep the saved password"
+    if (proxyUrl !== undefined) next.proxyUrl = unmaskProxyUrl(proxyUrl, String(current.crawler.proxyUrl || ""));
+    writes.push(["crawler_settings", next]);
+  }
+
+  const sqlite = getRawDb();
+  const save = sqlite.prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)");
+  sqlite.exec("BEGIN IMMEDIATE");
+  try {
+    for (const [key, value] of writes) save.run(key, JSON.stringify(value));
+    sqlite.exec("COMMIT");
+  } catch (err) {
+    sqlite.exec("ROLLBACK");
+    throw err;
+  }
+  return NextResponse.json({ success: true, message: "Settings saved" });
+});
