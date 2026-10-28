@@ -1,10 +1,14 @@
 import { getActiveBrand, getRawDb } from "@prismgeo/db";
 import { MessageSquare } from "lucide-react";
-import { Card, EmptyState, PageHeader } from "@/components/ui";
+import type { Metadata } from "next";
+import { PageHeader } from "@/components/ui";
 import { redirect } from "next/navigation";
 import { ResponsesClient } from "./ResponsesClient";
+import { NoAnswers } from "@/components/insights/parts";
+import { getLatestAudit } from "@/components/insights/engine-state";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Answers" };
 
 const PAGE_SIZE = 25;
 const ENGINES = ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"];
@@ -31,6 +35,14 @@ export default async function ResponsesPage({
     args.push(`%${query}%`, `%${query}%`);
   }
   const W = where.join(" AND ");
+  // Engines that have answers (for the current search), with counts, for the engine filter
+  const countWhere = ["r.brand_id = ?", ...(query ? ["(p.query_text LIKE ? OR r.response_text LIKE ?)"] : [])];
+  const countArgs = query ? [brandId, `%${query}%`, `%${query}%`] : [brandId];
+  const engineCounts = (
+    sqlite
+      .prepare(`SELECT r.engine AS engine, COUNT(*) AS n FROM prompt_runs r JOIN prompts p ON p.id = r.prompt_id WHERE ${countWhere.join(" AND ")} GROUP BY r.engine ORDER BY n DESC`)
+      .all(...countArgs) as Array<{ engine: string; n: number }>
+  ).map((r) => ({ engine: String(r.engine), count: Number(r.n) }));
   const total = Number(
     (sqlite.prepare(`SELECT COUNT(*) AS n FROM prompt_runs r JOIN prompts p ON p.id = r.prompt_id WHERE ${W}`).get(...args) as { n: number }).n
   );
@@ -87,16 +99,10 @@ export default async function ResponsesPage({
     <div className="mx-auto max-w-6xl space-y-6">
       <PageHeader
         title="Answers"
-        description="What each engine actually answered, with the sources it cited and, where exposed, the searches it ran."
+        description="What each engine actually answered, with the sources it cited and, where exposed, the searches it ran. Failed runs are listed on Engines, never filled in."
       />
       {!hasAnyRuns ? (
-        <Card>
-          <EmptyState
-            icon={<MessageSquare className="h-5 w-5" />}
-            title="No answers yet"
-            description="Run an audit from the header. Every answer an engine returns is stored here; failures are recorded separately, never filled in."
-          />
-        </Card>
+        <NoAnswers latest={getLatestAudit(brand.id)} icon={<MessageSquare className="h-5 w-5" />} what="This page" />
       ) : (
         <ResponsesClient
           runs={runs}
@@ -107,6 +113,7 @@ export default async function ResponsesPage({
           total={total}
           brandName={brand.name}
           highlights={highlights}
+          engineCounts={engineCounts}
         />
       )}
     </div>
