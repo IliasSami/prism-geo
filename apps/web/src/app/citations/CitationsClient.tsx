@@ -2,17 +2,25 @@
 
 import { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink, Search, X } from "lucide-react";
-import { Badge, Button, Card, CardHeader, EmptyState, cn, inputClass, td, th, type Tone } from "@/components/ui";
+import { AlertTriangle, Check, ChevronDown, Copy, ExternalLink, Search, X } from "lucide-react";
+import { Button, Card, CardHeader, EmptyState, EntityBadge, cn, engineLabel, entityOf, inputClass, td, th } from "@/components/ui";
+import { Pager, SegmentLinks } from "@/components/insights/parts";
+import { copyText } from "@/components/clipboard";
 
-interface CitationItem {
-  id: string;
+export type View = "pages" | "domains" | "passages";
+export type SourceType = "all" | "brand" | "competitor" | "editorial";
+
+export interface SourceRow {
+  key: string;
   domain: string;
   url: string;
   title: string | null;
-  rank: number;
-  isBrandDomain: boolean;
-  isCompetitorDomain: boolean;
+  isBrand: boolean;
+  isCompetitor: boolean;
+  answers: number;
+  pages: number;
+  best: number;
+  engines: string[];
 }
 
 interface ChunkItem {
@@ -22,63 +30,34 @@ interface ChunkItem {
   similarityScore: number;
 }
 
-type SourceType = "all" | "brand" | "competitor" | "editorial";
-
-const TYPE_META: Record<Exclude<SourceType, "all">, { label: string; tone: Tone; hint: string }> = {
-  brand: { label: "Your site", tone: "accent", hint: "Citations of your own domain" },
-  competitor: { label: "Competitors", tone: "neutral", hint: "Citations of a tracked competitor" },
-  editorial: { label: "Third-party", tone: "warning", hint: "Reviews, blogs, directories and forums" },
-};
-
-const kindOf = (c: CitationItem): Exclude<SourceType, "all"> => (c.isBrandDomain ? "brand" : c.isCompetitorDomain ? "competitor" : "editorial");
-
-function matchTone(score: number): Tone {
-  return score >= 0.8 ? "success" : score >= 0.6 ? "info" : "warning";
-}
-
-function Pager({ label, page, pages, onPage }: { label: string; page: number; pages: number; onPage: (p: number) => void }) {
-  if (pages <= 1) return null;
-  return (
-    <nav aria-label={`${label} pagination`} className="flex items-center justify-between gap-3 border-t border-zinc-100 px-4 py-3 text-sm text-zinc-500">
-      <span className="tabular">
-        {label} · page {page} of {pages}
-      </span>
-      <div className="flex gap-2">
-        <Button size="sm" onClick={() => onPage(page - 1)} disabled={page <= 1}>
-          <ChevronLeft className="h-4 w-4" /> Previous
-        </Button>
-        <Button size="sm" onClick={() => onPage(page + 1)} disabled={page >= pages}>
-          Next <ChevronRight className="h-4 w-4" />
-        </Button>
-      </div>
-    </nav>
-  );
-}
+const TYPE_LABEL: Record<SourceType, string> = { all: "All", brand: "Your site", competitor: "Competitors", editorial: "Third-party" };
 
 /**
- * Cited sources, filtered and paginated on the server (type, search and pages live in the URL)
- * so every stored citation and matched passage is reachable however many audits have run.
+ * Cited pages or sites, grouped, filtered and paginated on the server (view, type, search and
+ * page live in the URL), plus the passages the answers reused.
  */
 export function CitationsClient({
-  citations,
-  counts,
+  view,
+  rows,
+  typeCounts,
+  citationTotal,
   type,
   query,
   page,
   totalPages,
-  filteredTotal,
   chunks,
   passagePage,
   passagePages,
   passageTotal,
 }: {
-  citations: CitationItem[];
-  counts: { total: number; brand: number; competitor: number };
+  view: View;
+  rows: SourceRow[];
+  typeCounts: Record<SourceType, number>;
+  citationTotal: number;
   type: SourceType;
   query: string;
   page: number;
   totalPages: number;
-  filteredTotal: number;
   chunks: ChunkItem[];
   passagePage: number;
   passagePages: number;
@@ -87,90 +66,68 @@ export function CitationsClient({
   const router = useRouter();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState(query);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copied, setCopied] = useState<{ id: string; ok: boolean } | null>(null);
 
-  const go = (next: { type?: SourceType; q?: string; page?: number; pp?: number }) => {
+  const href = (next: { view?: View; type?: SourceType; q?: string; page?: number; pp?: number }) => {
     const params = new URLSearchParams();
+    const v = next.view ?? view;
     const t = next.type ?? type;
-    const q = next.q ?? searchQuery;
-    if (t !== "all") params.set("type", t);
-    if (q.trim()) params.set("q", q.trim());
-    if ((next.page ?? 1) > 1) params.set("page", String(next.page));
-    const pp = next.pp ?? passagePage;
-    if (pp > 1) params.set("pp", String(pp));
-    router.push(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false });
+    const q = next.q ?? query;
+    if (v !== "pages") params.set("view", v);
+    if (v !== "passages") {
+      if (t !== "all") params.set("type", t);
+      if (q.trim()) params.set("q", q.trim());
+      if ((next.page ?? 1) > 1) params.set("page", String(next.page));
+    } else if ((next.pp ?? 1) > 1) params.set("pp", String(next.pp));
+    return `${pathname}${params.size ? `?${params}` : ""}`;
   };
-
-  const summary: Record<Exclude<SourceType, "all">, number> = {
-    brand: counts.brand,
-    competitor: counts.competitor,
-    editorial: counts.total - counts.brand - counts.competitor,
-  };
-  const share = (n: number) => (counts.total > 0 ? Math.round((n / counts.total) * 100) : 0);
 
   const copy = async (id: string, text: string) => {
-    await navigator.clipboard.writeText(text).catch(() => null);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1500);
+    const ok = await copyText(text);
+    setCopied({ id, ok });
+    setTimeout(() => setCopied(null), ok ? 1500 : 4000);
   };
 
-  return (
-    <div className="space-y-6">
-      {/* Summary chips double as filters */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 stagger" role="group" aria-label="Filter by source type">
-        {(Object.keys(TYPE_META) as Array<Exclude<SourceType, "all">>).map((k) => {
-          const active = type === k;
-          return (
-            <button
-              key={k}
-              type="button"
-              aria-pressed={active}
-              onClick={() => go({ type: active ? "all" : k, page: 1 })}
-              className={cn(
-                "rounded-xl border bg-white p-4 text-left shadow-card transition duration-150 hover:-translate-y-0.5 hover:shadow-pop active:scale-[0.99]",
-                active ? "border-accent-500 ring-2 ring-accent-500/20" : "border-zinc-200 hover:border-zinc-300"
-              )}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-zinc-500">{TYPE_META[k].label}</span>
-                {active && <Badge tone="accent">Filtered</Badge>}
-              </div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-2xl font-semibold tracking-tight text-zinc-900 tabular">{summary[k]}</span>
-                <span className="text-sm text-zinc-500 tabular">{share(summary[k])}% of citations</span>
-              </div>
-              <div className="mt-1 text-xs text-zinc-500">{TYPE_META[k].hint}</div>
-            </button>
-          );
-        })}
-      </div>
+  const noun = view === "domains" ? "sites" : "pages";
 
-      <Card className="overflow-hidden animate-fade-up">
-        <CardHeader
-          title="Cited pages"
-          description={
-            <span className="tabular">
-              {filteredTotal === counts.total ? `${counts.total} citations` : `${filteredTotal} of ${counts.total} citations`}
-            </span>
-          }
-          actions={
-            <>
+  return (
+    <div className="space-y-4">
+      <SegmentLinks
+        label="Sources view"
+        active={view}
+        items={[
+          { id: "pages", label: "Cited pages", href: href({ view: "pages", page: 1 }) },
+          { id: "domains", label: "Cited sites", href: href({ view: "domains", page: 1 }) },
+          ...(passageTotal > 0 ? [{ id: "passages", label: "Reused passages", href: href({ view: "passages", pp: 1 }), count: passageTotal }] : []),
+        ]}
+      />
+
+      {view !== "passages" ? (
+        <Card className="overflow-hidden" id="sources-list">
+          <CardHeader
+            title={view === "domains" ? "Cited sites" : "Cited pages"}
+            description={
+              <span className="tabular">
+                {typeCounts[type]} {noun} from {citationTotal} citations, most-cited first
+              </span>
+            }
+            actions={
               <form
                 role="search"
                 className="relative w-full sm:w-64"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  go({ q: searchQuery, page: 1 });
+                  router.push(href({ q: searchQuery, page: 1 }), { scroll: false });
                 }}
               >
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" aria-hidden />
                 <input
                   type="search"
-                  aria-label="Search domain, URL or title"
-                  placeholder="Search domain, URL or title"
+                  aria-label="Search site, URL or title"
+                  placeholder="Search site, URL or title"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className={cn(inputClass, "pl-9 pr-9")}
+                  className={cn(inputClass, "pl-9 pr-10")}
                 />
                 {searchQuery && (
                   <button
@@ -178,132 +135,133 @@ export function CitationsClient({
                     aria-label="Clear search"
                     onClick={() => {
                       setSearchQuery("");
-                      go({ q: "", page: 1 });
+                      router.push(href({ q: "", page: 1 }), { scroll: false });
                     }}
-                    className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-zinc-400 hover:text-zinc-700"
+                    className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-zinc-500 hover:text-zinc-800"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    <X className="h-3.5 w-3.5" aria-hidden />
                   </button>
                 )}
               </form>
-              {(query || type !== "all") && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setSearchQuery("");
-                    go({ type: "all", q: "", page: 1 });
-                  }}
-                >
-                  Reset
-                </Button>
-              )}
-            </>
-          }
-        />
+            }
+          />
+          <div className="border-b border-zinc-100 px-5 py-3">
+            <SegmentLinks
+              label="Filter by source type"
+              active={type}
+              items={(["all", "brand", "competitor", "editorial"] as SourceType[]).map((t) => ({ id: t, label: TYPE_LABEL[t], href: href({ type: t, page: 1 }), count: typeCounts[t] }))}
+            />
+          </div>
 
-        {citations.length === 0 ? (
-          <EmptyState icon={<Search className="h-5 w-5" />} title="No citations match" description="Try another filter or clear the search." />
-        ) : (
-          <>
-            <table className="hidden w-full text-left text-base md:table">
-              <thead>
-                <tr>
-                  <th className={th}>Page</th>
-                  <th className={th}>Type</th>
-                  <th className={cn(th, "text-right")}>Position</th>
-                  <th className={cn(th, "w-12")}>
-                    <span className="sr-only">Open</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {citations.map((c) => {
-                  const meta = TYPE_META[kindOf(c)];
-                  return (
-                    <tr key={c.id} className="transition-colors duration-150 hover:bg-zinc-50">
-                      <td className={cn(td, "max-w-xl")}>
-                        <div className="font-medium text-zinc-900">{c.domain}</div>
-                        {c.title && c.title !== c.domain && <div className="truncate text-sm text-zinc-600">{c.title}</div>}
-                        <div className="truncate font-mono text-xs text-zinc-500">{c.url}</div>
+          {rows.length === 0 ? (
+            <EmptyState icon={<Search className="h-5 w-5" />} title={`No ${noun} match`} description="Try another filter or clear the search." />
+          ) : (
+            <>
+              <table className="hidden w-full text-left text-base md:table">
+                <thead>
+                  <tr>
+                    <th className={th}>{view === "domains" ? "Site" : "Page"}</th>
+                    <th className={th}>Type</th>
+                    <th className={cn(th, "whitespace-nowrap text-right")}>Answers citing</th>
+                    <th className={th}>Engines</th>
+                    <th className={cn(th, "whitespace-nowrap text-right")}>Best position</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.key} className="transition-colors duration-150 hover:bg-zinc-50">
+                      <td className={cn(td, "max-w-md")}>
+                        {view === "domains" ? (
+                          <>
+                            <div className="font-medium text-zinc-900">{r.domain}</div>
+                            <div className="text-xs text-zinc-500 tabular">{r.pages === 1 ? "1 page" : `${r.pages} pages`}</div>
+                          </>
+                        ) : (
+                          <a href={r.url} target="_blank" rel="noopener noreferrer" className="group flex min-w-0 flex-col justify-center">
+                            <span className="flex items-center gap-1.5 font-medium text-zinc-900 group-hover:text-accent-700">
+                              <span className="truncate">{r.title && r.title !== r.domain ? r.title : r.domain}</span>
+                              <ExternalLink className="h-3.5 w-3.5 shrink-0 text-zinc-500" aria-hidden />
+                              <span className="sr-only">(opens in a new tab)</span>
+                            </span>
+                            <span className="block truncate text-xs text-zinc-500">{r.url}</span>
+                          </a>
+                        )}
                       </td>
                       <td className={td}>
-                        <Badge tone={meta.tone}>{meta.label}</Badge>
+                        <EntityBadge entity={entityOf(r)} />
                       </td>
-                      <td className={cn(td, "text-right tabular text-zinc-700")}>#{c.rank}</td>
-                      <td className={td}>
-                        <a
-                          href={c.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`Open ${c.domain} in a new tab`}
-                          title="Open in a new tab"
-                          className="tap-target inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900"
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </a>
-                      </td>
+                      <td className={cn(td, "text-right tabular text-zinc-900")}>{r.answers}</td>
+                      <td className={cn(td, "text-sm text-zinc-700")}>{r.engines.map(engineLabel).join(", ") || "–"}</td>
+                      <td className={cn(td, "text-right tabular text-zinc-700")}>{r.best}</td>
                     </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <ul className="divide-y divide-zinc-100 md:hidden">
+                {rows.map((r) => {
+                  const body = (
+                    <>
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="min-w-0 font-medium text-zinc-900">
+                          <span className="line-clamp-2">{view === "domains" ? r.domain : r.title && r.title !== r.domain ? r.title : r.domain}</span>
+                        </span>
+                        <EntityBadge entity={entityOf(r)} className="shrink-0" />
+                      </div>
+                      {view !== "domains" && <div className="mt-0.5 truncate text-xs text-zinc-500">{r.url}</div>}
+                      <div className="mt-1 text-sm text-zinc-600 tabular">
+                        {r.answers} {r.answers === 1 ? "answer" : "answers"} · best position {r.best}
+                        {view === "domains" && ` · ${r.pages === 1 ? "1 page" : `${r.pages} pages`}`}
+                      </div>
+                      <div className="text-xs text-zinc-500">{r.engines.map(engineLabel).join(", ")}</div>
+                    </>
+                  );
+                  return (
+                    <li key={r.key}>
+                      {view === "domains" ? (
+                        <div className="px-4 py-3">{body}</div>
+                      ) : (
+                        <a href={r.url} target="_blank" rel="noopener noreferrer" className="block px-4 py-3 transition-colors hover:bg-zinc-50">
+                          {body}
+                        </a>
+                      )}
+                    </li>
                   );
                 })}
-              </tbody>
-            </table>
-
-            <ul className="divide-y divide-zinc-100 md:hidden">
-              {citations.map((c) => {
-                const meta = TYPE_META[kindOf(c)];
-                return (
-                  <li key={c.id}>
-                    <a href={c.url} target="_blank" rel="noopener noreferrer" className="block px-4 py-3 transition-colors hover:bg-zinc-50">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate font-medium text-zinc-900">{c.domain}</span>
-                        <Badge tone={meta.tone}>{meta.label}</Badge>
-                      </div>
-                      {c.title && c.title !== c.domain && <div className="mt-0.5 line-clamp-2 text-sm text-zinc-600">{c.title}</div>}
-                      <div className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
-                        <span className="shrink-0 tabular">Position #{c.rank}</span>
-                        <span className="min-w-0 truncate font-mono">{c.url}</span>
-                      </div>
-                    </a>
-                  </li>
-                );
-              })}
-            </ul>
-          </>
-        )}
-        <Pager label={`${filteredTotal} cited pages`} page={page} pages={totalPages} onPage={(p) => go({ page: p })} />
-      </Card>
-
-      {passageTotal > 0 && (
-        <Card className="overflow-hidden animate-fade-up">
-          <CardHeader
-            title="Passages the answer reused"
-            description={`${passageTotal} passages from cited pages that closely match what the engine wrote, strongest match first.`}
-          />
+              </ul>
+            </>
+          )}
+          <Pager page={page} totalPages={totalPages} total={typeCounts[type]} noun={noun} href={(p) => href({ page: p })} />
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <CardHeader title="Reused passages" description={`${passageTotal} passages from cited pages that closely match what the engine wrote, strongest match first.`} />
           <ul className="divide-y divide-zinc-100">
             {chunks.map((chunk) => {
               const strength = Math.round(chunk.similarityScore * 100);
+              const state = copied?.id === chunk.id ? (copied.ok ? "ok" : "failed") : "idle";
               return (
                 <li key={chunk.id}>
                   <details className="group">
                     <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 transition-colors hover:bg-zinc-50 [&::-webkit-details-marker]:hidden">
-                      <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400 transition-transform duration-200 group-open:rotate-180" />
+                      <ChevronDown className="h-4 w-4 shrink-0 text-zinc-500 transition-transform duration-200 group-open:rotate-180" aria-hidden />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium text-zinc-900">{chunk.sourceUrl}</span>
                         <span className="block truncate text-sm text-zinc-500">{chunk.matchedChunkText}</span>
                       </span>
-                      <Badge tone={matchTone(chunk.similarityScore)}>
-                        <span className="hidden sm:inline">Match strength</span> {strength}%
-                      </Badge>
+                      <span className="shrink-0 text-sm text-zinc-700 tabular" title="How closely the passage matches the answer">
+                        <span className="hidden sm:inline">Match </span>
+                        {strength}%
+                      </span>
                     </summary>
-                    <div className="space-y-3 px-4 pb-4 sm:pl-11 animate-fade-in">
-                      <blockquote className="whitespace-pre-wrap rounded-lg border border-zinc-100 bg-zinc-50 p-3 text-base leading-relaxed text-zinc-800">
+                    <div className="space-y-3 px-4 pb-4 sm:pl-11">
+                      <blockquote className="whitespace-pre-wrap rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-base leading-relaxed text-zinc-800">
                         {chunk.matchedChunkText}
                       </blockquote>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <Button size="sm" onClick={() => copy(chunk.id, chunk.matchedChunkText)}>
-                          {copiedId === chunk.id ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
-                          {copiedId === chunk.id ? "Copied" : "Copy passage"}
+                          {state === "ok" ? <Check className="h-4 w-4 text-emerald-700" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+                          <span aria-live="polite">{state === "ok" ? "Copied" : "Copy passage"}</span>
                         </Button>
                         <a
                           href={chunk.sourceUrl}
@@ -311,8 +269,13 @@ export function CitationsClient({
                           rel="noopener noreferrer"
                           className="tap-target inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900"
                         >
-                          <ExternalLink className="h-4 w-4" /> Open page
+                          <ExternalLink className="h-4 w-4" aria-hidden /> Open page
                         </a>
+                        {state === "failed" && (
+                          <span role="alert" className="flex items-center gap-1 text-xs text-red-700">
+                            <AlertTriangle className="h-3.5 w-3.5" aria-hidden /> Couldn&apos;t copy; select the text instead
+                          </span>
+                        )}
                       </div>
                     </div>
                   </details>
@@ -320,7 +283,7 @@ export function CitationsClient({
               );
             })}
           </ul>
-          <Pager label={`${passageTotal} passages`} page={passagePage} pages={passagePages} onPage={(p) => go({ pp: p })} />
+          <Pager page={passagePage} totalPages={passagePages} total={passageTotal} noun="passages" href={(p) => href({ view: "passages", pp: p })} />
         </Card>
       )}
     </div>
