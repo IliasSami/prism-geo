@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { format } from "node:util";
-import { getDbPath } from "./client";
+import { getDbPath, ensurePrivateDir, PRIVATE_FILE_MODE } from "./client";
 
 /**
  * Persistent server log. Console output (crawler, scheduler, API errors) is also appended to
@@ -37,7 +37,7 @@ export function installFileLogging(source: string): void {
   const g = globalThis as typeof globalThis & { __prismLogging?: boolean };
   if (g.__prismLogging || process.env.PRISMGEO_LOG_FILE === "off") return;
   g.__prismLogging = true;
-  fs.mkdirSync(logDir(), { recursive: true });
+  ensurePrivateDir(logDir());
   const file = logFile();
   let writes = 0;
   for (const level of ["log", "warn", "error"] as const) {
@@ -47,7 +47,7 @@ export function installFileLogging(source: string): void {
       try {
         if (writes++ % 200 === 0) rotate(file);
         const line = format(...args).replace(/\n/g, "\n    ");
-        fs.appendFileSync(file, `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${source}] ${line}\n`);
+        fs.appendFileSync(file, `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${source}] ${line}\n`, { mode: PRIVATE_FILE_MODE });
       } catch {
         // Logging must never break the app
       }
