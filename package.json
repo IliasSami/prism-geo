@@ -14,9 +14,11 @@
     "typecheck": "tsc --noEmit -p packages/db && tsc --noEmit -p packages/core && tsc --noEmit -p packages/crawler && tsc --noEmit -p packages/mcp && tsc --noEmit -p apps/web",
     "test": "node --import tsx --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\""
   },
+  "dependencies": {
+    "tsx": "^4.20.5"
+  },
   "devDependencies": {
     "@types/node": "^24.3.0",
-    "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "@eslint/eslintrc": "^3.3.7",
     "eslint": "^9.39.5",

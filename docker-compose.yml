@@ -1,11 +1,29 @@
 services:
   prismgeo:
     build: .
+    image: prismgeo:local
+    init: true                  # an init process as PID 1 forwards signals to node and reaps Chromium processes
     ports:
-      - "127.0.0.1:3333:3333"   # remove 127.0.0.1 only if you put authentication in front
+      - "127.0.0.1:3333:3333"   # remove 127.0.0.1 only if you put authentication in front (see README, Security)
     volumes:
+      # The container runs as the unprivileged pwuser (uid 1001 in the Playwright noble image).
+      # The data folder must be writable by that uid. Before the first start:
+      #   mkdir -p data && sudo chown 1001:1001 data
+      # If data/ was created by an older image (owned by root), give it to pwuser once:
+      #   docker compose run --rm --user root --entrypoint chown prismgeo -R pwuser:pwuser /app/data
       - ./data:/app/data
     environment:
       PRISMGEO_URL: http://localhost:3333
+      # Extra host names the dashboard answers to (a reverse proxy, a LAN name), comma-separated
+      # PRISMGEO_ALLOWED_HOSTS: geo.example.com
+      # The rolling schedule's hour follows this time zone (the container default is UTC)
+      # TZ: Europe/Paris
     shm_size: "1gb"             # Chromium needs more than Docker's 64 MB default
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3333/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    stop_grace_period: 30s
     restart: unless-stopped

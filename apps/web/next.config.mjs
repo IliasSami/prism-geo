@@ -1,5 +1,10 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // The monorepo root, so file tracing does not guess from lockfiles found further up
+  outputFileTracingRoot: path.join(path.dirname(fileURLToPath(import.meta.url)), "../.."),
   // Playwright is loaded from node_modules at runtime, never bundled
   serverExternalPackages: ["playwright", "playwright-core"],
   // The app ships no optimized images; turning the optimizer off removes the /_next/image attack surface
