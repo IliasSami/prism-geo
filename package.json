@@ -12,7 +12,7 @@
     "browsers": "pnpm --filter @prismgeo/crawler exec playwright install chromium",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p packages/db && tsc --noEmit -p packages/core && tsc --noEmit -p packages/crawler && tsc --noEmit -p packages/mcp && tsc --noEmit -p apps/web",
-    "test": "node --import tsx --test \"packages/*/test/*.test.ts\""
+    "test": "node --import tsx --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
