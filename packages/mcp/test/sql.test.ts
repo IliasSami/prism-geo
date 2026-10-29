@@ -75,10 +75,17 @@ test("a huge result stops at the row cap quickly", async () => {
     dbPath,
     "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT 2000000) SELECT x, printf('%0100d', x) FROM c",
   );
-  assert.ok(res.ok);
+  assert.ok(res.ok, JSON.stringify(res));
   assert.equal(res.ok && res.rowCount, 500);
   assert.equal(res.ok && res.truncated, true);
   assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+});
+
+test("repeated large queries never lose their statement mid-iteration (Node 22.13)", async () => {
+  for (let i = 0; i < 25; i++) {
+    const res = await runGuardedQuery(ro, dbPath, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT 200000) SELECT x FROM c");
+    assert.ok(res.ok && res.rowCount === 500, JSON.stringify(res));
+  }
 });
 
 test("a single slow step is abandoned at the time budget without blocking the event loop", async () => {

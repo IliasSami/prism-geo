@@ -118,11 +118,15 @@ try {
   const rows = [];
   let truncated = false;
   let timedOut = false;
-  for (const row of db.prepare(sql).iterate()) {
+  // Keep the statement referenced for the whole loop: on Node 22.13 an unreferenced statement can
+  // be garbage-collected mid-iteration ("statement has been finalized")
+  const stmt = db.prepare(sql);
+  for (const row of stmt.iterate()) {
     if (rows.length >= maxRows) { truncated = true; break; }
     rows.push(row);
     if (Date.now() - started > budgetMs) { timedOut = true; break; }
   }
+  void stmt;
   db.close();
   parentPort.postMessage({ ok: true, rows, truncated, timedOut, elapsedMs: Date.now() - started });
 } catch (err) {
