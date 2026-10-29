@@ -45,6 +45,12 @@ export function ScrollArea({
 
   return (
     <div className="relative">
+      {/* A reserved caption line, not an overlay: an overlay always hid some column header */}
+      {hint && state.scrollable && (
+        <div aria-hidden className="flex justify-end px-3 pb-1 pt-2">
+          <span className={`text-xs font-medium text-zinc-500 transition-opacity duration-150 ${state.atEnd ? "opacity-0" : "opacity-100"}`}>Scroll for more →</span>
+        </div>
+      )}
       <div
         ref={ref}
         className={`overflow-x-auto ${state.scrollable ? "fade-right" : ""} ${className || ""}`}
@@ -53,11 +59,6 @@ export function ScrollArea({
       >
         {children}
       </div>
-      {hint && state.scrollable && !state.atEnd && (
-        <span className="pointer-events-none absolute right-2 top-2 rounded-md bg-white/95 px-1.5 py-0.5 text-xs font-medium text-zinc-600 shadow-sm ring-1 ring-zinc-200">
-          Scroll for more →
-        </span>
-      )}
     </div>
   );
 }
