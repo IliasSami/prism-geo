@@ -11,3 +11,4 @@ export * from "./engines/api-engines";
 export * from "./queue/scheduler";
 export * from "./engines/remedies";
 export * from "./net/safe-fetch";
+export * from "./queue/reanalyze";

@@ -20,9 +20,11 @@ import type { SentimentType, StanceType } from "../types/index";
 /** Primary recommendation phrases. */
 const PRIMARY = /\b(best overall|top (pick|choice|recommendation)|my (top )?pick|number one|best (fit|option|choice|starting point|bet)|i'?d (recommend|pick|choose|go with)|we recommend|highly recommended|most recommended|recommend(ed)?|standout|highest[- ]rated|safest choice|go[- ]to (option|choice|tool))\b|#1\b/i;
 /** Qualified recommendation phrases ("best for a use case", runner-up). */
-const ALTERNATIVE = /\b(best for\b|(strong|solid|good|great|viable|excellent)(est)? (option|alternative|choice|pick|contender)|worth (considering|a look|trying)|also consider|(?:is )?another solid|runner[- ]up|try|inexpensive|affordable|easy to (set up|use|install)|no (major |real |significant )?(drawbacks|complaints|issues))\b/i;
+const ALTERNATIVE = /\b(best (for|if|when)\b|(strong|solid|good|great|viable|excellent)(est)? (option|alternative|choice|pick|contender)|worth (considering|a look|trying)|also consider|(?:is )?another solid|runner[- ]up|try|inexpensive|affordable|easy to (set up|use|install)|no (major |real |significant )?(drawbacks|complaints|issues))\b/i;
 /** Caveats and warnings. "inexpensive", "unlimited" and "complaint-free" do not match. */
 const CAVEAT = /\b((?<!in)expensive|pricey|overpriced|drawbacks?|downsides?|steep learning curve|high latency|lacks?|lacking|limited|caution|complain(s|ts?|ed)?|poor(ly)?|not recommended|struggles?|thin|scam|red flags?|buggy|unreliable|clunky|outdated)\b/i;
+/** Phrases just before an entity that make it the product being replaced. */
+const REPLACED_BEFORE = /\b(alternatives? (to|for)|instead of|replac(e|ing)|switch(ing)? (away )?from|moving (away )?from|cheaper than)\s*$/i;
 /** A negation shortly before a signal cancels it. */
 const NEGATION_BEFORE = /\b(no|not|never|without|hardly|isn'?t|aren'?t|doesn'?t|don'?t|wasn'?t|n't)\s+(\S+\s+){0,2}$/i;
 
@@ -46,11 +48,23 @@ export function stanceScopes(text: string, at: number, length: number, others: n
   const trimmed = line.trim();
   if (trimmed.startsWith("|")) return [line];
   if (trimmed.length < 80 && !/[.!?:;]$/.test(trimmed.replace(/\*+$/, ""))) {
-    // Heading-like line: the next non-empty line describes it
-    let nextStart = end + 1;
-    while (nextStart < text.length && text[nextStart] === "\n") nextStart++;
-    const next = nextStart < text.length ? text.slice(nextStart, lineBounds(text, nextStart).end) : "";
-    return next.trim().startsWith("|") ? [line] : [line, next];
+    // Heading-like line: the next non-empty line describes it. A short meta line in between
+    // ("From $39/month · 14-day free trial") is read through to the description after it.
+    const scopes = [line];
+    let cursor = end;
+    for (let i = 0; i < 2; i++) {
+      let nextStart = cursor + 1;
+      while (nextStart < text.length && text[nextStart] === "\n") nextStart++;
+      if (nextStart >= text.length) break;
+      const nextEnd = lineBounds(text, nextStart).end;
+      const next = text.slice(nextStart, nextEnd);
+      if (next.trim().startsWith("|") || others.some((x) => x >= nextStart && x < nextEnd)) break;
+      scopes.push(next);
+      const meta = next.trim().length < 60 && !/[.!?]$/.test(next.trim());
+      if (!meta) break;
+      cursor = nextEnd;
+    }
+    return scopes;
   }
   if (!others.some((x) => x >= start && x < end)) return [line];
 
@@ -113,6 +127,11 @@ export function stanceOf(prose: string, hits: Hit[], allEntityStarts: number[]):
   const own = new Set(hits.map((h) => h.index));
   const others = allEntityStarts.filter((x) => !own.has(x));
   for (const hit of hits) {
+    // "Best X alternatives", "alternatives to X", "instead of X": X is what is being replaced,
+    // so the praise around this occurrence belongs to the alternatives, not to X
+    const before = prose.slice(Math.max(0, hit.index - 30), hit.index);
+    const after = prose.slice(hit.index + hit.length, hit.index + hit.length + 20);
+    if (/^\W{0,3}(alternatives?|competitors?|replacements?)\b/i.test(after) || REPLACED_BEFORE.test(before)) continue;
     for (const raw of stanceScopes(prose, hit.index, hit.length, others)) {
       const scope = raw.trim().startsWith("|") ? tableCellsWithJudgement(raw) : raw;
       if (hasSignal(scope, PRIMARY)) primary = true;

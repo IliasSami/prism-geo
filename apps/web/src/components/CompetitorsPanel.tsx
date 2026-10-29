@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Trash2, Check } from "lucide-react";
+import { Plus, Trash2, Check, RefreshCw } from "lucide-react";
 import { Button, Card, CardHeader, EmptyState, IconButton, Notice, cn, inputClass } from "@/components/ui";
 import { cleanDomain, cleanedHint, domainError } from "@/components/domain";
 
@@ -57,6 +57,24 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
     }
   };
 
+  // Re-reads every stored answer with the current competitors, aliases and detection rules
+  const recheck = async () => {
+    setMessage(null);
+    setBusy("recheck");
+    try {
+      const res = await fetch("/api/reanalyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(brandId ? { brandId } : {}) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return setMessage({ ok: false, text: data.error || "Re-check failed", at: "recheck" });
+      setMessage({
+        ok: true,
+        text: `Re-checked ${data.runs} stored answers: ${data.runsChanged} changed (${data.mentionsBefore} → ${data.mentionsAfter} company mentions). Reload a page to see updated numbers.`,
+        at: "recheck",
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const row = "grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_1.6fr_auto] md:items-center";
   const newDomainError = domainError(form.domain);
   const newHint = cleanedHint(form.domain);
@@ -66,8 +84,21 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
     <Card>
       <CardHeader
         title="Competitors"
-        description="Companies whose mentions and citations are compared with yours. A changed row is saved when you click its ✓; past answers are not re-scored."
+        description="Companies whose mentions and citations are compared with yours. A changed row is saved when you click its ✓. New names apply to future audits; re-check past answers to apply them to stored ones too."
+        actions={
+          items && items.length > 0 ? (
+            <Button size="sm" variant="secondary" onClick={recheck} disabled={busy !== null}>
+              <RefreshCw className={cn("h-4 w-4", busy === "recheck" && "animate-spin")} aria-hidden />
+              {busy === "recheck" ? "Re-checking…" : "Re-check past answers"}
+            </Button>
+          ) : undefined
+        }
       />
+      {message?.at === "recheck" && (
+        <div className="px-5 pt-4">
+          <Notice tone={message.ok ? "success" : "danger"}>{message.text}</Notice>
+        </div>
+      )}
       <div className="space-y-3 p-5">
         {items === null && <div className="skeleton h-24 w-full" />}
         {items?.length === 0 && <EmptyState title="No competitors yet" description="Add the companies buyers compare you with." />}
@@ -195,7 +226,7 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
           <p id="new-competitor-domain-hint" className={cn("text-xs", newDomainError ? "text-red-700" : "text-zinc-500")}>
             {newDomainError || newHint || "Name and website are needed; other names are optional."}
           </p>
-          {message && (message.at === "new" || !items?.some((i) => i.id === message.at)) && <Notice tone={message.ok ? "success" : "danger"}>{message.text}</Notice>}
+          {message && message.at !== "recheck" && (message.at === "new" || !items?.some((i) => i.id === message.at)) && <Notice tone={message.ok ? "success" : "danger"}>{message.text}</Notice>}
         </form>
       </div>
     </Card>

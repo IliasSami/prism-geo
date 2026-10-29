@@ -56,3 +56,19 @@ test("table cells with a one-word fact are not judgements", () => {
   assert.equal(classifyStance(table, "Vocalyze").sentiment, "neutral");
   assert.equal(classifyStance(table, "Talkly").sentiment, "negative");
 });
+
+test("the product being replaced is not credited with its alternatives' praise; 'best if' under a meta line counts", () => {
+  const text = [
+    "If you're looking for alternatives to Talkly for your Shopify store, it depends on your use case.",
+    "Talkly focuses on inbound phone support.",
+    "Best Talkly alternatives for Shopify in 2026",
+    "1. Dialsy AI",
+    "From $39/month · 14-day free trial",
+    "Best if you want to make calls as well as answer them.",
+  ].join("\n");
+  assert.equal(stanceWith(text, "Talkly", ["Dialsy AI"]), "neutral");
+  assert.equal(stanceWith(text, "Dialsy AI", ["Talkly"]), "positive");
+  assert.equal(stanceWith("Switching from Northwind? The best option is to compare pricing first.", "Northwind", []), "neutral");
+  // A recommendation of the entity itself still counts
+  assert.equal(stanceWith("Northwind is the best option for high-AOV stores.", "Northwind", []), "positive");
+});

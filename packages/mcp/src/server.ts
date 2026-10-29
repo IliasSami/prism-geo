@@ -461,7 +461,7 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
       getRawDb()
         .prepare("INSERT INTO competitors (id, brand_id, name, domain, aliases_json) VALUES (?, ?, ?, ?, ?)")
         .run(id, brand.id, name, clean, JSON.stringify(aliases));
-      return json({ id, name, domain: clean, aliases, note: "Mentions are detected in future crawls; past runs are not re-scored." });
+      return json({ id, name, domain: clean, aliases, note: "Mentions are detected in future crawls. To apply the new competitor to stored answers, use Settings → Competitors → Re-check past answers (POST /api/reanalyze)." });
     }
   );
 
