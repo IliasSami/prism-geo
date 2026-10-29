@@ -18,6 +18,7 @@ import { ChatGptEngineCrawler } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
 import { runApiEngine, apiKeyFor, apiRouteFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { fetchPublicPage } from "../net/safe-fetch";
+import { readProfile, verifyProfile } from "../engines/profiles";
 import { storeManualCapture, trackedEntitiesFor, type ManualCaptureInput, type ManualCaptureResult } from "./manual-capture";
 import { chromium, type Browser } from "playwright";
 import { getChromiumExecutablePath } from "../stealth/fingerprint";
@@ -53,6 +54,7 @@ export interface RunFailure {
     | "no_ai_overview"
     | "no_answer"
     | "unavailable"
+    | "session_expired"
     | "skipped_after_blocks"
     | "skipped_after_network"
     | "skipped_setup"
@@ -369,6 +371,20 @@ export class CrawlerOrchestrator {
 
     // Engines that cannot be crawled at all are reported once instead of failing every run.
     const failures: RunFailure[] = [];
+    // Saved sessions are re-checked before use: one that expired or was signed out is reported,
+    // and the engine runs logged out (Copilot, which needs an account, is skipped)
+    for (const engine of requestedEngines) {
+      if (readProfile(engine)?.signedIn !== true) continue;
+      const session = await verifyProfile(engine);
+      if (session && !session.signedIn) {
+        failures.push({
+          engine,
+          promptId: null,
+          kind: "session_expired",
+          message: `The signed-in ${engine} session has expired or was signed out, so this audit ran logged out. Reconnect it on the Engines page.`,
+        });
+      }
+    }
     const engines = requestedEngines.filter((engine) => {
       if (engine === "copilot" && !CopilotEngineCrawler.available) {
         failures.push({ engine, promptId: null, kind: "unavailable", message: CopilotEngineCrawler.unavailableReason });

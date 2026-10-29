@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { NextResponse } from "next/server";
-import { getProfileStatuses, openSignInWindow, removeProfile, PROFILE_ENGINES, type ProfileEngine } from "@prismgeo/crawler";
+import { getProfileStatuses, openSignInWindow, removeProfile, verifyProfile, PROFILE_ENGINES, type ProfileEngine } from "@prismgeo/crawler";
 import { jsonError, readJsonObject, route } from "../../_lib/http";
 
 export const dynamic = "force-dynamic";
@@ -24,14 +24,20 @@ export const GET = route("engines/sessions GET", async () => {
 });
 
 /**
- * Opens a visible browser window on this machine where the user signs in to the engine
- * themselves. Returns immediately; the session counts as connected once the window is closed.
- * 501 when the server has no display (a headless Linux server or Docker).
+ * { engine }: opens a visible browser window on this machine where the user signs in to the
+ * engine themselves. Returns immediately; the session counts as connected only if a signed-in
+ * session cookie is found when the window closes. 501 when the server has no display.
+ * { engine, action: "verify" }: re-checks the saved session without opening a window.
  */
 export const POST = route("engines/sessions POST", async (request: Request) => {
   const body = await readJsonObject(request);
   const engine = parseEngine(body?.engine);
   if (!engine) return jsonError(`Unknown engine. Use one of ${PROFILE_ENGINES.join(", ")}.`, 400);
+  if (body?.action === "verify") {
+    const result = await verifyProfile(engine);
+    if (!result) return jsonError("That session cannot be checked right now (nothing saved, or the browser profile is in use by an audit).", 409);
+    return NextResponse.json({ success: true, engine, ...result });
+  }
   if (!hasDisplay()) {
     return jsonError(
       "This server has no screen to open a sign-in window on (a headless server or Docker). Signed-in sessions need PrismGEO running on a desktop; here, engines run logged out and Copilot stays off.",

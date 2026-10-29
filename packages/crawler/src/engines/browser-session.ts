@@ -4,7 +4,7 @@ import path from "node:path";
 import { getDbPath, getSettings, ensurePrivateDir, PRIVATE_FILE_MODE } from "@prismgeo/db";
 import { canonicalUrl } from "@prismgeo/core";
 import { generateStealthProfile, STEALTH_INJECTION_SCRIPT, getChromiumExecutablePath } from "../stealth/fingerprint";
-import { readProfile, profileDir, PROFILE_ARGS, type ProfileEngine } from "./profiles";
+import { readProfile, isProfileConnected, profileDir, PROFILE_ARGS, type ProfileEngine } from "./profiles";
 
 export interface ExtractedAnswer {
   text: string;
@@ -58,7 +58,7 @@ export interface EngineAnswer {
 }
 
 /** The capture method a browser engine will use: its signed-in profile when one is saved. */
-export const browserCaptureMethod = (engine: ProfileEngine): CaptureMethod => (readProfile(engine) ? "browser_signed_in" : "browser");
+export const browserCaptureMethod = (engine: ProfileEngine): CaptureMethod => (isProfileConnected(engine) ? "browser_signed_in" : "browser");
 
 /** Raised when the engine served a bot check, login wall or other block instead of an answer. */
 export class EngineBlockedError extends Error {}

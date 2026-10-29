@@ -280,6 +280,7 @@ const FAILURE_BUCKET: Record<string, keyof FailureCounts | null> = {
   prompt_removed: "promptRemoved",
   prompt_paused: "promptRemoved",
   unavailable: null,
+  session_expired: null,
 };
 
 export function buildVisibilityReport(input: ReportInput): Report {
