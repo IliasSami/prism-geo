@@ -56,6 +56,9 @@ importers:
       next:
         specifier: 15.5.28
         version: 15.5.28(@types/node@24.19.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      playwright:
+        specifier: ^1.64.0
+        version: 1.64.0
       react:
         specifier: ^19.0.0
         version: 19.3.0
