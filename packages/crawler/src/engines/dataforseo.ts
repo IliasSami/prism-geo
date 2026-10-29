@@ -95,73 +95,115 @@ export function markdownToText(md: string): string {
 }
 
 type Cite = { url: string; title: string };
-function addCitation(out: Cite[], seen: Set<string>, url: unknown, title: unknown): void {
-  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return;
+
+/**
+ * The parts of DataForSEO's documented responses PrismGEO reads. Every field is optional and is
+ * checked at runtime: this is data from another service, so a missing or renamed field must
+ * degrade to "no answer", never to a crash or a made-up value.
+ */
+interface DfsLink {
+  url?: unknown;
+  title?: unknown;
+  source?: unknown;
+  source_name?: unknown;
+  domain?: unknown;
+}
+interface DfsNode {
+  type?: unknown;
+  markdown?: unknown;
+  text?: unknown;
+  sources?: unknown;
+  references?: unknown;
+  annotations?: unknown;
+  components?: unknown;
+  items?: unknown;
+  sections?: unknown;
+}
+interface DfsResult extends DfsNode {
+  model?: unknown;
+  model_name?: unknown;
+  fan_out_queries?: unknown;
+}
+interface DfsTask {
+  status_code?: unknown;
+  status_message?: unknown;
+  cost?: unknown;
+  result?: unknown;
+}
+interface DfsResponse {
+  status_code?: unknown;
+  status_message?: unknown;
+  cost?: unknown;
+  tasks?: unknown;
+}
+
+const list = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+const firstText = (...vs: unknown[]): string => str(vs.find((v) => typeof v === "string" && v.trim()));
+const strings = (v: unknown): string[] => [...new Set(list<unknown>(v).filter((q): q is string => typeof q === "string" && q.trim() !== ""))];
+
+function addCitation(out: Cite[], seen: Set<string>, link: DfsLink | null | undefined, ...titleFields: Array<keyof DfsLink>): void {
+  const url = str(link?.url);
+  if (!/^https?:\/\//i.test(url)) return;
   const clean = cleanCitationUrl(url);
   if (seen.has(clean)) return;
   seen.add(clean);
-  out.push({ url: clean, title: typeof title === "string" && title.trim() ? title.trim() : clean });
+  out.push({ url: clean, title: firstText(...titleFields.map((f) => link?.[f])).trim() || clean });
 }
 
 /** ChatGPT / Gemini LLM Scraper result → answer. */
-export function parseLlmScraper(result: any): Omit<DataForSeoAnswer, "costUsd" | "provider"> {
-  const items: any[] = Array.isArray(result?.items) ? result.items : [];
-  const markdown =
-    typeof result?.markdown === "string" && result.markdown.trim()
-      ? result.markdown
-      : items.map((i) => (typeof i?.markdown === "string" ? i.markdown : "")).filter(Boolean).join("\n\n");
+export function parseLlmScraper(result: DfsResult): Omit<DataForSeoAnswer, "costUsd" | "provider"> {
+  const items = list<DfsNode>(result.items);
+  const markdown = str(result.markdown).trim() ? str(result.markdown) : items.map((i) => str(i.markdown)).filter(Boolean).join("\n\n");
   const citations: Cite[] = [];
   const seen = new Set<string>();
   // Sources the answer actually used, in answer order, then any listed only at the top level
-  for (const item of items) for (const s of Array.isArray(item?.sources) ? item.sources : []) addCitation(citations, seen, s?.url, s?.title || s?.source_name || s?.domain);
-  for (const s of Array.isArray(result?.sources) ? result.sources : []) addCitation(citations, seen, s?.url, s?.title || s?.source_name || s?.domain);
-  const fanOut: string[] = Array.isArray(result?.fan_out_queries) ? result.fan_out_queries.filter((q: unknown) => typeof q === "string" && q.trim()) : [];
+  for (const item of items) for (const s of list<DfsLink>(item.sources)) addCitation(citations, seen, s, "title", "source_name", "domain");
+  for (const s of list<DfsLink>(result.sources)) addCitation(citations, seen, s, "title", "source_name", "domain");
   return {
     responseText: markdownToText(markdown),
     citations,
-    subQueries: [...new Set(fanOut)],
+    subQueries: strings(result.fan_out_queries),
     captureMethod: "provider",
-    model: typeof result?.model === "string" ? result.model : undefined,
+    model: str(result.model) || undefined,
   };
 }
 
 /** Google organic SERP result → the AI Overview on it, or NoAiOverviewError when Google showed none. */
-export function parseSerpAiOverview(result: any, query: string): Omit<DataForSeoAnswer, "costUsd" | "provider"> {
-  const items: any[] = Array.isArray(result?.items) ? result.items : [];
-  const overview = items.find((i) => i?.type === "ai_overview");
+export function parseSerpAiOverview(result: DfsResult, query: string): Omit<DataForSeoAnswer, "costUsd" | "provider"> {
+  const overview = list<DfsNode>(result.items).find((i) => i.type === "ai_overview");
   if (!overview) throw new NoAiOverviewError(`[DataForSEO google_aio] No AI Overview shown for "${query}"`);
   const citations: Cite[] = [];
   const seen = new Set<string>();
-  const walk = (nodes: any[]) => {
-    for (const n of nodes || []) {
-      for (const r of Array.isArray(n?.references) ? n.references : []) addCitation(citations, seen, r?.url, r?.title || r?.source || r?.domain);
-      if (Array.isArray(n?.components)) walk(n.components);
+  const walk = (nodes: DfsNode[]) => {
+    for (const n of nodes) {
+      for (const r of list<DfsLink>(n.references)) addCitation(citations, seen, r, "title", "source", "domain");
+      walk(list<DfsNode>(n.components));
     }
   };
-  walk(overview.items || []);
-  const markdown =
-    typeof overview.markdown === "string" && overview.markdown.trim()
-      ? overview.markdown
-      : (overview.items || []).map((e: any) => e?.markdown || e?.text || "").filter(Boolean).join("\n\n");
+  const elements = list<DfsNode>(overview.items);
+  walk(elements);
+  const markdown = str(overview.markdown).trim()
+    ? str(overview.markdown)
+    : elements.map((e) => firstText(e.markdown, e.text)).filter(Boolean).join("\n\n");
   const text = markdownToText(markdown);
   if (!text) throw new NoAiOverviewError(`[DataForSEO google_aio] The AI Overview for "${query}" had no text`);
   return { responseText: text, citations, subQueries: [], captureMethod: "provider" };
 }
 
 /** Perplexity LLM Responses result → answer (Sonar API, so capture_method 'api'). */
-export function parseLlmResponses(result: any): Omit<DataForSeoAnswer, "costUsd" | "provider"> {
-  const sections: any[] = (Array.isArray(result?.items) ? result.items : []).flatMap((i: any) => (Array.isArray(i?.sections) ? i.sections : []));
-  const text = sections.map((s) => (typeof s?.text === "string" ? s.text : "")).filter(Boolean).join("\n\n");
+export function parseLlmResponses(result: DfsResult): Omit<DataForSeoAnswer, "costUsd" | "provider"> {
+  const sections = list<DfsNode>(result.items).flatMap((i) => list<DfsNode>(i.sections));
+  const text = sections.map((s) => str(s.text)).filter(Boolean).join("\n\n");
   const citations: Cite[] = [];
   const seen = new Set<string>();
-  for (const s of sections) for (const a of Array.isArray(s?.annotations) ? s.annotations : []) addCitation(citations, seen, a?.url, a?.title);
-  const fanOut: string[] = Array.isArray(result?.fan_out_queries) ? result.fan_out_queries.filter((q: unknown) => typeof q === "string") : [];
+  for (const s of sections) for (const a of list<DfsLink>(s.annotations)) addCitation(citations, seen, a, "title");
   return {
     responseText: markdownToText(text),
     citations,
-    subQueries: fanOut,
+    subQueries: strings(result.fan_out_queries),
     captureMethod: "api",
-    model: typeof result?.model_name === "string" ? result.model_name : undefined,
+    model: str(result.model_name) || undefined,
   };
 }
 
@@ -201,19 +243,19 @@ export async function runDataForSeo(
     throw new Error(`[DataForSEO ${engine}] request failed: ${(err as Error).message}`);
   }
   const raw = await res.text();
-  let data: any;
+  let data: DfsResponse;
   try {
-    data = JSON.parse(raw);
+    data = JSON.parse(raw) as DfsResponse;
   } catch {
     if (res.status === 401) throw dataForSeoError(40100, "unauthorized", engine);
     if (res.status === 402) throw dataForSeoError(40200, "payment required", engine);
     throw new Error(`[DataForSEO ${engine}] HTTP ${res.status}: ${raw.slice(0, 200).replace(/\s+/g, " ")}`);
   }
-  if (data?.status_code !== 20000) throw dataForSeoError(Number(data?.status_code) || res.status * 100, String(data?.status_message || res.statusText), engine);
-  const task = Array.isArray(data.tasks) ? data.tasks[0] : null;
+  if (data.status_code !== 20000) throw dataForSeoError(Number(data.status_code) || res.status * 100, str(data.status_message) || res.statusText, engine);
+  const task = list<DfsTask>(data.tasks)[0];
   if (!task) throw new Error(`[DataForSEO ${engine}] response had no task`);
-  if (task.status_code !== 20000) throw dataForSeoError(Number(task.status_code), String(task.status_message || ""), engine);
-  const result = Array.isArray(task.result) ? task.result[0] : null;
+  if (task.status_code !== 20000) throw dataForSeoError(Number(task.status_code), str(task.status_message), engine);
+  const result = list<DfsResult>(task.result)[0];
   if (!result) {
     if (engine === "google_aio") throw new NoAiOverviewError(`[DataForSEO google_aio] No results page for "${query}"`);
     throw new Error(`[DataForSEO ${engine}] task returned no result`);
