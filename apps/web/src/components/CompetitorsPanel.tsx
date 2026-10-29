@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Trash2, Check, RefreshCw } from "lucide-react";
-import { Button, Card, CardHeader, EmptyState, IconButton, Notice, cn, inputClass } from "@/components/ui";
+import { Plus, Trash2, Check, RefreshCw, Sparkles } from "lucide-react";
+import { Button, Card, CardHeader, EmptyState, IconButton, Notice, cn, engineLabel, inputClass } from "@/components/ui";
 import { cleanDomain, cleanedHint, domainError } from "@/components/domain";
 
 interface Competitor {
@@ -13,6 +13,7 @@ interface Competitor {
 }
 
 type Draft = { name: string; domain: string; aliases: string };
+type Suggestion = { name: string; answers: number; questions: number; engines: Record<string, number>; domain: string | null };
 
 const label = "mb-1 block text-xs font-medium text-zinc-600 md:sr-only";
 
@@ -28,6 +29,13 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string; at: string } | null>(null);
 
+  const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
+  const loadSuggestions = useCallback(async () => {
+    const qs = brandId ? `?brandId=${encodeURIComponent(brandId)}` : "";
+    const res = await fetch(`/api/competitors/suggestions${qs}`, { cache: "no-store" }).catch(() => null);
+    setSuggestions(res?.ok ? (await res.json()).suggestions : []);
+  }, [brandId]);
+
   const load = useCallback(async () => {
     // The client is named explicitly so another tab switching clients can't redirect these edits
     const qs = brandId ? `?brandId=${encodeURIComponent(brandId)}` : "";
@@ -40,7 +48,8 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
 
   useEffect(() => {
     load();
-  }, [load]);
+    loadSuggestions();
+  }, [load, loadSuggestions]);
 
   const send = async (method: "POST" | "PATCH" | "DELETE", body: unknown, ok: string, key: string) => {
     setMessage(null);
@@ -52,6 +61,7 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
       setMessage({ ok: true, text: ok, at: key });
       if (method === "POST") setForm({ name: "", domain: "", aliases: "" });
       await load();
+      if (method !== "PATCH") loadSuggestions();
     } finally {
       setBusy(null);
     }
@@ -228,6 +238,52 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
           </p>
           {message && message.at !== "recheck" && (message.at === "new" || !items?.some((i) => i.id === message.at)) && <Notice tone={message.ok ? "success" : "danger"}>{message.text}</Notice>}
         </form>
+
+        {suggestions && suggestions.length > 0 && (
+          <div className="space-y-2 border-t border-zinc-100 pt-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-zinc-700">
+              <Sparkles className="h-4 w-4 text-accent-600" aria-hidden />
+              Also named by the engines
+            </div>
+            <p className="text-xs text-zinc-500">
+              Companies your stored answers name that you do not track, most-named first. Track the ones buyers compare you with; their past mentions
+              count after you re-check past answers.
+            </p>
+            <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200">
+              {suggestions.map((sg) => (
+                <li key={sg.name} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-zinc-900">
+                      {sg.name}
+                      {sg.domain && <span className="ml-2 text-sm font-normal text-zinc-500">{sg.domain}</span>}
+                    </div>
+                    <div className="text-xs text-zinc-500 tabular">
+                      Named in {sg.answers} answers to {sg.questions} questions ·{" "}
+                      {Object.entries(sg.engines)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([e, n]) => `${engineLabel(e)} ${n}`)
+                        .join(", ")}
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy !== null}
+                    aria-label={`Track ${sg.name}`}
+                    onClick={() =>
+                      sg.domain
+                        ? send("POST", { name: sg.name, domain: sg.domain, aliases: "" }, `${sg.name} added`, "new")
+                        : setForm({ name: sg.name, domain: "", aliases: "" })
+                    }
+                  >
+                    <Plus className="h-4 w-4" aria-hidden />
+                    {sg.domain ? "Track" : "Add details"}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </Card>
   );
