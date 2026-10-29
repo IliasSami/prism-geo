@@ -38,6 +38,7 @@ export const KIND_PHRASE: Record<string, string> = {
   prompt_paused: "question paused during the audit",
   api_key_rejected: "API key rejected",
   unavailable: "needs a signed-in account",
+  session_expired: "signed-in session expired; ran logged out",
   error: "unexpected error",
 };
 
@@ -64,6 +65,17 @@ export interface ReasonCopy {
   technical?: string;
 }
 
+/** What reliably stops each engine blocking (shown with "blocked" failures). */
+const BLOCK_FIX: Record<string, string> = {
+  perplexity:
+    "Perplexity limits logged-out visitors: connect your free Perplexity account (sign in fully before closing the window), or add a Perplexity API key or the DataForSEO data provider.",
+  google_aio:
+    "Google limits automated searches from this computer's address: add a free SerpApi key or the DataForSEO data provider for AI Overviews. A signed-in Google session helps a little but does not stop the limit.",
+  chatgpt: "Connect your ChatGPT account, or add an OpenAI API key or the DataForSEO data provider.",
+  gemini: "Connect your Google account, or add a free Gemini API key (Google AI Studio) or the DataForSEO data provider.",
+  copilot: "Connect your Microsoft account on the Engines page.",
+};
+
 /** Why runs failed and what to do, for one failure kind; `engines` are the engines it hit. */
 export function reasonCopy(kind: string, engines: string[] = [], context: "engines-page" | "elsewhere" = "elsewhere"): ReasonCopy {
   const list = engines.map(name).join(", ") || "the engines";
@@ -87,14 +99,24 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
         cta: "Check proxy settings",
       };
     case "blocked":
-    case "skipped_after_blocks":
+    case "skipped_after_blocks": {
+      // What reliably unblocks each engine differs: Google limits this computer's address, so a key
+      // route is the dependable fix; the others mostly limit logged-out visitors, so an account fixes it
+      const keyFirst = engines.length > 0 && engines.every((e) => e === "google_aio");
+      const fixes = engines.map((e) => BLOCK_FIX[e]).filter(Boolean);
       return {
         title: `${list} blocked the questions`,
-        next: onEngines
-          ? "Connect a signed-in session below, or add an API key so blocked questions are answered through the engine's API."
-          : "Connect a signed-in session on the Engines page, or add an API key so blocked questions are answered through the engine's API.",
+        next: fixes.length ? fixes.join(" ") : "Connect a signed-in session, or add an API key or the DataForSEO data provider so blocked questions are still answered.",
+        href: keyFirst ? "/settings?tab=engines" : onEngines ? "#sessions" : "/engines#sessions",
+        cta: keyFirst ? "Add a key" : "Connect a session",
+      };
+    }
+    case "session_expired":
+      return {
+        title: `The signed-in session for ${list} expired`,
+        next: "Those runs were made logged out. Connect the engine again and sign in before closing the window.",
         href: onEngines ? "#sessions" : "/engines#sessions",
-        cta: "Connect a session",
+        cta: "Reconnect",
       };
     case "no_answer":
       return {

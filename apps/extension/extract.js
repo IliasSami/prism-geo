@@ -113,6 +113,17 @@ export function extractFromPage() {
     streaming = stopButton();
   } else if (engine === "google_aio") {
     question = clean(document.querySelector("textarea[name='q'], input[name='q']")?.value);
+    // Google AI Mode (the chat tab, udm=50) is a different surface from AI Overviews on the results page
+    const aiMode =
+      new URL(location.href).searchParams.get("udm") === "50" || all("h1, h2, div[role='heading'], span").some((el) => /^AI Mode reply\b/.test(clean(el.textContent)));
+    if (aiMode) {
+      return {
+        engine,
+        question,
+        pageUrl,
+        error: "This is Google AI Mode, not an AI Overview. PrismGEO tracks AI Overviews: open the normal results page (the All tab) and save the AI Overview shown there.",
+      };
+    }
     // The Overview block is introduced by an "AI Overview" heading; take the smallest block around
     // it that has real content beyond the heading (short Overviews are real Overviews too)
     const heading = all("h1, h2, h3, div[role='heading'], span").find((el) => clean(el.textContent) === "AI Overview");

@@ -7,7 +7,7 @@ import EngineSessionsPanel from "@/components/EngineSessionsPanel";
 import { CopyButton } from "@/components/CopyButton";
 import { Badge, Card, CardHeader, Dot, Meter, Notice, PageHeader, buttonClass, engineLabel, formatWhen, plural, type Tone } from "@/components/ui";
 import { getEngineViews, getLatestAudit } from "@/components/insights/engine-state";
-import { kindPhrase, isRealOutcome } from "@/components/engine-copy";
+import { kindPhrase, isRealOutcome, reasonCopy } from "@/components/engine-copy";
 import { buildReport } from "@/lib/report";
 
 export const dynamic = "force-dynamic";
@@ -112,16 +112,26 @@ export default async function EnginesPage() {
       canUseKey: API_ENGINES.includes(id) && apiKeyFor(id, keys) === "" && mode !== "stealth",
     };
   });
-  // Skipped runs were never sent to the engine, so they are summarised instead of listed
-  const skippedByEngine = failures
-    .filter((f) => f.promptId && f.kind === "skipped_after_blocks")
-    .reduce<Record<string, number>>((acc, f) => ((acc[f.engine] = (acc[f.engine] || 0) + 1), acc), {});
-  const recentFailures = failures
-    .filter((f) => f.promptId && f.kind !== "skipped_after_blocks")
-    .slice(-400)
-    .reverse()
-    .filter((f, i, all) => i === all.findIndex((g) => g.engine === f.engine && g.promptId === f.promptId && g.kind === f.kind))
-    .slice(0, 20);
+  // One group per engine and reason: how often, when last, what to do, and which questions
+  const groupKind = (k: string) => (k === "skipped_after_blocks" ? "blocked" : k);
+  const failureGroups = [
+    ...failures
+      .filter((f) => f.promptId || f.kind === "session_expired")
+      .reduce((acc, f) => {
+        const key = `${f.engine}:${groupKind(f.kind)}`;
+        const g = acc.get(key) ?? { engine: f.engine, kind: groupKind(f.kind), attempted: 0, skipped: 0, lastAt: f.at, message: f.message, items: [] as Array<{ promptId: string | null; at: string }> };
+        if (f.kind === "skipped_after_blocks") g.skipped++;
+        else {
+          g.attempted++;
+          g.message = f.message;
+          if (f.promptId && !g.items.some((x) => x.promptId === f.promptId)) g.items.push({ promptId: f.promptId, at: f.at });
+        }
+        if (f.at > g.lastAt) g.lastAt = f.at;
+        acc.set(key, g);
+        return acc;
+      }, new Map<string, { engine: string; kind: string; attempted: number; skipped: number; lastAt: string; message: string; items: Array<{ promptId: string | null; at: string }> }>())
+      .values(),
+  ].sort((a, b) => b.attempted + b.skipped - (a.attempted + a.skipped));
   const setupIssue = latest?.outcome.reason?.technical;
 
   return (
@@ -305,39 +315,49 @@ export default async function EnginesPage() {
               </>
             }
           />
-          {Object.keys(skippedByEngine).length > 0 && (
-            <p className="border-b border-zinc-100 px-5 py-3 text-sm text-zinc-600">
-              Not attempted because the engine was still blocking:{" "}
-              {Object.entries(skippedByEngine)
-                .map(([e, n]) => `${engineLabel(e)} ${n}`)
-                .join(", ")}
-              .
-            </p>
-          )}
-          {recentFailures.length === 0 ? (
+          {failureGroups.length === 0 ? (
             <p className="px-5 py-6 text-base text-zinc-500">No failures in recent audits.</p>
           ) : (
             <ul className="divide-y divide-zinc-100">
-              {recentFailures.map((f, i) => (
-                <li key={`${f.engine}-${f.promptId}-${i}`} className="flex flex-col gap-1 px-5 py-3 sm:flex-row sm:items-start sm:gap-4">
-                  <div className="flex shrink-0 flex-wrap items-center gap-2 sm:w-72">
-                    <Badge
-                      className="max-w-full !whitespace-normal text-left"
-                      tone={isRealOutcome(f.kind) ? "outline" : f.kind === "blocked" || f.kind === "skipped_after_blocks" ? "danger" : "warning"}
-                    >
-                      {capital(kindPhrase(f.kind))}
-                    </Badge>
-                    <span className="text-sm font-medium text-zinc-700">{engineLabel(f.engine)}</span>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="line-clamp-2 text-base text-zinc-900">{promptText.get(f.promptId || "") || "Deleted prompt"}</p>
-                    <p className="line-clamp-2 break-words text-xs text-zinc-500">{f.message}</p>
-                  </div>
-                  <time className="shrink-0 text-xs text-zinc-500 tabular" dateTime={f.at}>
-                    {formatWhen(f.at)}
-                  </time>
-                </li>
-              ))}
+              {failureGroups.map((g) => {
+                const fix = reasonCopy(g.kind, [g.engine], "engines-page");
+                return (
+                  <li key={`${g.engine}:${g.kind}`} className="space-y-2 px-5 py-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={isRealOutcome(g.kind) ? "outline" : g.kind === "blocked" ? "danger" : "warning"}>{capital(kindPhrase(g.kind))}</Badge>
+                      <span className="font-medium text-zinc-900">{engineLabel(g.engine)}</span>
+                      <span className="text-sm text-zinc-500 tabular">
+                        {g.attempted > 0 && plural(g.attempted, g.kind === "blocked" ? "attempt" : "run")}
+                        {g.skipped > 0 && `${g.attempted > 0 ? " · " : ""}${g.skipped} not attempted while it kept blocking`} · last {formatWhen(g.lastAt)}
+                      </span>
+                    </div>
+                    {!isRealOutcome(g.kind) && (
+                      <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
+                        <span className="min-w-0 flex-1">{fix.next}</span>
+                        <Link href={fix.href} className={buttonClass("secondary", "sm")}>
+                          {fix.cta}
+                        </Link>
+                      </div>
+                    )}
+                    <p className="break-words text-xs text-zinc-500">Engine said: {g.message}</p>
+                    {g.items.length > 0 && (
+                      <details className="text-sm">
+                        <summary className="cursor-pointer text-zinc-600 hover:text-zinc-900">{plural(g.items.length, "question")} affected</summary>
+                        <ul className="mt-2 space-y-1 pl-4">
+                          {g.items.slice(0, 50).map((x) => (
+                            <li key={`${x.promptId}-${x.at}`} className="flex justify-between gap-3 text-zinc-700">
+                              <span className="min-w-0">{promptText.get(x.promptId || "") || "Deleted prompt"}</span>
+                              <time className="shrink-0 text-xs text-zinc-500 tabular" dateTime={x.at}>
+                                {formatWhen(x.at)}
+                              </time>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Card>

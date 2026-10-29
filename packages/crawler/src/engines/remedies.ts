@@ -6,18 +6,19 @@ export type FailureKind = "blocked" | "no_answer" | "no_ai_overview" | "error" |
 
 const BLOCK_REMEDIES: Record<string, string> = {
   google_aio:
-    "Google limits automated searches per IP. Add a free SerpApi key (Settings → Engines) to read AI Overviews through SerpApi, connect a signed-in Google session, or lower the daily prompt count.",
+    "Google limits automated searches from this computer's address. Add a free SerpApi key or the DataForSEO data provider (Settings → Engines & access) to read AI Overviews; a signed-in Google session helps a little but does not lift the limit.",
   perplexity:
-    "Perplexity caps anonymous use. Connect your free Perplexity account (Engines → Connect session) or add a Perplexity API key.",
-  chatgpt: "Connect your ChatGPT account (Engines → Connect session) or add an OpenAI API key, and keep the rolling schedule small.",
-  gemini: "Add a free Gemini API key from Google AI Studio (Settings → Engines); it also returns sources and search queries.",
-  copilot: "Copilot needs a signed-in Microsoft account: Engines → Connect session.",
+    "Perplexity limits logged-out visitors. Connect your free Perplexity account (Engines → Connect, and sign in fully before closing the window), or add a Perplexity API key or the DataForSEO data provider.",
+  chatgpt: "Connect your ChatGPT account (Engines → Connect), or add an OpenAI API key or the DataForSEO data provider, and keep the daily schedule small.",
+  gemini: "Connect your Google account, or add a free Gemini API key from Google AI Studio (it also returns sources and searches) or the DataForSEO data provider.",
+  copilot: "Copilot needs a signed-in Microsoft account: Engines → Connect, and sign in before closing the window.",
 };
 
 export function engineRemedy(engine: string, kind: FailureKind): string | null {
   if (kind === "skipped_after_network") kind = "network";
   if (kind === "skipped_setup") kind = "setup";
   if (kind === "blocked" || kind === "skipped_after_blocks" || kind === "unavailable") return BLOCK_REMEDIES[engine] ?? null;
+  if (kind === "session_expired") return "The saved signed-in session expired or was signed out, so the engine ran logged out. Connect it again on the Engines page.";
   if (kind === "no_ai_overview") return "Google showed no AI Overview for this search. That is a real result, not an error.";
   if (kind === "no_answer") return "The page loaded without a readable answer. If this repeats, the engine's page may have changed; check data/crawl-debug/.";
   if (kind === "network")
