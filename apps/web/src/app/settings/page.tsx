@@ -435,7 +435,7 @@ function Settings() {
                   label={
                     <>
                       Google Gemini{" "}
-                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="font-normal text-accent-700 hover:underline">
+                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="inline-block py-1 font-normal text-accent-700 hover:underline">
                         free tier
                       </a>
                     </>
@@ -452,7 +452,7 @@ function Settings() {
                   label={
                     <>
                       SerpApi for Google AI Overviews{" "}
-                      <a href="https://serpapi.com/users/sign_up" target="_blank" rel="noreferrer" className="font-normal text-accent-700 hover:underline">
+                      <a href="https://serpapi.com/users/sign_up" target="_blank" rel="noreferrer" className="inline-block py-1 font-normal text-accent-700 hover:underline">
                         free tier
                       </a>
                     </>
@@ -469,7 +469,7 @@ function Settings() {
                   label={
                     <>
                       OpenAI (ChatGPT){" "}
-                      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="font-normal text-accent-700 hover:underline">
+                      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="inline-block py-1 font-normal text-accent-700 hover:underline">
                         get a key (paid)
                       </a>
                     </>
@@ -485,7 +485,7 @@ function Settings() {
                   label={
                     <>
                       Perplexity{" "}
-                      <a href="https://www.perplexity.ai/settings/api" target="_blank" rel="noreferrer" className="font-normal text-accent-700 hover:underline">
+                      <a href="https://www.perplexity.ai/settings/api" target="_blank" rel="noreferrer" className="inline-block py-1 font-normal text-accent-700 hover:underline">
                         get a key (paid)
                       </a>
                     </>

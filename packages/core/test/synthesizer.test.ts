@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { IcpPromptSynthesizer, classifyValueProp, deriveCategory, categoryForms, type BrandProfileInput } from "../src/index";
 
-const description = "AI sales team for ecommerce brands: AI voice agents that call shoppers who abandon checkout and recover the sale.";
+const description = "Revenue team for online stores: AI voice agents that phone shoppers who leave checkout and win back the order.";
 const profile: BrandProfileInput = {
   brandName: "Northwind Voice",
   domain: "northwindvoice.ai",
@@ -14,13 +14,13 @@ const profile: BrandProfileInput = {
     { name: "Hoop Voice", domain: "hoopvoice.ai" },
     { name: "Talkly", domain: "talkly.com" },
   ],
-  valuePropositions: ["Calls shoppers within minutes of an abandoned checkout", "Works with Shopify and Klaviyo", "Pay per recovered order", "Shoppers abandon checkout when shipping costs surprise them"],
+  valuePropositions: ["Rings shoppers soon after an abandoned checkout", "Works with Shopify and Klaviyo", "Pay per recovered order", "Shoppers abandon checkout when shipping costs surprise them"],
 };
 
 test("value propositions are typed as pain, capability or pricing model", () => {
   assert.equal(classifyValueProp("Pay per recovered order"), "pricing");
   assert.equal(classifyValueProp("Works with Shopify and Klaviyo"), "capability");
-  assert.equal(classifyValueProp("Calls shoppers within minutes of an abandoned checkout"), "capability");
+  assert.equal(classifyValueProp("Rings shoppers soon after an abandoned checkout"), "capability");
   assert.equal(classifyValueProp("Shoppers abandon checkout when shipping costs surprise them"), "pain");
 });
 
@@ -41,14 +41,14 @@ test("generated questions are grammatical, typed, varied, unprimed and competito
 
   // never the description sentence, never a full stop inside a template, no doubled words
   for (const t of texts) {
-    assert.ok(!t.includes("recover the sale"), t);
+    assert.ok(!t.includes("win back the order"), t);
     assert.ok(!/\w\.\s+\w+\s+(tools|vendor)\b/.test(t), t);
     assert.ok(!/\b(\w+) \1\b/i.test(t), t);
     assert.ok(!/best way to handle (works|pay|calls)/i.test(t), `value prop pasted into a pain template: ${t}`);
   }
   assert.ok(texts.includes("Which AI voice agents integrate with Shopify and Klaviyo?"));
   assert.ok(texts.includes("Are there AI voice agents that charge only per recovered order?"));
-  assert.ok(texts.includes("Is there an AI voice agent that calls shoppers within minutes of an abandoned checkout?"));
+  assert.ok(texts.includes("Is there an AI voice agent that rings shoppers soon after an abandoned checkout?"));
   assert.ok(texts.some((t) => /^Shoppers abandon checkout when shipping costs surprise them\. What actually works/.test(t)), "symptom phrasing");
 
   // unbranded prompts never name the brand; branded prompts never include the domain
@@ -73,4 +73,14 @@ test("a profile with only a category still yields usable questions", () => {
   assert.ok(prompts.length >= 8);
   assert.ok(prompts.some((p) => p.queryText === "What are the best cart recovery tools right now?"));
   assert.ok(prompts.every((p) => !p.queryText.includes("this category")));
+});
+
+test("category grammar: head noun before a qualifying phrase, uncountable nouns stay singular", () => {
+  assert.deepEqual(
+    { one: categoryForms("AI voice agents for abandoned checkout recovery").one, many: categoryForms("AI voice agents for abandoned checkout recovery").many },
+    { one: "AI voice agent for abandoned checkout recovery", many: "AI voice agents for abandoned checkout recovery" },
+  );
+  assert.equal(categoryForms("accounting software for online shops").many, "accounting software for online shops");
+  assert.equal(categoryForms("email marketing platform").many, "email marketing platforms");
+  assert.equal(categoryForms("cart recovery").one, "cart recovery tool");
 });

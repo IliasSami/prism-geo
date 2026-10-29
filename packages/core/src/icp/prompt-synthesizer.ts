@@ -26,7 +26,7 @@ export type ValuePropKind = "pain" | "capability" | "pricing";
 const PRODUCT_NOUNS =
   /\b(agents?|tools?|software|platforms?|apps?|applications?|assistants?|services?|solutions?|systems?|bots?|chatbots?|crms?|trackers?|plugins?|extensions?|suites?|engines?|providers?|vendors?|marketplaces?|dashboards?|apis?)$/i;
 const CAPABILITY_VERB =
-  /^(calls?|works?|integrates?|syncs?|connects?|sends?|tracks?|automates?|recovers?|answers?|books?|qualifies|routes?|handles?|supports?|offers?|provides?|lets|helps?|turns?|reduces?|increases?|improves?|captures?|detects?|monitors?|generates?|creates?|runs?|plugs?|uses?|follows?|texts?|writes?|reads?|speaks?|schedules?|finds?|scores?|builds?|launches?|replaces?|cuts?|boosts?|delivers?|includes?|comes?)$/i;
+  /^(calls?|rings?|phones?|dials?|reaches?|contacts?|emails?|messages?|notifies|alerts?|reminds?|works?|integrates?|syncs?|connects?|sends?|tracks?|automates?|recovers?|answers?|books?|qualifies|routes?|handles?|supports?|offers?|provides?|lets|helps?|turns?|reduces?|increases?|improves?|captures?|detects?|monitors?|generates?|creates?|runs?|plugs?|uses?|follows?|texts?|writes?|reads?|speaks?|schedules?|finds?|scores?|builds?|launches?|replaces?|cuts?|boosts?|delivers?|includes?|comes?)$/i;
 const PRICING = /\b(pay|pays|paid|pricing|priced|price|per (recovered|order|call|minute|seat|user|month|lead|sale|conversion)|free (plan|tier|trial)|commission|subscription|flat (fee|rate)|no (monthly|setup) fee|revenue share|%|percent)\b/i;
 const PAIN = /\b(abandon\w*|lost|losing|lose|churn\w*|missed|miss|slow|manual|wasted?|low|drop\w*|struggl\w*|too many|can'?t|cannot|no time|leak\w*|expensive|costly|ignored?|unanswered|bounce\w*)\b/i;
 const INTEGRATION = /^(?:works|integrates|syncs|connects|plugs)\s+(?:in(?:to)?\s+|with\s+|to\s+)(.+)$/i;
@@ -46,7 +46,10 @@ export function classifyValueProp(vp: string): ValuePropKind {
   return "capability";
 }
 
+/** Nouns with no plural form in buyer speech ("accounting software", not "softwares"). */
+const UNCOUNTABLE = /^(software|hardware|middleware|firmware|analytics|tooling|crm|erp|seo|insurance|equipment|data|feedback)$/i;
 function pluralise(noun: string): string {
+  if (UNCOUNTABLE.test(noun)) return noun;
   if (/(s|x|z|ch|sh)$/i.test(noun)) return noun.endsWith("s") && !/(ss|us)$/i.test(noun) ? noun : `${noun}es`;
   if (/[^aeiou]y$/i.test(noun)) return `${noun.slice(0, -1)}ies`;
   return `${noun}s`;
@@ -97,12 +100,16 @@ export function deriveCategory(profile: Pick<BrandProfileInput, "category" | "ni
 /** Singular and plural forms used in templates ("AI voice agent" / "AI voice agents", "cart recovery tool(s)"). */
 export function categoryForms(category: string): { one: string; many: string; article: string } {
   const w = words(category);
-  const last = w[w.length - 1] || "";
+  // The head noun comes before a qualifying phrase: "AI voice agents | for abandoned checkout recovery"
+  const cut = w.findIndex((x, i) => i > 0 && /^(for|with|that|which|to|in|on|from|by|of)$/i.test(x));
+  const head = cut > 0 ? w.slice(0, cut) : w;
+  const tail = cut > 0 ? ` ${w.slice(cut).join(" ")}` : "";
+  const last = head[head.length - 1] || "";
   let one: string;
   let many: string;
   if (PRODUCT_NOUNS.test(last)) {
-    one = [...w.slice(0, -1), singularise(last)].join(" ");
-    many = [...w.slice(0, -1), pluralise(singularise(last))].join(" ");
+    one = [...head.slice(0, -1), singularise(last)].join(" ") + tail;
+    many = [...head.slice(0, -1), pluralise(singularise(last))].join(" ") + tail;
   } else {
     one = `${category} tool`;
     many = `${category} tools`;

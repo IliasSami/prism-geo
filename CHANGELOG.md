@@ -10,11 +10,37 @@ The first public beta. PrismGEO is usable for day-to-day tracking, but expect ro
 
 ### What it does
 
-- Asks ChatGPT, Gemini, Perplexity, Google AI Overviews and Microsoft Copilot the buyer questions you track, through logged-out or signed-in browser sessions or official APIs, and stores the answers they actually return.
+- Asks ChatGPT, Gemini, Perplexity and Google AI Overviews (and Microsoft Copilot with a signed-in session) the buyer questions you track, through logged-out or signed-in browser sessions or official APIs, and stores the answers they actually return.
 - Measures how often each engine names and cites your brand and your competitors, with 95% ranges for small samples, and lists the prompts you lose and the sources engines rely on.
 - Records failures (blocks, rate limits, no AI Overview) with a reason instead of counting them as answers.
 - Rolling daily audits, a command-line crawler for cron, CSV and JSON exports, database backup.
 - An MCP connector so Claude (Desktop, Code, claude.ai) can read the data and start audits.
+
+### Measurement accuracy
+
+Tested against realistic answers in each engine's style, labelled by hand: entity-level errors dropped from 28 of 37 checks to 1 (by design: a brand named in the question gets no rank).
+
+- Vendor names that an engine links are kept in the answer text; citation labels and raw URLs no longer count as mentions.
+- One shared matcher for the crawler and the reports: dash and space variants of names ("Hoop – AI" = "Hoop - AI"), accents and case ("Équipe Délice" = "equipe delice"), no matches inside URLs, and marketplace or review hosts (App Store listings, G2) never turn into names.
+- Stance reads every mention in its own clause, handles negation ("not expensive", "no major drawbacks") and lets an explicit recommendation outweigh a caveat.
+- Engine error and rate-limit pages are rejected instead of stored as answers; answers cut off mid-stream are retried.
+- A company named in the question is excluded from its own mention rate, and questions that name your brand are reported separately and never shown as a loss.
+- Ranges are computed per question (answers to the same question are correlated), so small samples get honestly wide ranges.
+- New: brand accuracy (answers that confuse you with a look-alike domain), question coverage per engine, the AI Overview rate, and a warning when an engine's answers mix capture methods.
+- Reused passages are only stored when the answer shares phrases with the page, with the answer sentence kept alongside.
+- Blocked engines no longer bias results toward the first questions: each engine asks in its own shuffled order, the daily schedule picks the stalest questions per engine, and an audit no longer waits on engines that are all cooling down.
+- The question generator writes grammatical, natural questions from a short category, covers capabilities, pricing and buyer symptoms, and never puts your domain in branded questions.
+- Entities are tracked by id, so renaming a competitor keeps its history; paused competitors and questions are left out.
+
+### Product and design
+
+- New brand: logo, favicon, social preview image and a violet palette, with one colour meaning per role (you, competitor, third party) and red, amber and green reserved for status.
+- Pages agree with each other, navigation names match page titles, and every failure is explained in plain words with the next step, the same way in the header, Overview, Engines and the audit dialog.
+- Accessible by default: text at least 12px with WCAG contrast, 36px controls (44px on touch screens), named controls, focus management in dialogs and the mobile menu.
+- Phone and tablet layouts, a full-screen answer drawer, readable markdown answers, Sources grouped by page or site, loading, error and not-found pages.
+- Each browser keeps its own selected client; edits always name their client.
+- Category and "what makes you different" are editable; the daily schedule runs in your time zone.
+- Database upgrades are versioned and automatic, take a backup first, and keep existing history visible; database and log files are private to their owner.
 
 ### Security and operations
 

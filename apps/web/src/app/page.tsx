@@ -218,7 +218,7 @@ export default async function OverviewPage() {
             {sites.map((s) => (
               <li key={s.domain} className="flex items-center justify-between gap-3 px-5 py-2.5">
                 <span className="flex min-w-0 items-center gap-2">
-                  <Link href={`/citations?view=domains&q=${encodeURIComponent(s.domain)}`} className="truncate font-medium text-zinc-900 hover:text-accent-700">
+                  <Link href={`/citations?view=domains&q=${encodeURIComponent(s.domain)}`} className="inline-flex min-h-9 min-w-0 items-center truncate font-medium text-zinc-900 hover:text-accent-700">
                     {s.domain}
                   </Link>
                   <EntityBadge entity={entityOf(s)} />

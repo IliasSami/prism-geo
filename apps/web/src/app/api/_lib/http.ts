@@ -46,11 +46,45 @@ export async function readJsonObject(request: Request): Promise<Record<string, u
   return body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
 }
 
-/** One readable sentence from the first validation issues, e.g. "brand.domain: Enter a domain like example.com". */
+/** Words for body fields, so errors read "Question 2: …" rather than "prompts.1: …". */
+const FIELD_WORDS: Record<string, string> = {
+  prompts: "Question",
+  competitors: "Competitor",
+  aliases: "Other name",
+  valueProps: "Difference",
+  domain: "website",
+  name: "name",
+  query: "",
+  queryText: "",
+  brand: "",
+  crawler: "",
+  engines: "Engine",
+  byok: "API key",
+};
+
+function fieldLabel(path: PropertyKey[]): string {
+  const parts: string[] = [];
+  for (const seg of path) {
+    if (typeof seg === "number") {
+      if (parts.length) parts[parts.length - 1] = `${parts[parts.length - 1]} ${seg + 1}`;
+      continue;
+    }
+    const key = String(seg);
+    const word = key in FIELD_WORDS ? FIELD_WORDS[key] : key.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+    if (word) parts.push(word);
+  }
+  const label = parts.join(" ").trim();
+  return label ? label.charAt(0).toUpperCase() + label.slice(1) : "";
+}
+
+/** One readable sentence from the first validation issues, e.g. "Competitor 2 website: Enter a domain like example.com". */
 export function describeIssues(error: z.ZodError): string {
   return error.issues
     .slice(0, 3)
-    .map((issue) => (issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message))
+    .map((issue) => {
+      const label = fieldLabel(issue.path);
+      return label ? `${label}: ${issue.message}` : issue.message;
+    })
     .join("; ");
 }
 

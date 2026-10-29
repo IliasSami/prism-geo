@@ -138,7 +138,7 @@ export const CASES: Case[] = [
       "Talkly",
       "Best for: Shopify brands that want a done-for-you setup. Talkly's agents call abandoned checkouts and sync results to Klaviyo.",
       "Northwind Voice",
-      "Best for: paying only for recovered orders. Northwind markets itself as an AI sales team for ecommerce.",
+      "Best for: paying only for recovered orders. Northwind markets itself as a revenue team for online stores.",
       "Vocalyze",
       "Best for: teams that want to build custom voice workflows.",
       "Which one should you choose?",

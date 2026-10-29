@@ -316,7 +316,7 @@ export default async function EnginesPage() {
                 <li key={`${f.engine}-${f.promptId}-${i}`} className="flex flex-col gap-1 px-5 py-3 sm:flex-row sm:items-start sm:gap-4">
                   <div className="flex shrink-0 flex-wrap items-center gap-2 sm:w-72">
                     <Badge
-                      className="whitespace-nowrap"
+                      className="max-w-full !whitespace-normal text-left"
                       tone={isRealOutcome(f.kind) ? "outline" : f.kind === "blocked" || f.kind === "skipped_after_blocks" ? "danger" : "warning"}
                     >
                       {capital(kindPhrase(f.kind))}
