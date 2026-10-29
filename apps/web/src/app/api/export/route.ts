@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
 import { getRawDb } from "@prismgeo/db";
+import { renderReportMarkdown } from "@prismgeo/core";
+import { buildReport } from "@/lib/report";
 import { jsonError, route } from "../_lib/http";
 import { resolveBrand } from "../_lib/brand";
 import { sanitizeCsvCell } from "../_lib/csv";
 
 export const dynamic = "force-dynamic";
 
-const FORMATS = ["json", "csv"] as const;
-const TYPES = ["citations", "full"] as const;
+const FORMATS = ["json", "csv", "md"] as const;
+const TYPES = ["citations", "full", "report"] as const;
 
 const slug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "client";
 
@@ -38,16 +40,17 @@ const CITATIONS_SQL = `
 
 /**
  * Exports a client's data: ?type=citations (default) as ?format=json (default) or csv, or
- * ?type=full as one JSON snapshot. Every row is exported; the CSV is streamed. Filenames name the
+ * ?type=full as one JSON snapshot, or ?type=report&format=md as a shareable Markdown summary. Every row is exported; the CSV is streamed. Filenames name the
  * client and the date. Exports never contain API keys or other settings.
  */
 export const GET = route("export", async (request: Request) => {
   const { searchParams } = new URL(request.url);
   const format = searchParams.get("format") || "json";
   const type = searchParams.get("type") || "citations";
-  if (!(FORMATS as readonly string[]).includes(format)) return jsonError(`Unknown format "${format}". Use json or csv.`, 400);
-  if (!(TYPES as readonly string[]).includes(type)) return jsonError(`Unknown type "${type}". Use citations or full.`, 400);
+  if (!(FORMATS as readonly string[]).includes(format)) return jsonError(`Unknown format "${format}". Use json, csv or md.`, 400);
+  if (!(TYPES as readonly string[]).includes(type)) return jsonError(`Unknown type "${type}". Use citations, full or report.`, 400);
   if (type === "full" && format !== "json") return jsonError("The full snapshot is only available as JSON", 400);
+  if ((type === "report") !== (format === "md")) return jsonError("The Markdown format is for ?type=report, which is only available as md", 400);
 
   const resolved = resolveBrand(request, searchParams.get("brandId"));
   if (!resolved.ok) return resolved.response;
@@ -55,6 +58,18 @@ export const GET = route("export", async (request: Request) => {
   const date = new Date().toISOString().slice(0, 10);
   const base = `prismgeo-${slug(brand.name)}-${date}`;
   const sqlite = getRawDb();
+
+  if (type === "report") {
+    const competitors = (sqlite.prepare("SELECT name FROM competitors WHERE brand_id = ? AND active = 1 ORDER BY created_at").all(brand.id) as Array<{ name: string }>).map((c) => c.name);
+    const md = renderReportMarkdown(buildReport(brand), {
+      brand: { name: brand.name, domain: brand.domain, category: brand.category },
+      generatedAt: new Date().toISOString(),
+      competitors,
+    });
+    return new NextResponse(md, {
+      headers: { "Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": `attachment; filename="${base}-report.md"` },
+    });
+  }
 
   if (type === "citations") {
     if (format === "json") {

@@ -1,10 +1,10 @@
 import { activeBrandFromCookies } from "@/app/api/_lib/brand";
-import { ArrowRight, Lightbulb } from "lucide-react";
+import { ArrowRight, Download, Lightbulb } from "lucide-react";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { buildReport, findOpportunities } from "@/lib/report";
-import { Badge, Card, CardHeader, EntityBadge, Notice, PageHeader, Stat, engineLabel, entityOf, formatWhen, meterScale, plural } from "@/components/ui";
+import { Badge, Card, CardHeader, EntityBadge, Notice, PageHeader, Stat, buttonClass, engineLabel, entityOf, formatWhen, meterScale, plural } from "@/components/ui";
 import { EngineIssues, FirstRunChecklist, LastAuditFailed, RateMeter, ScaleNote } from "@/components/insights/parts";
 import { setupCounts } from "@/components/insights/data";
 import { getEngineViews, getLatestAudit } from "@/components/insights/engine-state";
@@ -51,6 +51,14 @@ export default async function OverviewPage() {
             {plural(report.totalAnswers, "unbranded answer")} · {plural(report.engines.length, "engine")}
             {report.lastCapture && <> · updated {formatWhen(report.lastCapture)}</>}
           </span>
+        }
+        actions={
+          report.totalAnswers > 0 ? (
+            <a href={`/api/export?type=report&format=md&brandId=${encodeURIComponent(brand.id)}`} className={buttonClass("secondary", "md")}>
+              <Download className="h-4 w-4" aria-hidden />
+              Download report
+            </a>
+          ) : undefined
         }
       />
 

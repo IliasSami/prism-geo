@@ -114,6 +114,7 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
           name: brand.name,
           domain: brand.domain,
           description: brand.description,
+          category: brand.category,
           aliases: JSON.parse(brand.aliasesJson || "[]"),
           valueProps: JSON.parse(brand.valuePropsJson || "[]"),
         },
