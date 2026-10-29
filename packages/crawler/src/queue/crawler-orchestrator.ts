@@ -2,7 +2,6 @@ import { getSettings, getRawDb, nowIso, rowToBrand } from "@prismgeo/db";
 import {
   ReverseRagParser,
   detectMentions,
-  entityTerms,
   lookalikeDomains,
   prominenceScore,
   seededShuffle,
@@ -17,6 +16,7 @@ import { ChatGptEngineCrawler } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
 import { runApiEngine, apiKeyFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { fetchPublicPage } from "../net/safe-fetch";
+import { storeManualCapture, trackedEntitiesFor, type ManualCaptureInput, type ManualCaptureResult } from "./manual-capture";
 import { chromium, type Browser } from "playwright";
 import { getChromiumExecutablePath } from "../stealth/fingerprint";
 import crypto from "node:crypto";
@@ -296,6 +296,14 @@ export interface CrawlEntity extends TrackedEntity {
 }
 
 export class CrawlerOrchestrator {
+  /**
+   * Stores an answer a person captured with the PrismGEO extension, through the same pipeline as a
+   * crawled answer (see manual-capture.ts).
+   */
+  public static storeManualCapture(input: ManualCaptureInput): Promise<ManualCaptureResult> {
+    return storeManualCapture(input, (args) => CrawlerOrchestrator.persistRun({ ...args, pageCache: new Map() }));
+  }
+
   /** True while `batchId` is still being executed by this process. */
   public static isRunning(batchId: string): boolean {
     return activeBatches.has(batchId);
@@ -312,28 +320,8 @@ export class CrawlerOrchestrator {
     const brandRow = sqlite.prepare("SELECT * FROM brands WHERE id = ?").get(brandId) as Record<string, any> | undefined;
     if (!brandRow) throw new Error(`Brand not found: ${brandId}`);
     const brand = rowToBrand(brandRow);
-    const brandAliases: string[] = JSON.parse(brand.aliasesJson || "[]").filter((a: unknown) => typeof a === "string" && a.trim().length > 0);
-
     // Paused competitors are neither tracked nor reported
-    const competitors = (
-      sqlite.prepare("SELECT id, name, domain, aliases_json FROM competitors WHERE brand_id = ? AND active = 1 ORDER BY created_at").all(brandId) as Array<{
-        id: string;
-        name: string;
-        domain: string;
-        aliases_json: string | null;
-      }>
-    ).filter((c) => c.name?.trim());
-    const competitorDomains = competitors.map((c) => c.domain);
-    const trackedEntities: CrawlEntity[] = [
-      { key: "brand", competitorId: null, name: brand.name, isTarget: true, terms: entityTerms(brand.name, brandAliases, brand.domain) },
-      ...competitors.map((c) => ({
-        key: c.id,
-        competitorId: c.id,
-        name: c.name,
-        isTarget: false,
-        terms: entityTerms(c.name, JSON.parse(c.aliases_json || "[]"), c.domain),
-      })),
-    ];
+    const { entities: trackedEntities, competitorDomains } = trackedEntitiesFor(brand);
 
     // Deactivated prompts are kept for history but never crawled
     const rawPrompts = (

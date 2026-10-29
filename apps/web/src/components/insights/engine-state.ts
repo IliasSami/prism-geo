@@ -73,7 +73,7 @@ function group(errors: Array<{ engine: string; kind: string }>): Issue[] {
 const recentBatches = (brandId: string): Batch[] =>
   getRawDb()
     .prepare(
-      "SELECT id, status, created_at, failed_runs, total_runs, errors_json FROM crawl_batches WHERE brand_id = ? AND status <> 'running' ORDER BY created_at DESC LIMIT 10"
+      "SELECT id, status, created_at, failed_runs, total_runs, errors_json FROM crawl_batches WHERE brand_id = ? AND status <> 'running' AND COALESCE(owner, '') <> 'manual-capture' ORDER BY created_at DESC LIMIT 10"
     )
     .all(brandId) as unknown as Batch[];
 

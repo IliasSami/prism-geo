@@ -49,7 +49,7 @@ export default async function EnginesPage() {
 
   const batches = brand
     ? (sqlite
-        .prepare("SELECT id, created_at, errors_json FROM crawl_batches WHERE brand_id = ? AND status <> 'running' ORDER BY created_at DESC LIMIT ?")
+        .prepare("SELECT id, created_at, errors_json FROM crawl_batches WHERE brand_id = ? AND status <> 'running' AND COALESCE(owner, '') <> 'manual-capture' ORDER BY created_at DESC LIMIT ?")
         .all(brand.id, RECENT_BATCHES) as Array<{ id: string; created_at: string; errors_json: string | null }>)
     : [];
   const batchIds = batches.map((b) => b.id);

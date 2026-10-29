@@ -317,7 +317,7 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
       const brand = resolveBrand(brand_id);
       const batch = batch_id
         ? get("SELECT * FROM crawl_batches WHERE id = ?", batch_id)
-        : get("SELECT * FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1", brand.id);
+        : get("SELECT * FROM crawl_batches WHERE brand_id = ? AND COALESCE(owner, '') <> 'manual-capture' ORDER BY created_at DESC LIMIT 1", brand.id);
       if (!batch) return fail("No crawl batches yet");
       const failures: Array<{ engine: string; kind: string; message: string }> = JSON.parse(batch.errors_json || "[]");
       const grouped: Record<string, { count: number; example: string }> = {};

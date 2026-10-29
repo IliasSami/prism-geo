@@ -69,6 +69,15 @@ export function middleware(request: NextRequest) {
   if (!nextUrl.pathname.startsWith("/api/") || method === "GET" || method === "HEAD" || method === "OPTIONS") {
     return NextResponse.next();
   }
+  // The capture extension posts from its own origin and authenticates with its capture token
+  // (checked in the route). Token management (/api/capture/token) stays same-origin only.
+  if ((nextUrl.pathname === "/api/capture" || nextUrl.pathname === "/api/capture/context") && /^Bearer\s+\S/i.test(headers.get("authorization") || "")) {
+    const type = headers.get("content-type") || "";
+    if (!type.toLowerCase().startsWith("application/json")) {
+      return NextResponse.json({ error: "Requests must be sent as application/json" }, { status: 415 });
+    }
+    return NextResponse.next();
+  }
 
   const origin = headers.get("origin");
   if (origin) {

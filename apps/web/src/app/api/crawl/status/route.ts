@@ -51,7 +51,7 @@ export const GET = route("crawl/status", async (request: Request) => {
     batch = (sqlite
       .prepare("SELECT * FROM crawl_batches WHERE brand_id = ? AND status = 'running' ORDER BY created_at DESC LIMIT 1")
       .get(targetBrandId) ??
-      sqlite.prepare("SELECT * FROM crawl_batches WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1").get(targetBrandId)) as
+      sqlite.prepare("SELECT * FROM crawl_batches WHERE brand_id = ? AND COALESCE(owner, '') <> 'manual-capture' ORDER BY created_at DESC LIMIT 1").get(targetBrandId)) as
       | BatchRow
       | undefined;
   }

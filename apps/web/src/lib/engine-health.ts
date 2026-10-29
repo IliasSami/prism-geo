@@ -60,7 +60,7 @@ export function getEngineHealth(brandId: string | undefined): EngineHealth[] {
   const keys = getSettings<ApiKeys>("byok_api_keys", {});
   const batches = brandId
     ? (sqlite
-        .prepare("SELECT id, errors_json, created_at FROM crawl_batches WHERE brand_id = ? AND status <> 'running' ORDER BY created_at DESC LIMIT 10")
+        .prepare("SELECT id, errors_json, created_at FROM crawl_batches WHERE brand_id = ? AND status <> 'running' AND COALESCE(owner, '') <> 'manual-capture' ORDER BY created_at DESC LIMIT 10")
         .all(brandId) as Array<{ id: string; errors_json: string; created_at: string }>)
     : [];
 

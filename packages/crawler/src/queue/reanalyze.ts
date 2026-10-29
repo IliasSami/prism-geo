@@ -1,7 +1,7 @@
 import { getRawDb, nowIso, rowToBrand } from "@prismgeo/db";
-import { detectMentions, entityTerms, lookalikeDomains, prominenceScore, stanceOf } from "@prismgeo/core";
+import { detectMentions, lookalikeDomains, prominenceScore, stanceOf } from "@prismgeo/core";
 import crypto from "node:crypto";
-import type { CrawlEntity } from "./crawler-orchestrator";
+import { trackedEntitiesFor } from "./manual-capture";
 
 export interface ReanalyzeResult {
   runs: number;
@@ -26,16 +26,7 @@ export function reanalyzeBrand(brandId: string): ReanalyzeResult {
     throw new Error("An audit is running for this client; re-check past answers after it finishes");
   }
   const brand = rowToBrand(brandRow as Record<string, unknown>);
-  const aliases: string[] = JSON.parse(brand.aliasesJson || "[]").filter((a: unknown) => typeof a === "string" && a.trim());
-  const competitors = sqlite
-    .prepare("SELECT id, name, domain, aliases_json FROM competitors WHERE brand_id = ? AND active = 1 ORDER BY created_at")
-    .all(brandId) as Array<{ id: string; name: string; domain: string; aliases_json: string | null }>;
-  const entities: CrawlEntity[] = [
-    { key: "brand", competitorId: null, name: brand.name, isTarget: true, terms: entityTerms(brand.name, aliases, brand.domain) },
-    ...competitors
-      .filter((c) => c.name?.trim())
-      .map((c) => ({ key: c.id, competitorId: c.id, name: c.name, isTarget: false, terms: entityTerms(c.name, JSON.parse(c.aliases_json || "[]"), c.domain) })),
-  ];
+  const { entities } = trackedEntitiesFor(brand);
 
   const runs = sqlite
     .prepare(
