@@ -92,6 +92,20 @@ export default async function OverviewPage() {
         </Notice>
       )}
 
+      {(() => {
+        // Answers tailored to where PrismGEO runs, not to the markets being measured
+        const tailored = report.localisation.byEngine.filter((e) => e.answers >= 10 && e.localised / e.answers >= 0.1);
+        if (!tailored.length) return null;
+        const place = Object.keys(tailored[0].places)[0];
+        return (
+          <Notice tone="warning" title={`Some answers are tailored to ${place}, where PrismGEO runs, not to your markets`}>
+            {tailored.map((e) => `${engineLabel(e.engine)}: ${e.localised} of ${e.answers} answers`).join(" · ")}. Engines localise logged-out answers to
+            the visitor&apos;s location, so these describe a buyer in {place}. To measure your markets, use the DataForSEO data provider with your market
+            (Settings → Engines &amp; access) or run PrismGEO on a machine in that market.
+          </Notice>
+        );
+      })()}
+
       {report.headline.excluded.length > 0 && report.headline.engines.length > 0 && (
         <Notice tone="neutral" title="Some engines answered too few questions to compare">
           {report.headline.excluded

@@ -9,3 +9,4 @@ export * from "./url/canonical";
 export * from "./util/seeded-shuffle";
 export * from "./report/visibility-report";
 export * from "./report/markdown";
+export * from "./text/localisation";

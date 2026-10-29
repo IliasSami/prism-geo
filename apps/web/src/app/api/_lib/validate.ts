@@ -218,6 +218,13 @@ export const engineSettingsSchema = z.strictObject({
     .max(80, "The location is too long")
     .regex(/^[\p{L} ,.'()-]+$/u, "Use a location name such as United States or London,England,United Kingdom")
     .optional(),
+  /** Markets being measured ("United States, Europe"); answers tailored to elsewhere are flagged. */
+  markets: z
+    .string({ error: "Markets must be text" })
+    .trim()
+    .max(200, "List at most a few markets")
+    .regex(/^[\p{L} ,.'()|;-]*$/u, "List markets as names, e.g. United States, United Kingdom, Europe")
+    .optional(),
   /** Language code for the provider, e.g. "en", "de", "pt-BR". */
   providerLanguage: z
     .string({ error: "The language must be text" })

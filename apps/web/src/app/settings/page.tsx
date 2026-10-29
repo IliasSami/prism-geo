@@ -468,6 +468,21 @@ function Settings() {
                     onChange={(e) => set("engines", { providerLocation: e.target.value })}
                   />
                 </Field>
+                <div className="md:col-span-2">
+                  <Field
+                    label="Markets you measure"
+                    htmlFor="markets"
+                    hint="Comma separated, e.g. United States, United Kingdom, Europe. Answers that engines tailor to another place (such as where this computer is) are flagged. Empty = the market above."
+                  >
+                    <input
+                      id="markets"
+                      className={inputClass}
+                      placeholder="United States, Europe"
+                      value={String(draft.engines.markets ?? "")}
+                      onChange={(e) => set("engines", { markets: e.target.value })}
+                    />
+                  </Field>
+                </div>
                 <Field label="Language" htmlFor="provider-language" hint="Language code: en, de, fr, es, pt-BR…">
                   <input
                     id="provider-language"

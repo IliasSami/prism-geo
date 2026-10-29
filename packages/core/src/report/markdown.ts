@@ -165,6 +165,12 @@ export function renderReportMarkdown(report: Report, meta: MarkdownReportMeta): 
     "- Each engine was asked the questions as a buyer would type them; only answers the engine actually returned are counted. Blocks, rate limits and missing AI Overviews are recorded as failures with a reason.",
     "- Ranges are 95% intervals that account for repeated answers to the same question. A company named in the question itself is not counted as mentioned for that question.",
     "- Engines answered without a signed-in account unless noted; answers can vary by account, location and time.",
+    ...report.localisation.byEngine
+      .filter((e) => e.localised > 0)
+      .map(
+        (e) =>
+          `- ${label(e.engine)}: ${e.localised} of ${e.answers} answers were tailored to ${Object.keys(e.places).join(", ")}, where PrismGEO ran, rather than to the markets measured.`
+      ),
     ...(meta.competitors?.length ? [`- Tracked competitors: ${meta.competitors.join(", ")}.`] : []),
     ""
   );

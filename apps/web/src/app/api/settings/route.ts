@@ -25,6 +25,7 @@ const DEFAULT_ENGINES = {
   mode: "hybrid", // 'stealth' (browser only) | 'byok' | 'hybrid'; hybrid equals browser-only until a key is saved
   providerLocation: "United States",
   providerLanguage: "en",
+  markets: "",
 };
 
 const DEFAULT_CRAWLER = {
@@ -82,6 +83,7 @@ function readSettings() {
   const engines: Record<string, unknown> = Object.fromEntries(ENGINE_IDS.map((e) => [e, storedEngines[e] !== false]));
   engines.mode = (ENGINE_MODES as readonly unknown[]).includes(storedEngines.mode) ? storedEngines.mode : DEFAULT_ENGINES.mode;
   engines.providerLocation = typeof storedEngines.providerLocation === "string" && storedEngines.providerLocation ? storedEngines.providerLocation : DEFAULT_ENGINES.providerLocation;
+  engines.markets = typeof storedEngines.markets === "string" ? storedEngines.markets : "";
   engines.providerLanguage = typeof storedEngines.providerLanguage === "string" && storedEngines.providerLanguage ? storedEngines.providerLanguage : DEFAULT_ENGINES.providerLanguage;
   const crawler = { ...DEFAULT_CRAWLER, ...getSettings<Record<string, unknown>>("crawler_settings", {}) } as typeof DEFAULT_CRAWLER;
   return { byok, engines, crawler };

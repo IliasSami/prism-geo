@@ -1,5 +1,6 @@
-import { getRawDb, nowIso, rowToBrand } from "@prismgeo/db";
-import { detectMentions, lookalikeDomains, prominenceScore, stanceOf } from "@prismgeo/core";
+import { getRawDb, getSettings, nowIso, rowToBrand } from "@prismgeo/db";
+import { detectLocalisation, detectMentions, lookalikeDomains, prominenceScore, stanceOf } from "@prismgeo/core";
+import { localeFromSettings } from "./crawler-orchestrator";
 import crypto from "node:crypto";
 import { trackedEntitiesFor } from "./manual-capture";
 
@@ -30,9 +31,11 @@ export function reanalyzeBrand(brandId: string): ReanalyzeResult {
 
   const runs = sqlite
     .prepare(
-      `SELECT r.id, r.response_text, r.flags_json, p.query_text FROM prompt_runs r JOIN prompts p ON p.id = r.prompt_id WHERE r.brand_id = ?`
+      `SELECT r.id, r.response_text, r.flags_json, r.capture_method, p.query_text FROM prompt_runs r JOIN prompts p ON p.id = r.prompt_id WHERE r.brand_id = ?`
     )
-    .all(brandId) as Array<{ id: string; response_text: string; flags_json: string | null; query_text: string }>;
+    .all(brandId) as Array<{ id: string; response_text: string; flags_json: string | null; capture_method: string; query_text: string }>;
+  // Assumes the stored answers were captured on this machine (where PrismGEO runs)
+  const locale = localeFromSettings(getSettings("engine_settings", {}));
   const citationsOf = sqlite.prepare("SELECT domain FROM citations WHERE run_id = ?");
   const mentionsOf = sqlite.prepare("SELECT entity_name, sentiment FROM entity_mentions WHERE run_id = ? ORDER BY entity_name");
   const deleteMentions = sqlite.prepare("DELETE FROM entity_mentions WHERE run_id = ?");
@@ -63,6 +66,10 @@ export function reanalyzeBrand(brandId: string): ReanalyzeResult {
       } catch {}
       if (lookalikes.length) flags.entityConfusion = { lookalikeDomains: lookalikes };
       else delete flags.entityConfusion;
+      const localisedTo =
+        run.capture_method === "provider" || run.capture_method === "manual" ? null : detectLocalisation(run.response_text, run.query_text, locale);
+      if (localisedTo) flags.localisedTo = localisedTo;
+      else delete flags.localisedTo;
       updateFlags.run(JSON.stringify(flags), run.id);
 
       deleteMentions.run(run.id);

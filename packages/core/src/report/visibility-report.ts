@@ -168,6 +168,13 @@ export interface StratifiedHeadline {
   brandCitedPct: number | null;
 }
 
+/** Answers tailored to the location PrismGEO ran from instead of the measured market (flags_json.localisedTo). */
+export interface Localisation {
+  /** Answers (active prompts) flagged, all engines. */
+  localisedAnswers: number;
+  byEngine: Array<{ engine: string; answers: number; localised: number; places: Record<string, number> }>;
+}
+
 export interface BrandAccuracy {
   /** Answers (active prompts) that name the brand. */
   answersNamingBrand: number;
@@ -206,6 +213,7 @@ export interface Report {
   aioTrigger: AioTrigger;
   headline: StratifiedHeadline;
   brandAccuracy: BrandAccuracy;
+  localisation: Localisation;
   /** Same shape as `entities`, restricted to one engine's answers. */
   entitiesByEngine: Record<string, EntityRow[]>;
 }
@@ -533,6 +541,24 @@ export function buildVisibilityReport(input: ReportInput): Report {
       }),
   };
 
+  // ---- localisation: answers tailored to where the crawler ran
+  const locByEngine = new Map<string, { engine: string; answers: number; localised: number; places: Record<string, number> }>();
+  for (const ri of activeRuns) {
+    const r = allRuns[ri];
+    const row = locByEngine.get(r.engine) ?? { engine: r.engine, answers: 0, localised: 0, places: {} };
+    row.answers++;
+    const place = r.flags_json && r.flags_json !== "{}" ? parseJson<{ localisedTo?: string }>(r.flags_json, {}).localisedTo : undefined;
+    if (place) {
+      row.localised++;
+      row.places[place] = (row.places[place] || 0) + 1;
+    }
+    locByEngine.set(r.engine, row);
+  }
+  const localisation: Localisation = {
+    localisedAnswers: [...locByEngine.values()].reduce((n, e) => n + e.localised, 0),
+    byEngine: [...locByEngine.values()].sort((a, b) => b.localised - a.localised),
+  };
+
   // ---- prompt rows
   const memo = <T>(fn: (d: string) => T) => {
     const cache = new Map<string, T>();
@@ -615,6 +641,7 @@ export function buildVisibilityReport(input: ReportInput): Report {
     aioTrigger,
     headline,
     brandAccuracy,
+    localisation,
     entitiesByEngine,
   };
 }

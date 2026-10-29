@@ -4,6 +4,8 @@ import {
   detectMentions,
   lookalikeDomains,
   prominenceScore,
+  detectLocalisation,
+  originCountry,
   seededShuffle,
   stanceOf,
   type TrackedEntity,
@@ -290,6 +292,16 @@ function updateBatch(batchId: string, fields: Partial<Record<keyof typeof BATCH_
     .run(...keys.map((k) => fields[k] ?? null), batchId);
 }
 
+/**
+ * This machine's country and the measured markets (Settings → Engines & access). Markets default
+ * to the data provider's market, which defaults to the United States.
+ */
+export function localeFromSettings(s: { markets?: string; providerLocation?: string }): { origin: string | null; markets: string[] } {
+  // A provider location can contain commas ("London,England,United Kingdom"), so the fallback stays whole
+  const markets = (s.markets ? s.markets.split(/\s*[,;|]\s*/) : [s.providerLocation || "United States"]).map((m) => m.trim()).filter(Boolean);
+  return { origin: originCountry(), markets };
+}
+
 /** Tracked entity as the crawler uses it (key = competitor id, or "brand"). */
 export interface CrawlEntity extends TrackedEntity {
   competitorId: string | null;
@@ -334,9 +346,10 @@ export class CrawlerOrchestrator {
         ? rawPrompts.slice(0, options.promptLimit)
         : rawPrompts;
 
-    const engineSettings = getSettings<{ mode?: EngineMode; providerLocation?: string; providerLanguage?: string }>("engine_settings", {});
+    const engineSettings = getSettings<{ mode?: EngineMode; providerLocation?: string; providerLanguage?: string; markets?: string }>("engine_settings", {});
     // Where a data provider (DataForSEO) asks from, as a buyer in that market would
     const providerOptions = { location: engineSettings.providerLocation, language: engineSettings.providerLanguage };
+    const locale = localeFromSettings(engineSettings);
     // Hybrid is the default: identical to browser-only until a key is saved, then keys are used when blocked
     const mode: EngineMode = engineSettings.mode === "byok" || engineSettings.mode === "stealth" ? engineSettings.mode : "hybrid";
     const apiKeys = getSettings<ApiKeys>("byok_api_keys", {});
@@ -572,6 +585,7 @@ export class CrawlerOrchestrator {
                   competitorDomains,
                   trackedEntities,
                   pageCache,
+                  locale,
                 });
                 completedRuns++;
                 updateBatch(batchId, { completedRuns });
@@ -637,6 +651,8 @@ export class CrawlerOrchestrator {
     competitorDomains: string[];
     trackedEntities: CrawlEntity[];
     pageCache: PageCache;
+    /** Where this machine is and which markets are measured, to flag answers tailored to the machine's location. */
+    locale?: { origin: string | null; markets: string[] };
   }): Promise<void> {
     const { runId, brandId, batchId, promptId, promptText, engine, runIdx, engineResult, brandDomain, competitorDomains, trackedEntities, pageCache } = args;
     const id = (prefix: string) => `${prefix}-${crypto.randomBytes(6).toString("hex")}`;
@@ -678,6 +694,12 @@ export class CrawlerOrchestrator {
     if (engineResult.provider) flags.provider = engineResult.provider;
     if (typeof engineResult.costUsd === "number" && engineResult.costUsd > 0) flags.costUsd = engineResult.costUsd;
     if (engineResult.model) flags.model = engineResult.model;
+    // Answers tailored to this machine's location (not the measured market) are flagged, not mixed in.
+    // Provider captures are asked from the chosen market; hand captures come from unknown places.
+    if (args.locale && engineResult.captureMethod !== "provider" && engineResult.captureMethod !== "manual") {
+      const localisedTo = detectLocalisation(text, promptText, args.locale);
+      if (localisedTo) flags.localisedTo = localisedTo;
+    }
 
     const sqlite = getRawDb();
     const createdAt = nowIso();
