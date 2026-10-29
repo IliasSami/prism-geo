@@ -11,6 +11,7 @@ import { Tabs, TabPanel, type TabItem } from "@/components/settings/Tabs";
 import { SaveBar, Toast, type ToastState } from "@/components/settings/Feedback";
 import { ApiKeyField } from "@/components/settings/ApiKeyField";
 import { LogViewer } from "@/components/settings/LogViewer";
+import { CaptureExtensionPanel } from "@/components/settings/CaptureExtensionPanel";
 import { cleanedHint, domainError } from "@/components/domain";
 
 type TabId = "client" | "competitors" | "engines" | "schedule" | "claude" | "data";
@@ -27,9 +28,9 @@ const TABS: TabItem<TabId>[] = [
 const MODES = [
   {
     id: "hybrid",
-    title: "Browser, then API if blocked",
+    title: "Browser, then key if blocked",
     badge: "Recommended",
-    desc: "Asks the real apps in a browser; when an engine blocks a question, that one is answered through its API key. Until you save a key it works exactly like free browser mode.",
+    desc: "Asks the real apps in a browser; when an engine blocks a question, that one is answered through its API key or the data provider. Until you save one it works exactly like free browser mode.",
   },
   {
     id: "stealth",
@@ -423,6 +424,8 @@ function Settings() {
               </div>
             </Card>
 
+            <CaptureExtensionPanel />
+
             <Card>
               <CardHeader
                 title="Data provider (paid, most accurate)"
@@ -552,7 +555,7 @@ function Settings() {
               {draft.engines.mode === "stealth" && Object.values(savedKeys).some(Boolean) && (
                 <div className="px-5 pb-5">
                   <Notice tone="warning" title="Saved keys are not used in free browser mode">
-                    Switch to &quot;Browser, then API if blocked&quot; so blocked engines fall back to your keys.
+                    Switch to &quot;Browser, then key if blocked&quot; so blocked engines fall back to your keys or data provider.
                   </Notice>
                 </div>
               )}

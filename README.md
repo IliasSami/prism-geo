@@ -31,15 +31,31 @@ Everything runs on your machine: a Next.js dashboard, a Playwright crawler and a
 
 PrismGEO uses the most reliable route you have configured, per engine:
 
-| Engine | Without a key | With a key | Notes |
-| :--- | :--- | :--- | :--- |
-| ChatGPT | Logged-out browser, or your signed-in free account | OpenAI Responses API with web search | Logged-out works well |
-| Gemini | Logged-out browser, or signed in | Gemini API with Google Search grounding (free tier) | Only the API returns sources and search queries |
-| Perplexity | Signed-in free account (anonymous use is capped quickly) | Perplexity Sonar API | |
-| Google AI Overviews | Browser, best with a signed-in Google session and slow pacing | SerpApi (free monthly tier) | One IP gets "unusual traffic" blocks after a few dozen searches |
-| Microsoft Copilot | **Signed-in Microsoft account only** | none | Copilot has no logged-out chat: without a connected session it is switched off and skipped in audits |
+| Engine | Without a key | With a key | With DataForSEO (paid) | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| ChatGPT | Logged-out browser, or your signed-in free account | OpenAI Responses API with web search | The answer ChatGPT's interface showed | Logged-out works well |
+| Gemini | Logged-out browser, or signed in | Gemini API with Google Search grounding (free tier) | The answer Gemini's interface showed, with sources | Browser captures have no sources |
+| Perplexity | Signed-in free account (anonymous use is capped quickly) | Perplexity Sonar API | Sonar API (your own Perplexity key is used first) | |
+| Google AI Overviews | Browser, best with a signed-in Google session and slow pacing | SerpApi (free monthly tier) | The Overview on Google's results page | One IP gets "unusual traffic" blocks after a few dozen searches |
+| Microsoft Copilot | **Signed-in Microsoft account only** | none | none | Copilot has no logged-out chat: without a connected session it is switched off and skipped in audits |
 
-Modes (Settings → Engines & access): **Browser only**, **API keys** (API where a key exists), **Hybrid** (browser first, API when the browser is blocked). Every stored answer records how it was captured (`browser`, `browser_signed_in`, `api`).
+Every engine can also be **captured by hand** with the free browser extension (below).
+
+Modes (Settings → Engines & access): **Browser only**, **Keys and provider only** (the key or provider where one exists), **Hybrid** (browser first, key or provider when the browser is blocked). Every stored answer records how it was captured: `browser`, `browser_signed_in`, `api` (a model API), `provider` (the consumer interface, captured by DataForSEO) or `manual` (captured by hand). Dashboards warn when an engine's answers mix methods, because a model API answers differently from the app buyers use.
+
+### Most accurate paid route: DataForSEO
+
+Model APIs answer differently from the apps buyers use (published comparisons find only a minority of cited sources and named brands in common), so PrismGEO can use [DataForSEO](https://dataforseo.com) to capture what ChatGPT's and Gemini's interfaces, and Google's results page, actually showed. One pay-as-you-go account covers four engines at roughly $0.002–0.005 per answer (check their [current prices](https://dataforseo.com/pricing/ai-optimization/llm-scraper)).
+
+1. Create an account and copy the API login and password from [app.dataforseo.com/api-access](https://app.dataforseo.com/api-access).
+2. Settings → Engines & access → **Data provider**: paste `login:password`, choose the market (e.g. United States, United Kingdom) and language.
+3. Choose **Keys and provider only** for steady results, or **Hybrid** to use it only when the browser is blocked.
+
+Each answer keeps the provider, its cost and the model that answered. A refused login or an empty balance stops that engine with a clear reason; provider rate limits count as blocks; a results page without an Overview is recorded as "no AI Overview".
+
+### Free and fully compliant: capture by hand
+
+The **PrismGEO Capture** browser extension (`apps/extension`) saves the answer you are looking at in your own ChatGPT, Gemini, Perplexity, Copilot or Google account. You ask the question yourself; the extension only reads the page when you click it, shows what it will send, and sends it only to your PrismGEO. Answers are matched to your tracked questions (or added as new ones), checked like crawled answers and stored as `manual`. Hand captures never change an engine's health status. See [apps/extension/README.md](apps/extension/README.md) to install it.
 
 ### Staying within rate limits, for free
 

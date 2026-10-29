@@ -10,6 +10,7 @@
     "crawl": "tsx packages/crawler/src/cli.ts",
     "mcp": "tsx packages/mcp/src/stdio.ts",
     "browsers": "pnpm --filter @prismgeo/crawler exec playwright install chromium",
+    "extension:zip": "mkdir -p dist && rm -f dist/prismgeo-capture.zip && cd apps/extension && zip -r -X ../../dist/prismgeo-capture.zip . -x '*.DS_Store' -x 'README.md'",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p packages/db && tsc --noEmit -p packages/core && tsc --noEmit -p packages/crawler && tsc --noEmit -p packages/mcp && tsc --noEmit -p apps/web",
     "test": "node --import tsx --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\""

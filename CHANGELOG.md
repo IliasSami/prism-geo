@@ -4,6 +4,17 @@ All notable changes to PrismGEO are listed here. Versions follow [Semantic Versi
 
 ## Unreleased
 
+### New
+
+- **DataForSEO as a capture provider** (Settings → Engines & access → Data provider): one `login:password` credential answers ChatGPT and Gemini with what their interfaces showed, Google AI Overviews from the results page (asynchronous Overviews included), and Perplexity through the Sonar API, in the market and language you choose. Answers are stored as `provider` (Perplexity: `api`) with their cost and model; provider errors map to the usual failure reasons.
+- **PrismGEO Capture browser extension** (`apps/extension`): save the answer you are looking at in your own ChatGPT, Gemini, Perplexity, Copilot or Google account, matched to a tracked question or added as a new one. Read only on click, previewed before sending, sent only to your server with its own token (Settings → Engines & access → Capture by hand). Stored as `manual` and excluded from engine health.
+- **Download report** on Overview: a shareable Markdown summary with results by engine and by buyer stage, failures, brand-confusion warnings, the biggest gaps and the method.
+- **Re-check past answers** (Settings → Competitors): re-derive mentions and stance for stored answers with the current competitors, aliases and rules.
+
+### Fixed
+
+- Gemini's "I encountered an error" reply is recorded as an engine error instead of stored; a domain written inside a sentence stays in the answer text; stance no longer credits the product being replaced ("Best X alternatives") and recognises more recommendation phrasings.
+
 ## 1.0.0-beta.1
 
 The first public beta. PrismGEO is usable for day-to-day tracking, but expect rough edges: engines change their pages often, and the database schema may still change between beta releases (migrations back up the database first).

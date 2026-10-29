@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PrismGEO Capture: settings</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body class="page">
+    <main class="options">
+      <h1>PrismGEO Capture</h1>
+      <p class="muted">
+        Connect the extension to your PrismGEO. Copy the capture token from PrismGEO → Settings → Engines &amp; access → Capture by hand.
+        Answers are sent only to this address, and only when you click Save.
+      </p>
+      <form id="form">
+        <label for="server">PrismGEO address</label>
+        <input id="server" type="url" placeholder="http://localhost:3333" required />
+        <label for="token">Capture token</label>
+        <input id="token" type="password" placeholder="pgc_…" autocomplete="off" required />
+        <div class="row">
+          <button type="submit" class="primary">Save and test</button>
+          <span id="status" role="status" class="muted"></span>
+        </div>
+      </form>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

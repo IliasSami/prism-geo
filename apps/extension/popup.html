@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Save to PrismGEO</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="top">
+      <img src="icons/icon48.png" alt="" width="20" height="20" />
+      <strong>Save to PrismGEO</strong>
+      <button id="settings" class="ghost small" type="button" aria-label="Extension settings">Settings</button>
+    </header>
+
+    <section id="state" class="state" role="status" aria-live="polite">Reading this page…</section>
+
+    <form id="form" hidden>
+      <div class="field">
+        <label for="brand">Client</label>
+        <select id="brand"></select>
+      </div>
+
+      <div class="field">
+        <label for="prompt">Tracked question this answers</label>
+        <select id="prompt"></select>
+        <p id="asked" class="muted small"></p>
+      </div>
+
+      <div id="new-question" class="field" hidden>
+        <label for="intent">Add it as a new tracked question, with intent</label>
+        <select id="intent">
+          <option value="discovery">discovery</option>
+          <option value="consideration">consideration</option>
+          <option value="decision">decision</option>
+          <option value="comparison">comparison</option>
+          <option value="pricing">pricing</option>
+          <option value="direct">direct (names your brand)</option>
+          <option value="category" selected>category</option>
+        </select>
+      </div>
+
+      <details class="preview">
+        <summary id="summary">What will be sent</summary>
+        <pre id="preview"></pre>
+      </details>
+
+      <button id="save" type="submit" class="primary">Save answer</button>
+      <p class="muted small">Sent only to your PrismGEO, only now. Nothing is read or sent in the background.</p>
+    </form>
+
+    <section id="result" class="result" hidden></section>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
