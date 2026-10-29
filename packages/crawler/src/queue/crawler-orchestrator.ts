@@ -16,7 +16,7 @@ import { CopilotEngineCrawler } from "../engines/copilot";
 import { GeminiEngineCrawler } from "../engines/gemini";
 import { ChatGptEngineCrawler } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
-import { runApiEngine, apiKeyFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
+import { runApiEngine, apiKeyFor, apiRouteFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { fetchPublicPage } from "../net/safe-fetch";
 import { storeManualCapture, trackedEntitiesFor, type ManualCaptureInput, type ManualCaptureResult } from "./manual-capture";
 import { chromium, type Browser } from "playwright";
@@ -302,6 +302,18 @@ export function localeFromSettings(s: { markets?: string; providerLocation?: str
   return { origin: originCountry(), markets };
 }
 
+/**
+ * Parallel requests per engine on a paid route. DataForSEO allows 30 concurrent live tasks per
+ * account; the engines' own APIs rate-limit per key (Gemini's free tier most of all). Browser
+ * engines always use one page at a time. PRISMGEO_API_CONCURRENCY caps it (1–10).
+ */
+export function apiConcurrency(engine: string, keys: ApiKeys): number {
+  const route = apiRouteFor(engine, keys);
+  const wanted = !route ? 1 : route.kind === "dataforseo" ? 5 : route.kind === "gemini" ? 1 : 2;
+  const cap = Number(process.env.PRISMGEO_API_CONCURRENCY);
+  return Number.isFinite(cap) && cap >= 1 ? Math.min(wanted, Math.floor(cap), 10) : wanted;
+}
+
 /** Tracked entity as the crawler uses it (key = competitor id, or "brand"). */
 export interface CrawlEntity extends TrackedEntity {
   competitorId: string | null;
@@ -467,24 +479,29 @@ export class CrawlerOrchestrator {
             }
           };
           let firstQuery = true;
+          let cooling: Promise<void> | null = null;
+          const items = (promptsFor.get(engine) || []).flatMap((prompt) => Array.from({ length: sampleSize }, (_, runIdx) => ({ prompt, runIdx })));
+          // Paid routes take parallel requests; a browser engine stays one page at a time, human-paced
+          const workers = viaApi ? apiConcurrency(engine, apiKeys) : 1;
 
-          for (const prompt of promptsFor.get(engine) || []) {
-            for (let runIdx = 0; runIdx < sampleSize; runIdx++) {
-              if (!stopped && setupFailure && !viaApi) stopped = { kind: "skipped_setup", message: `Not run: ${setupFailure}` };
-              if (stopped) {
-                skipped++;
-                await recordFailure({ engine, promptId: prompt.id, kind: stopped.kind, message: stopped.message }, { quiet: true });
-                continue;
-              }
-              const state = promptStatus(prompt.id);
-              if (state !== "ok") {
-                await recordFailure(
-                  { engine, promptId: prompt.id, kind: state, message: state === "prompt_removed" ? "Prompt deleted during the batch; not queried" : "Prompt paused during the batch; not queried" },
-                  { quiet: true }
-                );
-                continue;
-              }
-              if (paused && cooldownsUsed < COOLDOWNS_MS.length) {
+          const processItem = async (prompt: (typeof items)[number]["prompt"], runIdx: number): Promise<void> => {
+            if (!stopped && setupFailure && !viaApi) stopped = { kind: "skipped_setup", message: `Not run: ${setupFailure}` };
+            if (stopped) {
+              skipped++;
+              await recordFailure({ engine, promptId: prompt.id, kind: stopped.kind, message: stopped.message }, { quiet: true });
+              return;
+            }
+            const state = promptStatus(prompt.id);
+            if (state !== "ok") {
+              await recordFailure(
+                { engine, promptId: prompt.id, kind: state, message: state === "prompt_removed" ? "Prompt deleted during the batch; not queried" : "Prompt paused during the batch; not queried" },
+                { quiet: true }
+              );
+              return;
+            }
+            if (paused && cooldownsUsed < COOLDOWNS_MS.length) {
+              // Parallel workers share one cool-down: the first one starts it, the others wait for it
+              cooling ??= (async () => {
                 const wait = COOLDOWNS_MS[cooldownsUsed++];
                 console.warn(`[CrawlerOrchestrator] ${engine} blocked repeatedly; cooling down ${wait / 60_000} min before retrying`);
                 if (await coolDown(wait)) {
@@ -494,107 +511,122 @@ export class CrawlerOrchestrator {
                 } else {
                   cooldownsUsed = COOLDOWNS_MS.length; // only cooling engines remain: nothing to wait for
                 }
-              }
-              if (paused) {
-                skipped++;
-                await recordFailure(
-                  { engine, promptId: prompt.id, kind: "skipped_after_blocks", message: `${engine} still blocked after ${cooldownsUsed} cool-down(s)` },
-                  { quiet: true }
-                );
-                continue;
-              }
-              if (!firstQuery) await pause();
-              firstQuery = false;
+              })().finally(() => {
+                cooling = null;
+              });
+              await cooling;
+            }
+            if (paused) {
+              skipped++;
+              await recordFailure(
+                { engine, promptId: prompt.id, kind: "skipped_after_blocks", message: `${engine} still blocked after ${cooldownsUsed} cool-down(s)` },
+                { quiet: true }
+              );
+              return;
+            }
+            if (!firstQuery) await pause();
+            firstQuery = false;
 
-              const runId = `run-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
-              updateBatch(batchId, { currentPrompt: prompt.queryText.slice(0, 80), currentEngine: engine });
+            const runId = `run-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+            updateBatch(batchId, { currentPrompt: prompt.queryText.slice(0, 80), currentEngine: engine });
 
-              let engineResult: EngineAnswer;
-              const runBrowser = (): Promise<EngineAnswer> => {
-                const browser = sharedBrowser || undefined;
-                if (engine === "perplexity") return PerplexityEngineCrawler.execute(prompt.queryText, browser);
-                if (engine === "copilot") return CopilotEngineCrawler.execute(prompt.queryText, browser);
-                if (engine === "gemini") return GeminiEngineCrawler.execute(prompt.queryText, browser);
-                if (engine === "chatgpt") return ChatGptEngineCrawler.execute(prompt.queryText, browser);
-                if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser);
-                throw new Error(`Unknown engine: ${engine}`);
-              };
-              const runEngine = (): Promise<EngineAnswer> => (viaApi ? runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions) : runBrowser());
+            let engineResult: EngineAnswer;
+            const runBrowser = (): Promise<EngineAnswer> => {
+              const browser = sharedBrowser || undefined;
+              if (engine === "perplexity") return PerplexityEngineCrawler.execute(prompt.queryText, browser);
+              if (engine === "copilot") return CopilotEngineCrawler.execute(prompt.queryText, browser);
+              if (engine === "gemini") return GeminiEngineCrawler.execute(prompt.queryText, browser);
+              if (engine === "chatgpt") return ChatGptEngineCrawler.execute(prompt.queryText, browser);
+              if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser);
+              throw new Error(`Unknown engine: ${engine}`);
+            };
+            const runEngine = (): Promise<EngineAnswer> => (viaApi ? runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions) : runBrowser());
+            try {
               try {
-                try {
+                engineResult = await runEngine();
+              } catch (firstErr) {
+                const kind = classifyFailure(engine, prompt.id, firstErr).kind;
+                // The API cannot help when this machine has no connection, and "no AI Overview" is a real outcome
+                if (!viaApi && mode === "hybrid" && hasApi(engine) && kind !== "no_ai_overview" && kind !== "network") {
+                  console.warn(`[CrawlerOrchestrator] ${engine} browser ${kind}; falling back to API: ${(firstErr as Error).message}`);
+                  if (kind === "blocked" || kind === "setup") viaApi = true; // stop using a browser that cannot work
+                  engineResult = await runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions);
+                } else {
+                  // One retry for transient failures (timeouts, half-rendered or unfinished answers).
+                  // Blocks, rejected keys, network/setup failures and "no AI Overview" are never retried.
+                  if (kind !== "no_answer" && kind !== "error") throw firstErr;
+                  console.warn(`[CrawlerOrchestrator] Retrying ${engine} once after ${kind}: ${(firstErr as Error).message}`);
+                  await pause();
                   engineResult = await runEngine();
-                } catch (firstErr) {
-                  const kind = classifyFailure(engine, prompt.id, firstErr).kind;
-                  // The API cannot help when this machine has no connection, and "no AI Overview" is a real outcome
-                  if (!viaApi && mode === "hybrid" && hasApi(engine) && kind !== "no_ai_overview" && kind !== "network") {
-                    console.warn(`[CrawlerOrchestrator] ${engine} browser ${kind}; falling back to API: ${(firstErr as Error).message}`);
-                    if (kind === "blocked" || kind === "setup") viaApi = true; // stop using a browser that cannot work
-                    engineResult = await runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions);
-                  } else {
-                    // One retry for transient failures (timeouts, half-rendered or unfinished answers).
-                    // Blocks, rejected keys, network/setup failures and "no AI Overview" are never retried.
-                    if (kind !== "no_answer" && kind !== "error") throw firstErr;
-                    console.warn(`[CrawlerOrchestrator] Retrying ${engine} once after ${kind}: ${(firstErr as Error).message}`);
-                    await pause();
-                    engineResult = await runEngine();
-                  }
                 }
-              } catch (runErr) {
-                const failure = classifyFailure(engine, prompt.id, runErr);
-                await recordFailure(failure);
-                consecutiveBlocks = failure.kind === "blocked" ? consecutiveBlocks + 1 : 0;
-                consecutiveNetwork = failure.kind === "network" ? consecutiveNetwork + 1 : 0;
-                if (failure.kind === "blocked") {
-                  pacingFactor = Math.min(4, pacingFactor * 2);
-                  successesSinceBlock = 0;
-                }
-                if (consecutiveBlocks >= MAX_CONSECUTIVE_BLOCKS) paused = true;
-                if (consecutiveNetwork >= MAX_CONSECUTIVE_NETWORK) {
-                  stopped = { kind: "skipped_after_network", message: `Not run: ${engine} could not connect ${consecutiveNetwork} times in a row (${failure.message})` };
-                }
-                if (failure.kind === "setup") {
-                  if (!viaApi) setupFailure = failure.message;
-                  stopped = { kind: "skipped_setup", message: `Not run: ${failure.message}` };
-                }
-                continue;
               }
-              consecutiveBlocks = 0;
-              consecutiveNetwork = 0;
-              if (pacingFactor > 1 && ++successesSinceBlock >= PACING_DECAY_AFTER) {
-                pacingFactor = Math.max(1, pacingFactor / 2);
+            } catch (runErr) {
+              const failure = classifyFailure(engine, prompt.id, runErr);
+              await recordFailure(failure);
+              consecutiveBlocks = failure.kind === "blocked" ? consecutiveBlocks + 1 : 0;
+              consecutiveNetwork = failure.kind === "network" ? consecutiveNetwork + 1 : 0;
+              if (failure.kind === "blocked") {
+                pacingFactor = Math.min(4, pacingFactor * 2);
                 successesSinceBlock = 0;
               }
-
-              // The prompt may have been deleted or paused while the engine was answering
-              const after = promptStatus(prompt.id);
-              if (after === "prompt_removed") {
-                await recordFailure({ engine, promptId: prompt.id, kind: "prompt_removed", message: "Prompt deleted during the batch; its answer was not stored" }, { quiet: true });
-                continue;
+              if (consecutiveBlocks >= MAX_CONSECUTIVE_BLOCKS) paused = true;
+              if (consecutiveNetwork >= MAX_CONSECUTIVE_NETWORK) {
+                stopped = { kind: "skipped_after_network", message: `Not run: ${engine} could not connect ${consecutiveNetwork} times in a row (${failure.message})` };
               }
-              try {
-                await CrawlerOrchestrator.persistRun({
-                  runId,
-                  brandId,
-                  batchId,
-                  promptId: prompt.id,
-                  promptText: prompt.queryText,
-                  engine,
-                  runIdx,
-                  engineResult,
-                  brandDomain: brand.domain,
-                  competitorDomains,
-                  trackedEntities,
-                  pageCache,
-                  locale,
-                });
-                completedRuns++;
-                updateBatch(batchId, { completedRuns });
-              } catch (persistErr) {
-                await recordFailure({ engine, promptId: prompt.id, kind: "error", message: `Persist failed: ${(persistErr as Error).message}` });
+              if (failure.kind === "setup") {
+                if (!viaApi) setupFailure = failure.message;
+                stopped = { kind: "skipped_setup", message: `Not run: ${failure.message}` };
               }
+              return;
             }
-          }
-          if (skipped > 0) console.warn(`[CrawlerOrchestrator] ${engine}: ${skipped} runs not attempted (${stopped?.kind || "still blocked after cool-downs"})`);
+            consecutiveBlocks = 0;
+            consecutiveNetwork = 0;
+            if (pacingFactor > 1 && ++successesSinceBlock >= PACING_DECAY_AFTER) {
+              pacingFactor = Math.max(1, pacingFactor / 2);
+              successesSinceBlock = 0;
+            }
+
+            // The prompt may have been deleted or paused while the engine was answering
+            const after = promptStatus(prompt.id);
+            if (after === "prompt_removed") {
+              await recordFailure({ engine, promptId: prompt.id, kind: "prompt_removed", message: "Prompt deleted during the batch; its answer was not stored" }, { quiet: true });
+              return;
+            }
+            try {
+              await CrawlerOrchestrator.persistRun({
+                runId,
+                brandId,
+                batchId,
+                promptId: prompt.id,
+                promptText: prompt.queryText,
+                engine,
+                runIdx,
+                engineResult,
+                brandDomain: brand.domain,
+                competitorDomains,
+                trackedEntities,
+                pageCache,
+                locale,
+              });
+              completedRuns++;
+              updateBatch(batchId, { completedRuns });
+            } catch (persistErr) {
+              await recordFailure({ engine, promptId: prompt.id, kind: "error", message: `Persist failed: ${(persistErr as Error).message}` });
+            }
+          };
+
+          let next = 0;
+          await Promise.all(
+            Array.from({ length: Math.max(1, Math.min(workers, items.length)) }, async () => {
+              while (next < items.length) {
+                const { prompt, runIdx } = items[next++];
+                await processItem(prompt, runIdx);
+              }
+            })
+          );
+          // Assigned inside the workers, which control-flow analysis does not follow
+          const stopReason = stopped as { kind: RunFailure["kind"] } | null;
+          if (skipped > 0) console.warn(`[CrawlerOrchestrator] ${engine}: ${skipped} runs not attempted (${stopReason?.kind || "still blocked after cool-downs"})`);
           enginesWorking--;
         })
       );
