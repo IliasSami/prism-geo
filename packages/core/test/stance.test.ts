@@ -72,3 +72,17 @@ test("the product being replaced is not credited with its alternatives' praise; 
   // A recommendation of the entity itself still counts
   assert.equal(stanceWith("Northwind is the best option for high-AOV stores.", "Northwind", []), "positive");
 });
+
+test("recommendation phrasings seen in live answers count, including card titles run into their text", () => {
+  const cases: Array<[string, string]> = [
+    ["1. Talkly\nBest starting pointAutomatically calls shoppers after checkout abandonment.", "Talkly"],
+    ["4. Talkly\nBest budget-friendly experiment\nCalls abandoned-checkout shoppers and sends a checkout link.", "Talkly"],
+    ["1. Talkly\nClosest fit for automated callsBuilt for Shopify ecommerce calling.", "Talkly"],
+    ["Talkly: Highly rated for Shopify merchants who want the AI to handle order changes.", "Talkly"],
+    ["Talkly: One of the leading apps for dedicated Shopify phone support.", "Talkly"],
+  ];
+  for (const [text, entity] of cases) assert.equal(stanceWith(text, entity, []), "positive", text);
+  // Plain listings and prices stay neutral
+  assert.equal(stanceWith("Talkly\n$29/month\nIncludes 50 AI calls and 50 SMS messages per month.", "Talkly", []), "neutral");
+  assert.equal(stanceWith("Tools such as Talkly, Dialsy and Ringo are installed from the Shopify App Store.", "Talkly", ["Dialsy", "Ringo"]), "neutral");
+});

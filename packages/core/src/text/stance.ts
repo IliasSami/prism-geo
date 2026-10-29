@@ -20,7 +20,7 @@ import type { SentimentType, StanceType } from "../types/index";
 /** Primary recommendation phrases. */
 const PRIMARY = /\b(best overall|top (pick|choice|recommendation)|my (top )?pick|number one|best (fit|option|choice|starting point|bet)|i'?d (recommend|pick|choose|go with)|we recommend|highly recommended|most recommended|recommend(ed)?|standout|highest[- ]rated|safest choice|go[- ]to (option|choice|tool))\b|#1\b/i;
 /** Qualified recommendation phrases ("best for a use case", runner-up). */
-const ALTERNATIVE = /\b(best (for|if|when)\b|(strong|solid|good|great|viable|excellent)(est)? (option|alternative|choice|pick|contender)|worth (considering|a look|trying)|also consider|(?:is )?another solid|runner[- ]up|try|inexpensive|affordable|easy to (set up|use|install)|no (major |real |significant )?(drawbacks|complaints|issues))\b/i;
+const ALTERNATIVE = /\b(best (for|if|when)\b|best [\w-]+(?: [\w-]+)? (option|pick|choice|experiment|alternative|value|bet)|closest fit|highly (rated|regarded|recommended)|widely (used|regarded|recommended)|one of the (leading|best|top|most popular)|(strong|solid|good|great|viable|excellent)(est)? (option|alternative|choice|pick|contender)|worth (considering|a look|trying)|also consider|(?:is )?another solid|runner[- ]up|try|inexpensive|affordable|easy to (set up|use|install)|no (major |real |significant )?(drawbacks|complaints|issues))\b/i;
 /** Caveats and warnings. "inexpensive", "unlimited" and "complaint-free" do not match. */
 const CAVEAT = /\b((?<!in)expensive|pricey|overpriced|drawbacks?|downsides?|steep learning curve|high latency|lacks?|lacking|limited|caution|complain(s|ts?|ed)?|poor(ly)?|not recommended|struggles?|thin|scam|red flags?|buggy|unreliable|clunky|outdated)\b/i;
 /** Phrases just before an entity that make it the product being replaced. */
@@ -133,7 +133,10 @@ export function stanceOf(prose: string, hits: Hit[], allEntityStarts: number[]):
     const after = prose.slice(hit.index + hit.length, hit.index + hit.length + 20);
     if (/^\W{0,3}(alternatives?|competitors?|replacements?)\b/i.test(after) || REPLACED_BEFORE.test(before)) continue;
     for (const raw of stanceScopes(prose, hit.index, hit.length, others)) {
-      const scope = raw.trim().startsWith("|") ? tableCellsWithJudgement(raw) : raw;
+      // Card titles run into their description in captured text ("Best starting pointAutomatically
+      // calls..."); split such joins so phrases keep their word boundaries
+      const joined = raw.replace(/([a-z])([A-Z])/g, "$1 $2");
+      const scope = joined.trim().startsWith("|") ? tableCellsWithJudgement(joined) : joined;
       if (hasSignal(scope, PRIMARY)) primary = true;
       else if (hasSignal(scope, ALTERNATIVE)) alternative = true;
       if (hasSignal(scope, CAVEAT)) caveat = true;
