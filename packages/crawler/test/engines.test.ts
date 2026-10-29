@@ -11,6 +11,9 @@ const answer = "Here are three ways to recover abandoned checkouts without disco
 test("real answers pass, engine error and throttle replies are rejected", () => {
   assert.doesNotThrow(() => assertRealAnswer(answer, "t", "q"));
   assert.throws(() => assertRealAnswer("Sorry, something went wrong. Please try again later and see if it works.", "t", "q"), /engine error/);
+  assert.throws(() => assertRealAnswer("I encountered an error doing what you asked. Could you try again?", "t", "q"), /engine error/);
+  // A real answer that merely discusses errors is kept
+  assert.doesNotThrow(() => assertRealAnswer("I encountered an error rate of 3% when testing checkout flows; here is how to fix the three most common causes of abandoned carts and failed payments on Shopify. First, check payment gateways and address validation, then review shipping costs shown at checkout.", "t", "q"));
   assert.throws(() => assertRealAnswer("I'm having a hard time fulfilling your request. Can I help you with something else instead?", "t", "q"), EngineBlockedError);
   assert.throws(() => assertRealAnswer("Too short", "t", "q"), /No extractable response/);
 });

@@ -37,3 +37,4 @@ Thumbs.db
 .claude/settings.local.json
 .claude/launch.json
 .claude/worktrees/
+*.tmp.mts

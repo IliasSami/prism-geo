@@ -183,6 +183,8 @@ const ERROR_REPLIES = [
   /^an error occurred\.?\s*(please|try|$)/i,
   /^error in (message|body) stream/i,
   /^(i'?m )?unable to (load|generate) (a )?(response|conversation)/i,
+  // Gemini, seen live: "I encountered an error doing what you asked. Could you try again?"
+  /^i (encountered|ran into|hit) an? (unexpected )?(error|issue|problem)( (doing|while|processing|trying|with your)\b|[.,!])/i,
 ];
 
 /**
@@ -316,8 +318,12 @@ export async function extractAnswer(page: Page, selector: string, excludeHosts: 
         }
         const bare = label.toLowerCase().replace(/\s*\+\s?\d+$/, "").replace(/[\s.-]+/g, "");
         const blockText = (a.parentElement?.textContent || "").replace(/\s+/g, " ").trim();
-        // Chips are lower-case hosts; a capitalised "Callora.io" is a product name
-        const hostLike = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(label);
+        // Chips are lower-case hosts; a capitalised "Callora.io" is a product name. A host written
+        // inside a sentence ("the main site is example.ai.") is prose too: chips follow a sentence,
+        // they never follow a word.
+        const before = blockText.slice(0, Math.max(0, blockText.indexOf(label))).trimEnd();
+        const inSentence = /[\p{L}\p{N},:(]$/u.test(before);
+        const hostLike = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(label) && !inSentence;
         const counted = /\+\s?\d+$/.test(label);
         const loneHostLabel =
           blockText === label && bare.length > 0 && !/\s/.test(label) && label.length <= 25 && /^[a-z0-9-]+$/.test(label) && host.replace(/[.-]/g, "").includes(bare);

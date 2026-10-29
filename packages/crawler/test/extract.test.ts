@@ -50,3 +50,16 @@ test("hyperlinked vendor names stay in the answer text; source chips are removed
   assert.ok(urls.includes("https://www.reddit.com/r/shopify/comments/abc?utm_source=chatgpt.com"));
   assert.ok(urls.includes("https://help.example.com/x"));
 });
+
+test("a domain written inside a sentence stays in the text; the same host after a sentence is a chip", async () => {
+  const page = fakePage(`
+<div data-message-author-role="assistant">
+  <p>There are two similar sites, so check the right one. The main ecommerce platform is <a href="https://www.northwindvoice.ai/">northwindvoice.ai</a>.</p>
+  <p>Northwind recovers carts by phone. <a href="https://northwindvoice.ai/blog">northwindvoice.ai</a></p>
+</div>`);
+  const ex = await extractAnswer(page, "[data-message-author-role='assistant']", ["chat.example"]);
+  assert.ok(ex.text.includes("The main ecommerce platform is northwindvoice.ai."), ex.text);
+  assert.ok(ex.text.includes("Northwind recovers carts by phone."), ex.text);
+  assert.equal(ex.text.match(/northwindvoice\.ai/g)?.length, 1, `trailing chip removed:\n${ex.text}`);
+  assert.ok(ex.links.some((l) => l.url === "https://northwindvoice.ai/blog"));
+});
