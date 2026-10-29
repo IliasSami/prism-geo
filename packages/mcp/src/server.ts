@@ -210,6 +210,7 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
         captureMethods: report.captureMethods,
         aioTrigger: report.aioTrigger,
         brandAccuracy: report.brandAccuracy,
+        localisation: report.localisation,
         failures: report.failures,
         topSources: report.topSources.slice(0, 15),
       };
