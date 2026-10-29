@@ -11,8 +11,15 @@ export interface ExtractedAnswer {
   links: Array<{ url: string; title: string }>;
 }
 
-/** How a stored answer was obtained; persisted as prompt_runs.capture_method. */
-export type CaptureMethod = "browser" | "browser_signed_in" | "api";
+/**
+ * How a stored answer was obtained; persisted as prompt_runs.capture_method.
+ * - browser / browser_signed_in: this machine's browser, logged out or with the user's session;
+ * - api: a model API with web search (not the consumer app);
+ * - provider: the consumer interface's answer, captured by a licensed data provider (DataForSEO);
+ * - manual: a person asked the question in their own account and saved the answer with the
+ *   PrismGEO capture extension.
+ */
+export type CaptureMethod = "browser" | "browser_signed_in" | "api" | "provider" | "manual";
 
 /**
  * Optional outbound proxy from Settings → Crawler (e.g. http://user:pass@host:port). Routing
@@ -42,6 +49,12 @@ export interface EngineAnswer {
   subQueries: string[];
   executionMs: number;
   captureMethod: CaptureMethod;
+  /** Data provider that captured the answer (e.g. "dataforseo"), when one did. */
+  provider?: string;
+  /** What the provider charged for this answer, in USD. */
+  costUsd?: number;
+  /** Model the engine or provider reported, when known. */
+  model?: string;
 }
 
 /** The capture method a browser engine will use: its signed-in profile when one is saved. */

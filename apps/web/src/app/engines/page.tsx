@@ -17,7 +17,13 @@ export const metadata: Metadata = { title: "Engines" };
 const RECENT_BATCHES = 3;
 const API_ENGINES = ["chatgpt", "gemini", "perplexity", "google_aio"];
 const KEY_NAME: Record<string, string> = { chatgpt: "OpenAI", gemini: "Gemini", perplexity: "Perplexity", google_aio: "SerpApi" };
-const METHOD_LABEL: Record<string, string> = { browser: "free browser", browser_signed_in: "signed-in session", api: "API key" };
+const METHOD_LABEL: Record<string, string> = {
+  browser: "free browser",
+  browser_signed_in: "signed-in session",
+  api: "API",
+  provider: "data provider",
+  manual: "captured by hand",
+};
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 interface Failure {
@@ -85,8 +91,8 @@ export default async function EnginesPage() {
       id === "copilot" && v.state === "not_set_up"
         ? "Needs a signed-in Microsoft account"
         : h.route === "api"
-          ? `${keyName} API key`
-          : `${h.route === "signed_in" ? "Signed-in session" : "Free browser (logged out)"}${h.apiFallback ? `, ${keyName} API key if blocked` : ""}`;
+          ? h.routeLabel || `${keyName} API key`
+          : `${h.route === "signed_in" ? "Signed-in session" : "Free browser (logged out)"}${h.apiFallback ? `, ${h.routeLabel || `${keyName} API key`} if blocked` : ""}`;
     const methods = Object.entries(
       er.reduce<Record<string, number>>((acc, r) => ((acc[r.capture_method] = (acc[r.capture_method] || 0) + 1), acc), {})
     ).map(([m, n]) => `${n} via ${METHOD_LABEL[m] || m}`);
@@ -275,7 +281,7 @@ export default async function EnginesPage() {
               {mixed.map((m) => (
                 <p key={m.engine}>
                   {engineLabel(m.engine)} answers mix capture methods ({Object.entries(m.byMethod)
-                    .map(([k, n]) => `${n} ${k === "api" ? "via API" : k === "browser_signed_in" ? "signed in" : "browser"}`)
+                    .map(([k, n]) => `${n} via ${METHOD_LABEL[k] || k}`)
                     .join(", ")}). The app and the API can answer differently, so compare like with like.
                 </p>
               ))}

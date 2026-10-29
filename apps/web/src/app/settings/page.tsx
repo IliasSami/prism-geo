@@ -39,9 +39,9 @@ const MODES = [
   },
   {
     id: "byok",
-    title: "API keys only",
-    badge: "Fastest",
-    desc: "Engines with a saved key are always asked through their official API. Engines without a key still use the browser.",
+    title: "Keys and provider only",
+    badge: "Most reliable",
+    desc: "Engines with a saved key or data provider are always asked through it: no browser blocks, steady results. Engines without one still use the browser.",
   },
 ];
 
@@ -63,7 +63,7 @@ interface Crawler {
   scheduleHour: number;
   scheduleTimeZone?: string;
 }
-type Keys = { openai: string; gemini: string; perplexity: string; serpapi: string };
+type Keys = { openai: string; gemini: string; perplexity: string; serpapi: string; dataforseo: string };
 interface Snapshot {
   brandForm: BrandForm;
   engines: Record<string, unknown> & { mode: string };
@@ -74,7 +74,7 @@ interface Snapshot {
 const EMPTY: Snapshot = {
   brandForm: { name: "", domain: "", description: "", aliases: "", category: "", valueProps: "" },
   engines: { mode: "hybrid" },
-  byok: { openai: "", gemini: "", perplexity: "", serpapi: "" },
+  byok: { openai: "", gemini: "", perplexity: "", serpapi: "", dataforseo: "" },
   crawler: { sampleSize: 1, proxyUrl: "", scheduleEnabled: false, schedulePromptsPerDay: 15, scheduleHour: 9 },
 };
 
@@ -420,6 +420,59 @@ function Settings() {
                 <Link href="/engines#sessions" className={buttonClass("secondary", "sm")}>
                   Open Engines <ArrowRight className="h-4 w-4" aria-hidden />
                 </Link>
+              </div>
+            </Card>
+
+            <Card>
+              <CardHeader
+                title="Data provider (paid, most accurate)"
+                description={
+                  <>
+                    One DataForSEO account answers ChatGPT, Gemini and Google AI Overviews with what their consumer interfaces actually showed, in the market
+                    you choose, and Perplexity through its Sonar API. Pay as you go: roughly $0.002–0.005 per answer (
+                    <a href="https://dataforseo.com/pricing/ai-optimization/llm-scraper" target="_blank" rel="noreferrer" className="text-accent-700 hover:underline">
+                      current prices
+                    </a>
+                    ). Answers are labelled &quot;provider&quot; so they are never mixed silently with browser or API captures.
+                  </>
+                }
+              />
+              <div className="grid grid-cols-1 gap-5 p-5 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <ApiKeyField
+                    id="key-dataforseo"
+                    service="DataForSEO login and password"
+                    label={
+                      <>
+                        DataForSEO API login and password{" "}
+                        <a href="https://app.dataforseo.com/api-access" target="_blank" rel="noreferrer" className="inline-block py-1 font-normal text-accent-700 hover:underline">
+                          find them here
+                        </a>
+                      </>
+                    }
+                    hint="Paste as login:password. The API password is not your account password; it is shown on the API access page."
+                    placeholder="you@company.com:api-password"
+                    value={byok.dataforseo}
+                    saved={Boolean(savedKeys.dataforseo)}
+                    onChange={(v) => set("byok", { dataforseo: v })}
+                  />
+                </div>
+                <Field label="Market" htmlFor="provider-location" hint="Where the answers are asked from, as DataForSEO names it: United States, United Kingdom, Germany…">
+                  <input
+                    id="provider-location"
+                    className={inputClass}
+                    value={String(draft.engines.providerLocation ?? "United States")}
+                    onChange={(e) => set("engines", { providerLocation: e.target.value })}
+                  />
+                </Field>
+                <Field label="Language" htmlFor="provider-language" hint="Language code: en, de, fr, es, pt-BR…">
+                  <input
+                    id="provider-language"
+                    className={cn(inputClass, "w-32")}
+                    value={String(draft.engines.providerLanguage ?? "en")}
+                    onChange={(e) => set("engines", { providerLanguage: e.target.value })}
+                  />
+                </Field>
               </div>
             </Card>
 

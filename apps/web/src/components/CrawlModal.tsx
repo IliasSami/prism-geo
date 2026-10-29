@@ -18,6 +18,8 @@ export interface EngineOption {
   reason: string | null;
   route: "browser" | "signed_in" | "api";
   apiFallback: boolean;
+  /** Name of the paid route ("DataForSEO", "OpenAI API", ...), when one is saved. */
+  routeLabel?: string | null;
 }
 
 interface AuditStatus {
@@ -368,7 +370,7 @@ export function AuditProvider({
                               <span className="text-base font-medium text-zinc-900">{engineLabel(e.engine)}</span>
                               <Badge tone={e.tone}>{e.label}</Badge>
                               {e.route === "signed_in" && <Badge tone="info">Signed in</Badge>}
-                              {(e.route === "api" || e.apiFallback) && <Badge tone="info">API key</Badge>}
+                              {(e.route === "api" || e.apiFallback) && <Badge tone="info">{e.routeLabel || "API key"}</Badge>}
                             </span>
                             {disabled ? (
                               <span id={`engine-reason-${e.engine}`} className="mt-1 block text-xs text-zinc-600">

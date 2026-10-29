@@ -5,7 +5,7 @@ import { z } from "zod";
 export const ENGINE_IDS = ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"] as const;
 export type EngineId = (typeof ENGINE_IDS)[number];
 export const ENGINE_MODES = ["stealth", "byok", "hybrid"] as const;
-export const BYOK_PROVIDERS = ["openai", "gemini", "perplexity", "serpapi"] as const;
+export const BYOK_PROVIDERS = ["openai", "gemini", "perplexity", "serpapi", "dataforseo"] as const;
 export type ByokProvider = (typeof BYOK_PROVIDERS)[number];
 
 export const LIMITS = {
@@ -210,6 +210,20 @@ export const engineSettingsSchema = z.strictObject({
     z.ZodOptional<z.ZodBoolean>
   >),
   mode: z.enum(ENGINE_MODES, { error: `mode must be one of ${ENGINE_MODES.join(", ")}` }).optional(),
+  /** Market a data provider (DataForSEO) asks from, as DataForSEO names it: "United States", "United Kingdom". */
+  providerLocation: z
+    .string({ error: "The location must be text" })
+    .trim()
+    .min(2, "Enter a country or city, e.g. United States")
+    .max(80, "The location is too long")
+    .regex(/^[\p{L} ,.'()-]+$/u, "Use a location name such as United States or London,England,United Kingdom")
+    .optional(),
+  /** Language code for the provider, e.g. "en", "de", "pt-BR". */
+  providerLanguage: z
+    .string({ error: "The language must be text" })
+    .trim()
+    .regex(/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/, "Use a language code such as en, de or pt-BR")
+    .optional(),
 });
 
 /** Saved API keys: "" or null clears one; a masked value ("sk-…••••1234") means unchanged. */

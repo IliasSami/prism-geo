@@ -1,5 +1,5 @@
 import { getRawDb, getSettings } from "@prismgeo/db";
-import { isProfileConnected, apiKeyFor, engineRemedy, type ApiKeys } from "@prismgeo/crawler";
+import { isProfileConnected, apiKeyFor, apiRouteLabel, engineRemedy, type ApiKeys } from "@prismgeo/crawler";
 
 export const ALL_ENGINES = ["chatgpt", "gemini", "perplexity", "google_aio", "copilot"] as const;
 export type EngineId = (typeof ALL_ENGINES)[number];
@@ -17,6 +17,8 @@ export interface EngineHealth {
   route: "browser" | "signed_in" | "api";
   /** A saved API key answers when the browser is blocked (hybrid mode). */
   apiFallback: boolean;
+  /** Name of the paid route when one is saved ("DataForSEO", "OpenAI API", ...). */
+  routeLabel: string | null;
   remedy: string | null;
   lastRunAt: string | null;
   /**
@@ -116,6 +118,6 @@ export function getEngineHealth(brandId: string | undefined): EngineHealth[] {
         : lastFailureKind && LOCAL_FAILURES.has(lastFailureKind)
           ? engineRemedy(engine, lastFailureKind)
           : null;
-    return { engine, enabled, status, captured, attempted, route, apiFallback: mode === "hybrid" && hasKey, remedy, lastRunAt, lastFailureKind };
+    return { engine, enabled, status, captured, attempted, route, apiFallback: mode === "hybrid" && hasKey, routeLabel: hasKey ? apiRouteLabel(engine, keys) : null, remedy, lastRunAt, lastFailureKind };
   });
 }

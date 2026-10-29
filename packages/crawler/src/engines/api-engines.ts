@@ -1,5 +1,6 @@
 import { EngineBlockedError, assertRealAnswer, cleanCitationUrl, type EngineAnswer } from "./browser-session";
 import { NoAiOverviewError } from "./google-aio";
+import { ProviderAccountError, runDataForSeo, type DataForSeoOptions } from "./dataforseo";
 
 /**
  * Official API access to the engines, using the user's own keys (Settings → API keys).
@@ -18,15 +19,45 @@ export interface ApiKeys {
   openai?: string;
   perplexity?: string;
   serpapi?: string;
+  /** DataForSEO "login:password": one credential for ChatGPT, Gemini, Google AI Overviews and Perplexity. */
+  dataforseo?: string;
 }
 
-/** The key that unlocks API access for an engine, or "" when none is saved. */
+export type ApiRoute =
+  | { kind: "dataforseo"; credential: string }
+  | { kind: "gemini" | "openai" | "perplexity" | "serpapi"; key: string };
+
+/**
+ * Which paid route answers an engine, or null when none is saved. DataForSEO captures what the
+ * consumer interface showed, so it is preferred for ChatGPT, Gemini and Google AI Overviews over
+ * a model API. For Perplexity both routes are the Sonar API; the user's own Perplexity key is used
+ * first (no provider fee), DataForSEO otherwise.
+ */
+export function apiRouteFor(engine: string, keys: ApiKeys): ApiRoute | null {
+  const dfs = keys.dataforseo?.trim() || "";
+  const own = (kind: "gemini" | "openai" | "perplexity" | "serpapi") => {
+    const key = keys[kind]?.trim() || "";
+    return key ? ({ kind, key } as const) : null;
+  };
+  const provider = dfs ? ({ kind: "dataforseo", credential: dfs } as const) : null;
+  if (engine === "chatgpt") return provider || own("openai");
+  if (engine === "gemini") return provider || own("gemini");
+  if (engine === "google_aio") return provider || own("serpapi");
+  if (engine === "perplexity") return own("perplexity") || provider;
+  return null;
+}
+
+/** The credential that unlocks a paid route for an engine, or "" when none is saved. */
 export function apiKeyFor(engine: string, keys: ApiKeys): string {
-  if (engine === "gemini") return keys.gemini?.trim() || "";
-  if (engine === "chatgpt") return keys.openai?.trim() || "";
-  if (engine === "perplexity") return keys.perplexity?.trim() || "";
-  if (engine === "google_aio") return keys.serpapi?.trim() || "";
-  return "";
+  const route = apiRouteFor(engine, keys);
+  return route ? (route.kind === "dataforseo" ? route.credential : route.key) : "";
+}
+
+/** Human-readable name of the route, for the dashboard ("DataForSEO", "OpenAI API", ...). */
+export function apiRouteLabel(engine: string, keys: ApiKeys): string | null {
+  const route = apiRouteFor(engine, keys);
+  if (!route) return null;
+  return { dataforseo: "DataForSEO", gemini: "Gemini API", openai: "OpenAI API", perplexity: "Perplexity API", serpapi: "SerpApi" }[route.kind];
 }
 
 /** The API rejected the key or the account has no access; retrying cannot help. */
@@ -162,18 +193,29 @@ async function serpApiOverview(query: string, key: string): Promise<Omit<EngineA
   return { responseText: overviewText(overview.text_blocks), citations, subQueries: [], captureMethod: "api" };
 }
 
-export async function runApiEngine(engine: ApiEngine, query: string, keys: ApiKeys): Promise<EngineAnswer> {
-  const key = apiKeyFor(engine, keys);
-  if (!key) throw new ApiKeyRejectedError(`No API key saved for ${engine}`);
+export async function runApiEngine(engine: ApiEngine, query: string, keys: ApiKeys, providerOptions: DataForSeoOptions = {}): Promise<EngineAnswer> {
+  const route = apiRouteFor(engine, keys);
+  if (!route) throw new ApiKeyRejectedError(`No API key saved for ${engine}`);
   const start = Date.now();
-  const result =
-    engine === "gemini"
-      ? await geminiApi(query, key)
-      : engine === "chatgpt"
-        ? await openAiApi(query, key)
-        : engine === "google_aio"
-          ? await serpApiOverview(query, key)
-          : await perplexityApi(query, key);
-  assertRealAnswer(result.responseText, `${engine}-api`, query);
+  let result: Omit<EngineAnswer, "executionMs">;
+  if (route.kind === "dataforseo") {
+    try {
+      result = await runDataForSeo(engine, query, route.credential, providerOptions);
+    } catch (err) {
+      // A refused login or an empty balance stops the engine like a rejected key does
+      if (err instanceof ProviderAccountError) throw new ApiKeyRejectedError(err.message);
+      throw err;
+    }
+  } else {
+    result =
+      route.kind === "gemini"
+        ? await geminiApi(query, route.key)
+        : route.kind === "openai"
+          ? await openAiApi(query, route.key)
+          : route.kind === "serpapi"
+            ? await serpApiOverview(query, route.key)
+            : await perplexityApi(query, route.key);
+  }
+  assertRealAnswer(result.responseText, `${engine}-${route.kind}`, query);
   return { ...result, executionMs: Date.now() - start };
 }

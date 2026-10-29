@@ -23,6 +23,8 @@ const DEFAULT_ENGINES = {
   gemini: true,
   chatgpt: true,
   mode: "hybrid", // 'stealth' (browser only) | 'byok' | 'hybrid'; hybrid equals browser-only until a key is saved
+  providerLocation: "United States",
+  providerLanguage: "en",
 };
 
 const DEFAULT_CRAWLER = {
@@ -79,6 +81,8 @@ function readSettings() {
   const storedEngines = { ...DEFAULT_ENGINES, ...getSettings<Record<string, unknown>>("engine_settings", {}) };
   const engines: Record<string, unknown> = Object.fromEntries(ENGINE_IDS.map((e) => [e, storedEngines[e] !== false]));
   engines.mode = (ENGINE_MODES as readonly unknown[]).includes(storedEngines.mode) ? storedEngines.mode : DEFAULT_ENGINES.mode;
+  engines.providerLocation = typeof storedEngines.providerLocation === "string" && storedEngines.providerLocation ? storedEngines.providerLocation : DEFAULT_ENGINES.providerLocation;
+  engines.providerLanguage = typeof storedEngines.providerLanguage === "string" && storedEngines.providerLanguage ? storedEngines.providerLanguage : DEFAULT_ENGINES.providerLanguage;
   const crawler = { ...DEFAULT_CRAWLER, ...getSettings<Record<string, unknown>>("crawler_settings", {}) } as typeof DEFAULT_CRAWLER;
   return { byok, engines, crawler };
 }
@@ -112,6 +116,13 @@ export const POST = route("settings POST", async (request: Request) => {
       if (value === undefined) continue;
       const trimmed = (value ?? "").trim();
       if (isMasked(trimmed)) continue; // the masked value shown by GET: unchanged
+      // DataForSEO authenticates with the API login and password from app.dataforseo.com/api-access
+      if (provider === "dataforseo" && trimmed && !/^[^:\s]+:\S+$/.test(trimmed)) {
+        return NextResponse.json(
+          { error: "DataForSEO: enter your API login and password as login:password (from app.dataforseo.com/api-access)" },
+          { status: 400 },
+        );
+      }
       keys[provider] = trimmed;
     }
     writes.push(["byok_api_keys", keys]);

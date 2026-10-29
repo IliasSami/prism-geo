@@ -18,6 +18,15 @@ export const ENGINE_LABELS: Record<string, string> = {
   copilot: "Copilot",
 };
 
+/** How each capture method is named in the dashboard and reports. */
+export const CAPTURE_METHOD_LABELS: Record<string, string> = {
+  browser: "Browser",
+  browser_signed_in: "Signed-in browser",
+  api: "API",
+  provider: "Data provider",
+  manual: "Captured by hand",
+};
+
 export interface Rate {
   /** Answers that hit (raw count). */
   hits: number;
@@ -132,7 +141,7 @@ export interface EngineCoverage {
 export interface CaptureMethodSplit {
   engine: string;
   total: number;
-  /** Answers per capture method ("browser", "browser_signed_in", "api"). */
+  /** Answers per capture method ("browser", "browser_signed_in", "api", "provider", "manual"). */
   byMethod: Record<string, number>;
   dominant: string;
   /** More than 20% of this engine's answers came from a non-dominant method (populations are mixed). */

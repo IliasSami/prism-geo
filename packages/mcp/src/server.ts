@@ -92,7 +92,7 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
         "PrismGEO tracks how AI answer engines (ChatGPT, Perplexity, Gemini, Google AI Overviews, Copilot) mention and cite a brand versus its competitors. " +
         "Start with get_workspace_overview, then get_visibility_report. Use list_runs/get_run to read the actual answers behind any number. " +
         "Failures (blocked, rate-limited, no AI Overview) are reported separately and are never counted as answers. " +
-        "Runs have a capture_method: 'browser' (logged-out consumer app), 'browser_signed_in' or 'api'. Small samples are noisy: always state run counts.",
+        "Runs have a capture_method: 'browser' (logged-out consumer app), 'browser_signed_in', 'api' (model API), 'provider' (consumer interface captured by a data provider such as DataForSEO) or 'manual' (asked by a person and saved with the capture extension). Small samples are noisy: always state run counts.",
     }
   );
 

@@ -8,6 +8,7 @@ import { Drawer, type HighlightGroup } from "@/components/answers/Drawer";
 import { Markdown, makeHighlighter } from "@/components/answers/Markdown";
 import { Pager, SegmentLinks } from "@/components/insights/parts";
 import { copyText } from "@/components/clipboard";
+import { CAPTURE_METHOD_LABELS } from "@prismgeo/core";
 
 interface RunItem {
   id: string;
@@ -22,10 +23,11 @@ interface RunItem {
   citations: Array<{ url: string; domain: string; title: string | null }>;
 }
 
-const METHOD_LABEL: Record<string, string> = { browser: "Browser", browser_signed_in: "Signed-in browser", api: "API" };
+const METHOD_LABEL: Record<string, string> = CAPTURE_METHOD_LABELS;
 
 /** Gemini's consumer app does not expose its sources to a browser capture; its API does. */
-const sourcesHidden = (r: RunItem) => r.citations.length === 0 && r.engine === "gemini" && r.captureMethod !== "api";
+// Gemini in a browser shows sources as buttons; provider, API and hand captures do include them
+const sourcesHidden = (r: RunItem) => r.citations.length === 0 && r.engine === "gemini" && (r.captureMethod === "browser" || r.captureMethod === "browser_signed_in");
 
 function formatDate(value: string): string {
   const d = new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);

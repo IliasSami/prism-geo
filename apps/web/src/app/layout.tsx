@@ -54,6 +54,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     reason: v.reason,
     route: v.health.route,
     apiFallback: v.health.apiFallback,
+    routeLabel: v.health.routeLabel,
   }));
 
   return (

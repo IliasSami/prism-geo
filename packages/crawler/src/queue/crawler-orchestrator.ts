@@ -346,7 +346,9 @@ export class CrawlerOrchestrator {
         ? rawPrompts.slice(0, options.promptLimit)
         : rawPrompts;
 
-    const engineSettings = getSettings<{ mode?: EngineMode }>("engine_settings", {});
+    const engineSettings = getSettings<{ mode?: EngineMode; providerLocation?: string; providerLanguage?: string }>("engine_settings", {});
+    // Where a data provider (DataForSEO) asks from, as a buyer in that market would
+    const providerOptions = { location: engineSettings.providerLocation, language: engineSettings.providerLanguage };
     // Hybrid is the default: identical to browser-only until a key is saved, then keys are used when blocked
     const mode: EngineMode = engineSettings.mode === "byok" || engineSettings.mode === "stealth" ? engineSettings.mode : "hybrid";
     const apiKeys = getSettings<ApiKeys>("byok_api_keys", {});
@@ -516,7 +518,7 @@ export class CrawlerOrchestrator {
                 if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser);
                 throw new Error(`Unknown engine: ${engine}`);
               };
-              const runEngine = (): Promise<EngineAnswer> => (viaApi ? runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys) : runBrowser());
+              const runEngine = (): Promise<EngineAnswer> => (viaApi ? runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions) : runBrowser());
               try {
                 try {
                   engineResult = await runEngine();
@@ -526,7 +528,7 @@ export class CrawlerOrchestrator {
                   if (!viaApi && mode === "hybrid" && hasApi(engine) && kind !== "no_ai_overview" && kind !== "network") {
                     console.warn(`[CrawlerOrchestrator] ${engine} browser ${kind}; falling back to API: ${(firstErr as Error).message}`);
                     if (kind === "blocked" || kind === "setup") viaApi = true; // stop using a browser that cannot work
-                    engineResult = await runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys);
+                    engineResult = await runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions);
                   } else {
                     // One retry for transient failures (timeouts, half-rendered or unfinished answers).
                     // Blocks, rejected keys, network/setup failures and "no AI Overview" are never retried.
@@ -683,7 +685,11 @@ export class CrawlerOrchestrator {
     const { prose, mentions } = detectMentions(text, trackedEntities, promptText);
     const allStarts = mentions.flatMap((m) => m.hits.map((h) => h.index));
     const lookalikes = lookalikeDomains(text, citations.map((c) => c.domain), brandDomain);
-    const flags = lookalikes.length > 0 ? { entityConfusion: { lookalikeDomains: lookalikes } } : {};
+    const flags: Record<string, unknown> = lookalikes.length > 0 ? { entityConfusion: { lookalikeDomains: lookalikes } } : {};
+    // Provenance of provider captures: who captured it, what it cost, which model answered
+    if (engineResult.provider) flags.provider = engineResult.provider;
+    if (typeof engineResult.costUsd === "number" && engineResult.costUsd > 0) flags.costUsd = engineResult.costUsd;
+    if (engineResult.model) flags.model = engineResult.model;
 
     const sqlite = getRawDb();
     const createdAt = nowIso();
