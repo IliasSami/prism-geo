@@ -28,7 +28,9 @@ export function renderReportMarkdown(report: Report, meta: MarkdownReportMeta): 
 
   push(`# AI search visibility: ${brand.name}`, "");
   push(
-    `${brand.domain}${brand.category ? ` · ${brand.category}` : ""} · answers captured ${day(report.firstCapture)} to ${day(report.lastCapture)} · generated ${day(meta.generatedAt)}`,
+    `${brand.domain}${brand.category ? ` · ${brand.category}` : ""} · answers captured ${
+      day(report.firstCapture) === day(report.lastCapture) ? day(report.firstCapture) : `${day(report.firstCapture)} to ${day(report.lastCapture)}`
+    } · generated ${day(meta.generatedAt)}`,
     ""
   );
 
@@ -68,7 +70,7 @@ export function renderReportMarkdown(report: Report, meta: MarkdownReportMeta): 
   for (const e of report.engines) {
     const cov = report.coverage.find((c) => c.engine === e.engine);
     push(
-      `| ${label(e.engine)} | ${e.answers} | ${range(e.youMentioned)} | ${range(e.youCited)} | ${e.topCompetitor ? `${cell(e.topCompetitor.name)} (${e.topCompetitor.answers})` : "–"} | ${
+      `| ${label(e.engine)} | ${e.answers} | ${range(e.youMentioned)} | ${e.youCited.n ? range(e.youCited) : "sources not shown by this engine"} | ${e.topCompetitor ? `${cell(e.topCompetitor.name)} (${e.topCompetitor.answers})` : "–"} | ${
         cov ? `${cov.promptsCovered} of ${cov.activeUnbrandedPrompts}` : "–"
       } |`
     );
@@ -91,6 +93,31 @@ export function renderReportMarkdown(report: Report, meta: MarkdownReportMeta): 
   }
   if (report.aioTrigger.overviews + report.aioTrigger.noOverview > 0) {
     push(`Google showed an AI Overview for ${range(report.aioTrigger.rate)} of the searches it answered.`, "");
+  }
+
+  // By buyer stage: the intents the questions were tagged with (branded questions excluded)
+  const stages = new Map<string, { questions: number; answers: number; named: number; rivals: Map<string, number> }>();
+  for (const p of report.prompts) {
+    if (p.branded || !p.active || p.answers === 0) continue;
+    const st = stages.get(p.intent) ?? { questions: 0, answers: 0, named: 0, rivals: new Map<string, number>() };
+    st.questions++;
+    st.answers += p.answers;
+    st.named += p.youMentioned;
+    for (const c of p.competitors) st.rivals.set(c.name, (st.rivals.get(c.name) || 0) + c.answers);
+    stages.set(p.intent, st);
+  }
+  if (stages.size > 1) {
+    push("## By buyer stage", "", "Unbranded questions grouped by the intent they were tagged with.", "");
+    push("| Stage (intent) | Questions | Answers naming you | Most-named competitor |", "| --- | --- | --- | --- |");
+    for (const [intent, st] of [...stages.entries()].sort((a, b) => b[1].answers - a[1].answers)) {
+      const top = [...st.rivals.entries()].sort((a, b) => b[1] - a[1])[0];
+      push(
+        `| ${cell(intent.replace(/_/g, " "))} | ${st.questions} | ${Math.round((st.named / st.answers) * 100)}% (${st.named} of ${st.answers}) | ${
+          top ? `${cell(top[0])} (${top[1]} of ${st.answers})` : "none named"
+        } |`
+      );
+    }
+    push("");
   }
 
   // Where answers come from

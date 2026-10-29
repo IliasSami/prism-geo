@@ -5,7 +5,7 @@ import { buildVisibilityReport, renderReportMarkdown, type ReportInput } from ".
 const input: ReportInput = {
   brand: { id: "b1", name: "Northwind Voice", domain: "northwindvoice.ai", aliasesJson: "[]" },
   prompts: [
-    { id: "p1", query_text: "ai that calls abandoned carts shopify", intent_type: "consideration", active: 1 },
+    { id: "p1", query_text: "ai that calls abandoned carts shopify", intent_type: "discovery", active: 1 },
     { id: "p2", query_text: "best dunning app for shopify subscriptions", intent_type: "consideration", active: 1 },
     { id: "p3", query_text: "is northwind voice legit", intent_type: "direct", active: 1 },
   ],
@@ -14,6 +14,7 @@ const input: ReportInput = {
     { id: "r1", prompt_id: "p1", engine: "chatgpt", capture_method: "browser", created_at: "2026-10-29T01:00:00.000Z" },
     { id: "r2", prompt_id: "p2", engine: "chatgpt", capture_method: "browser", created_at: "2026-10-29T01:05:00.000Z" },
     { id: "r3", prompt_id: "p3", engine: "chatgpt", capture_method: "browser", created_at: "2026-10-29T01:10:00.000Z" },
+    { id: "r4", prompt_id: "p1", engine: "gemini", capture_method: "browser", created_at: "2026-10-29T01:15:00.000Z" },
   ],
   mentions: [
     { run_id: "r1", entity_name: "Northwind Voice", competitor_id: null, is_target_brand: 1, position_rank: 1, sentiment: "positive" },
@@ -40,11 +41,15 @@ test("the Markdown report states rates with their denominators and keeps failure
     competitors: ["Dialsy AI"],
   });
   assert.match(md, /^# AI search visibility: Northwind Voice/);
-  assert.match(md, /appears in 50% \(likely \d+–\d+%, 1 of 2\) of answers to 2 unbranded buyer questions/);
+  assert.match(md, /appears in 25% \(likely \d+–\d+%, 1 of 3\) of answers to 2 unbranded buyer questions/);
   assert.match(md, /Most-named competitor:\*\* Dialsy AI/);
   assert.match(md, /Branded questions\*\* \(that name Northwind Voice\)/);
   assert.match(md, /Perplexity: 1 blocked by the engine, 2 skipped while it kept blocking\./);
   assert.match(md, /\| best dunning app for shopify subscriptions \| Dialsy AI \(1 of 1\) \| high \|/);
+  assert.match(md, /answers captured 2026-10-29 ·/);
+  assert.match(md, /\| Gemini \| 1 \| .* \| sources not shown by this engine \|/);
+  assert.match(md, /\| discovery \| 1 \| 50% \(1 of 2\) \| none named \|/);
+  assert.match(md, /\| consideration \| 1 \| 0% \(0 of 1\) \| Dialsy AI \(1 of 1\) \|/);
   assert.doesNotMatch(md, /NaN|undefined|null%/);
 });
 
