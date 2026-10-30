@@ -21,11 +21,13 @@ export interface ApiKeys {
   serpapi?: string;
   /** DataForSEO "login:password": one credential for ChatGPT, Gemini, Google AI Overviews and Perplexity. */
   dataforseo?: string;
+  /** Apify API token, for Google AI Mode through Apify's own AI Mode actor. */
+  apify?: string;
 }
 
 export type ApiRoute =
   | { kind: "dataforseo"; credential: string }
-  | { kind: "gemini" | "openai" | "perplexity" | "serpapi"; key: string };
+  | { kind: "gemini" | "openai" | "perplexity" | "serpapi" | "apify"; key: string };
 
 /**
  * Which paid route answers an engine, or null when none is saved. DataForSEO captures what the
@@ -35,14 +37,17 @@ export type ApiRoute =
  */
 export function apiRouteFor(engine: string, keys: ApiKeys): ApiRoute | null {
   const dfs = keys.dataforseo?.trim() || "";
-  const own = (kind: "gemini" | "openai" | "perplexity" | "serpapi") => {
+  const own = (kind: "gemini" | "openai" | "perplexity" | "serpapi" | "apify") => {
     const key = keys[kind]?.trim() || "";
     return key ? ({ kind, key } as const) : null;
   };
   const provider = dfs ? ({ kind: "dataforseo", credential: dfs } as const) : null;
   if (engine === "chatgpt") return provider || own("openai");
   if (engine === "gemini") return provider || own("gemini");
-  if (engine === "google_aio" || engine === "google_ai_mode") return provider || own("serpapi");
+  if (engine === "google_aio") return provider || own("serpapi");
+  // SerpApi before Apify: SerpApi's free plan covers a few hundred searches a month, while Apify
+  // charges its free plan far more per AI Mode answer than its paid plans
+  if (engine === "google_ai_mode") return provider || own("serpapi") || own("apify");
   if (engine === "perplexity") return own("perplexity") || provider;
   return null;
 }
@@ -57,7 +62,7 @@ export function apiKeyFor(engine: string, keys: ApiKeys): string {
 export function apiRouteLabel(engine: string, keys: ApiKeys): string | null {
   const route = apiRouteFor(engine, keys);
   if (!route) return null;
-  return { dataforseo: "DataForSEO", gemini: "Gemini API", openai: "OpenAI API", perplexity: "Perplexity API", serpapi: "SerpApi" }[route.kind];
+  return { dataforseo: "DataForSEO", gemini: "Gemini API", openai: "OpenAI API", perplexity: "Perplexity API", serpapi: "SerpApi", apify: "Apify" }[route.kind];
 }
 
 /** The API rejected the key or the account has no access; retrying cannot help. */
@@ -67,18 +72,19 @@ const GEMINI_MODEL = process.env.PRISMGEO_GEMINI_MODEL || "gemini-flash-latest";
 const OPENAI_MODEL = process.env.PRISMGEO_OPENAI_MODEL || "gpt-5-mini";
 const PERPLEXITY_MODEL = process.env.PRISMGEO_PERPLEXITY_MODEL || "sonar";
 
-async function postJson(tag: string, url: string, headers: Record<string, string>, body: unknown): Promise<any> {
-  const res = await fetch(url, {
+async function postJson(tag: string, url: string, headers: Record<string, string>, body: unknown, timeoutMs = 120000, fetchImpl: typeof fetch = fetch): Promise<any> {
+  const res = await fetchImpl(url, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await res.text();
   if (!res.ok) {
     const detail = text.slice(0, 300).replace(/\s+/g, " ");
     if (res.status === 429) throw new EngineBlockedError(`[${tag}] API rate limit or quota reached (429): ${detail}`);
     if (res.status === 401 || res.status === 403) throw new ApiKeyRejectedError(`[${tag}] API key rejected (${res.status}): ${detail}`);
+    if (res.status === 402) throw new ApiKeyRejectedError(`[${tag}] The account has no credit left (402): ${detail}`);
     throw new Error(`[${tag}] API error ${res.status}: ${detail}`);
   }
   return JSON.parse(text);
@@ -229,6 +235,73 @@ async function serpApiAiMode(query: string, key: string, opts: DataForSeoOptions
   return { responseText: text, citations, subQueries: [], captureMethod: "provider", provider: "serpapi" };
 }
 
+/**
+ * ISO country code (lower case) for a market name such as "United States" or
+ * "London,England,United Kingdom" (the country is the last part), or null when it is not a country.
+ */
+export function countryCodeFor(location: string | undefined): string | null {
+  const name = (location || "").split(",").pop()?.trim().toLowerCase();
+  if (!name) return null;
+  if (/^[a-z]{2}$/.test(name)) return name === "uk" ? "gb" : name;
+  const names = new Intl.DisplayNames(["en"], { type: "region" });
+  for (let a = 65; a <= 90; a++) {
+    for (let b = 65; b <= 90; b++) {
+      const code = String.fromCharCode(a, b);
+      let label: string | undefined;
+      try {
+        label = names.of(code);
+      } catch {
+        continue;
+      }
+      if (label && label !== code && label.toLowerCase() === name) return code.toLowerCase();
+    }
+  }
+  return null;
+}
+
+interface ApifyAiModeItem {
+  query?: string;
+  text?: string;
+  sources?: Array<{ url?: string; title?: string; section?: string }>;
+}
+
+/**
+ * One item of Apify's Google AI Mode actor (apify/google-ai-mode-scraper) as a PrismGEO answer.
+ * Sources marked "citations" or "attached" are the pages the answer cites; "more" are further
+ * reading Google lists below it, which are not counted as citations.
+ */
+export function parseApifyAiMode(items: unknown, query: string): Omit<EngineAnswer, "executionMs"> {
+  const list: ApifyAiModeItem[] = Array.isArray(items) ? items : [];
+  const item = list.find((i) => typeof i?.text === "string" && i.text.trim());
+  // The actor writes queries without an AI Mode answer to its separate errors dataset
+  if (!item?.text) throw new Error(`[ApifyAiMode] AI Mode returned no answer for "${query}" (Apify lists the reason under the run's failed queries)`);
+  const citations: Array<{ url: string; title: string }> = [];
+  for (const s of item.sources || []) {
+    if (typeof s?.url !== "string" || !/^https?:\/\//i.test(s.url) || s.section === "more") continue;
+    const url = cleanCitationUrl(s.url);
+    if (!citations.some((c) => c.url === url)) citations.push({ url, title: s.title || url });
+  }
+  return { responseText: markdownToText(item.text).trim(), citations, subQueries: [], captureMethod: "provider", provider: "apify" };
+}
+
+const APIFY_AI_MODE_ACTOR = "apify~google-ai-mode-scraper";
+
+/** Google AI Mode through Apify: one synchronous actor run per question. */
+export async function apifyAiMode(query: string, token: string, opts: DataForSeoOptions, fetchImpl: typeof fetch = fetch): Promise<Omit<EngineAnswer, "executionMs">> {
+  const country = countryCodeFor(opts.location);
+  const input: Record<string, string> = { queries: query };
+  if (country) input.countryCode = country;
+  const items = await postJson(
+    "ApifyAiMode",
+    `https://api.apify.com/v2/acts/${APIFY_AI_MODE_ACTOR}/run-sync-get-dataset-items?timeout=240`,
+    { authorization: `Bearer ${token}` },
+    input,
+    270000,
+    fetchImpl
+  );
+  return parseApifyAiMode(items, query);
+}
+
 export async function runApiEngine(engine: ApiEngine, query: string, keys: ApiKeys, providerOptions: DataForSeoOptions = {}): Promise<EngineAnswer> {
   const route = apiRouteFor(engine, keys);
   if (!route) throw new ApiKeyRejectedError(`No API key saved for ${engine}`);
@@ -248,7 +321,9 @@ export async function runApiEngine(engine: ApiEngine, query: string, keys: ApiKe
         ? await geminiApi(query, route.key)
         : route.kind === "openai"
           ? await openAiApi(query, route.key)
-          : route.kind === "serpapi"
+          : route.kind === "apify"
+            ? await apifyAiMode(query, route.key, providerOptions)
+            : route.kind === "serpapi"
             ? engine === "google_ai_mode"
               ? await serpApiAiMode(query, route.key, providerOptions)
               : await serpApiOverview(query, route.key)

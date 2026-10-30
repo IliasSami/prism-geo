@@ -6,7 +6,7 @@ export { ENGINE_IDS } from "@prismgeo/core";
 import { ENGINE_IDS } from "@prismgeo/core";
 export type EngineId = (typeof ENGINE_IDS)[number];
 export const ENGINE_MODES = ["stealth", "byok", "hybrid"] as const;
-export const BYOK_PROVIDERS = ["openai", "gemini", "perplexity", "serpapi", "dataforseo"] as const;
+export const BYOK_PROVIDERS = ["openai", "gemini", "perplexity", "serpapi", "dataforseo", "apify"] as const;
 export type ByokProvider = (typeof BYOK_PROVIDERS)[number];
 
 export const LIMITS = {

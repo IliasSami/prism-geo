@@ -401,8 +401,8 @@ export class CrawlerOrchestrator {
           kind: "unavailable",
           message:
             mode === "stealth"
-              ? "Google AI Mode is read through SerpApi or DataForSEO, which free browser mode does not use. Choose another mode in Settings → Engines & access."
-              : "Google AI Mode needs a SerpApi key or the DataForSEO data provider (Settings → Engines & access).",
+              ? "Google AI Mode is read through SerpApi, Apify or DataForSEO, which free browser mode does not use. Choose another mode in Settings → Engines & access."
+              : "Google AI Mode needs a SerpApi key (free plan: 250 searches a month), an Apify token or the DataForSEO data provider (Settings → Engines & access).",
         });
         return false;
       }

@@ -16,12 +16,12 @@ export interface EngineInfo {
     /** A saved signed-in session is possible (and, for Copilot, required). */
     signIn: "optional" | "required" | "none";
     /** Paid or keyed routes, in preference order. */
-    keyed: Array<"dataforseo" | "serpapi" | "openai" | "gemini" | "perplexity">;
+    keyed: Array<"dataforseo" | "serpapi" | "apify" | "openai" | "gemini" | "perplexity">;
   };
 }
 
 export const ENGINES: Record<EngineId, EngineInfo> = {
-  google_ai_mode: { id: "google_ai_mode", label: "Google AI Mode", routes: { browser: false, signIn: "none", keyed: ["dataforseo", "serpapi"] } },
+  google_ai_mode: { id: "google_ai_mode", label: "Google AI Mode", routes: { browser: false, signIn: "none", keyed: ["dataforseo", "serpapi", "apify"] } },
   google_aio: { id: "google_aio", label: "Google AI Overviews", routes: { browser: true, signIn: "optional", keyed: ["dataforseo", "serpapi"] } },
   gemini: { id: "gemini", label: "Gemini", routes: { browser: true, signIn: "optional", keyed: ["dataforseo", "gemini"] } },
   chatgpt: { id: "chatgpt", label: "ChatGPT", routes: { browser: true, signIn: "optional", keyed: ["dataforseo", "openai"] } },

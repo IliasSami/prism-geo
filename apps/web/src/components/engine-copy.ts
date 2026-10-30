@@ -68,7 +68,7 @@ export interface ReasonCopy {
 
 /** What reliably stops each engine blocking (shown with "blocked" failures). */
 const BLOCK_FIX: Record<string, string> = {
-  google_ai_mode: "Google AI Mode is read through a SerpApi key or the DataForSEO data provider.",
+  google_ai_mode: "Google AI Mode is read through a SerpApi key (free plan: 250 searches a month), an Apify token or the DataForSEO data provider.",
   perplexity:
     "Perplexity limits logged-out visitors: connect your free Perplexity account (sign in fully before closing the window), or add a Perplexity API key or the DataForSEO data provider.",
   google_aio:

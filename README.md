@@ -37,6 +37,7 @@ PrismGEO uses the most reliable route you have configured, per engine:
 | Gemini | Logged-out browser, or signed in | Gemini API with Google Search grounding (free tier) | The answer Gemini's interface showed, with sources | Browser captures have no sources |
 | Perplexity | Signed-in free account (anonymous use is capped quickly) | Perplexity Sonar API | Sonar API (your own Perplexity key is used first) | |
 | Google AI Overviews | Browser, best with a signed-in Google session and slow pacing | SerpApi (free monthly tier) | The Overview on Google's results page | One IP gets "unusual traffic" blocks after a few dozen searches |
+| Google AI Mode | none (Google blocks automated browsers from AI Mode) | SerpApi (free plan: 250 searches a month), or an Apify token (Apify's own AI Mode actor) | The AI Mode answer with its cited pages | Free alternative: capture by hand with the extension |
 | Microsoft Copilot | **Signed-in Microsoft account only** | none | none | Copilot has no logged-out chat: without a connected session it is switched off and skipped in audits |
 
 Every engine can also be **captured by hand** with the free browser extension (below).
@@ -59,7 +60,7 @@ The **PrismGEO Capture** browser extension (`apps/extension`) saves the answer y
 
 ### Staying within rate limits, for free
 
-1. Add a free **Gemini API key** (aistudio.google.com) and a free **SerpApi key**, and choose **Hybrid**.
+1. Add a free **Gemini API key** (aistudio.google.com) and a free **SerpApi key** (it also covers Google AI Mode), and choose **Hybrid**.
 2. **Connect signed-in sessions** (Engines page): a browser window opens on the machine running PrismGEO, you sign in yourself, and crawls reuse that session. PrismGEO never sees your password. This needs a desktop (a screen); it is not available on a headless server or in Docker.
 3. Turn on the **rolling daily audit** (Settings → Schedule & network): each day it re-asks the N prompts measured longest ago instead of everything at once, so every engine sees a small, human-paced number of queries.
 4. Optionally route browser engines through **a proxy you control** (office network or a paid provider). Free public proxies are not recommended: they can read or alter your traffic, including signed-in sessions.

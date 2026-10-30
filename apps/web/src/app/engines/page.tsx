@@ -17,7 +17,7 @@ export const metadata: Metadata = { title: "Engines" };
 /** Recent audits used for timing, capture methods and the failure list (status comes from engine-state). */
 const RECENT_BATCHES = 3;
 const API_ENGINES: string[] = ENGINE_IDS.filter((e) => ENGINES[e].routes.keyed.length > 0);
-const KEY_NAME: Record<string, string> = { chatgpt: "OpenAI", gemini: "Gemini", perplexity: "Perplexity", google_aio: "SerpApi", google_ai_mode: "SerpApi" };
+const KEY_NAME: Record<string, string> = { chatgpt: "OpenAI", gemini: "Gemini", perplexity: "Perplexity", google_aio: "SerpApi", google_ai_mode: "SerpApi or Apify" };
 const METHOD_LABEL: Record<string, string> = {
   browser: "free browser",
   browser_signed_in: "signed-in session",

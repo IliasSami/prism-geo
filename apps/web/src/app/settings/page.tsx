@@ -64,7 +64,7 @@ interface Crawler {
   scheduleHour: number;
   scheduleTimeZone?: string;
 }
-type Keys = { openai: string; gemini: string; perplexity: string; serpapi: string; dataforseo: string };
+type Keys = { openai: string; gemini: string; perplexity: string; serpapi: string; dataforseo: string; apify: string };
 interface Snapshot {
   brandForm: BrandForm;
   engines: Record<string, unknown> & { mode: string };
@@ -75,7 +75,7 @@ interface Snapshot {
 const EMPTY: Snapshot = {
   brandForm: { name: "", domain: "", description: "", aliases: "", category: "", valueProps: "" },
   engines: { mode: "hybrid" },
-  byok: { openai: "", gemini: "", perplexity: "", serpapi: "", dataforseo: "" },
+  byok: { openai: "", gemini: "", perplexity: "", serpapi: "", dataforseo: "", apify: "" },
   crawler: { sampleSize: 1, proxyUrl: "", scheduleEnabled: false, schedulePromptsPerDay: 15, scheduleHour: 9 },
 };
 
@@ -522,17 +522,34 @@ function Settings() {
                   service="SerpApi key"
                   label={
                     <>
-                      SerpApi for Google AI Overviews{" "}
+                      SerpApi for Google AI Overviews and AI Mode{" "}
                       <a href="https://serpapi.com/users/sign_up" target="_blank" rel="noreferrer" className="inline-block py-1 font-normal text-accent-700 hover:underline">
                         free tier
                       </a>
                     </>
                   }
-                  hint="Reads AI Overviews without Google's &quot;unusual traffic&quot; blocks."
+                  hint="Reads AI Overviews and AI Mode without Google's &quot;unusual traffic&quot; blocks. The free plan covers 250 searches a month."
                   placeholder="SerpApi private key"
                   value={byok.serpapi}
                   saved={Boolean(savedKeys.serpapi)}
                   onChange={(v) => set("byok", { serpapi: v })}
+                />
+                <ApiKeyField
+                  id="key-apify"
+                  service="Apify token"
+                  label={
+                    <>
+                      Apify for Google AI Mode{" "}
+                      <a href="https://console.apify.com/settings/integrations" target="_blank" rel="noreferrer" className="inline-block py-1 font-normal text-accent-700 hover:underline">
+                        get a token
+                      </a>
+                    </>
+                  }
+                  hint="Uses Apify's own AI Mode actor. About $0.002–0.005 per answer on Apify's paid plans; its free plan charges $0.20 per answer, so SerpApi is used first when both are saved."
+                  placeholder="apify_api_…"
+                  value={byok.apify}
+                  saved={Boolean(savedKeys.apify)}
+                  onChange={(v) => set("byok", { apify: v })}
                 />
                 <ApiKeyField
                   id="key-openai"

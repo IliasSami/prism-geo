@@ -138,8 +138,8 @@ export function getEngineViews(brandId: string | undefined, context: "engines-pa
       fix = reasonCopy("unavailable", [h.engine], context);
       reason = "Copilot has no logged-out chat; it needs a signed-in Microsoft account.";
     } else if (state === "not_set_up" && h.engine === "google_ai_mode") {
-      fix = { title: "Google AI Mode needs a key", next: "Add a SerpApi key or the DataForSEO data provider to read AI Mode answers.", href: "/settings?tab=engines", cta: "Add a key" };
-      reason = "Google AI Mode is read through SerpApi or DataForSEO; there is no dependable browser route.";
+      fix = { title: "Google AI Mode needs a key", next: "Add a SerpApi key (free plan: 250 searches a month), an Apify token or the DataForSEO data provider to read AI Mode answers.", href: "/settings?tab=engines", cta: "Add a key" };
+      reason = "Google AI Mode is read through SerpApi, Apify or DataForSEO; Google blocks automated browsers from AI Mode.";
     } else if (state === "not_run") {
       reason = "No audit has asked this engine yet.";
     }
