@@ -117,7 +117,7 @@ export default async function EnginesPage() {
   const groupKind = (k: string) => (k === "skipped_after_blocks" ? "blocked" : k);
   const failureGroups = [
     ...failures
-      .filter((f) => f.promptId || f.kind === "session_expired")
+      .filter((f) => f.promptId || f.kind === "session_expired" || f.kind === "wrong_location")
       .reduce((acc, f) => {
         const key = `${f.engine}:${groupKind(f.kind)}`;
         const g = acc.get(key) ?? { engine: f.engine, kind: groupKind(f.kind), attempted: 0, skipped: 0, lastAt: f.at, message: f.message, items: [] as Array<{ promptId: string | null; at: string }> };

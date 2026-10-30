@@ -25,12 +25,14 @@ export class GoogleAioCrawler {
    * Captures only the AI Overview block. Organic results are never stored as the "answer":
    * when Google shows no Overview the run fails with NoAiOverviewError so it is reported, not faked.
    */
-  public static async execute(query: string, existingBrowser?: Browser): Promise<GoogleAioResult> {
+  public static async execute(query: string, existingBrowser?: Browser, market: { country?: string | null; language?: string } = {}): Promise<GoogleAioResult> {
     const startTime = Date.now();
     const captureMethod = browserCaptureMethod("google_aio");
 
     const answer = await withStealthPage("GoogleAioCrawler", existingBrowser, async (page) => {
-      await page.goto(`https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en&gl=us`, {
+      // gl/hl ask for the search location's results; the connection itself must be in that country (see location.ts)
+      const hl = (market.language || "en").slice(0, 2);
+      await page.goto(`https://www.google.com/search?q=${encodeURIComponent(query)}&hl=${hl}&gl=${market.country || "us"}`, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
       });

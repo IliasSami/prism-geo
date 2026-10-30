@@ -14,3 +14,4 @@ export * from "./net/safe-fetch";
 export * from "./queue/reanalyze";
 export * from "./engines/dataforseo";
 export * from "./queue/manual-capture";
+export * from "./engines/location";

@@ -12,6 +12,7 @@ import { SaveBar, Toast, type ToastState } from "@/components/settings/Feedback"
 import { ApiKeyField } from "@/components/settings/ApiKeyField";
 import { LogViewer } from "@/components/settings/LogViewer";
 import { CaptureExtensionPanel } from "@/components/settings/CaptureExtensionPanel";
+import { SearchLocationStatus } from "@/components/settings/SearchLocationStatus";
 import { cleanedHint, domainError } from "@/components/domain";
 
 type TabId = "client" | "competitors" | "engines" | "schedule" | "claude" | "data";
@@ -428,6 +429,67 @@ function Settings() {
 
             <Card>
               <CardHeader
+                title="Search location"
+                description="Where every question is asked from, like a rank checker set to a country: answers, sources and recommended companies differ by market. Paid routes are asked from this location; a browser on this computer is answered for the country this computer connects from."
+                actions={
+                  <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 text-sm font-medium text-zinc-700">
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label="Only search from the search location"
+                      aria-checked={draft.engines.strictLocation !== false}
+                      checked={draft.engines.strictLocation !== false}
+                      onChange={(e) => set("engines", { strictLocation: e.target.checked })}
+                      className="peer sr-only"
+                    />
+                    <span
+                      aria-hidden
+                      className="relative h-5 w-9 rounded-full bg-zinc-300 transition peer-checked:bg-accent-600 peer-focus-visible:ring-2 peer-focus-visible:ring-accent-500 peer-focus-visible:ring-offset-2 after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow after:transition peer-checked:after:translate-x-4"
+                    />
+                    Only search from here
+                  </label>
+                }
+              />
+              <div className="grid grid-cols-1 gap-5 p-5 md:grid-cols-2">
+                <Field label="Search location" htmlFor="provider-location" hint="A country, or a city as DataForSEO names it: United States, New York,New York,United States, United Kingdom…">
+                  <input
+                    id="provider-location"
+                    className={inputClass}
+                    value={String(draft.engines.providerLocation ?? "United States")}
+                    onChange={(e) => set("engines", { providerLocation: e.target.value })}
+                  />
+                </Field>
+                <Field label="Language" htmlFor="provider-language" hint="Language code: en, de, fr, es, pt-BR…">
+                  <input
+                    id="provider-language"
+                    className={cn(inputClass, "w-32")}
+                    value={String(draft.engines.providerLanguage ?? "en")}
+                    onChange={(e) => set("engines", { providerLanguage: e.target.value })}
+                  />
+                </Field>
+                <div className="md:col-span-2">
+                  <SearchLocationStatus location={String(initial.engines.providerLocation ?? "United States")} strict={draft.engines.strictLocation !== false} />
+                </div>
+                <div className="md:col-span-2">
+                  <Field
+                    label="Markets you measure"
+                    htmlFor="markets"
+                    hint="Comma separated, e.g. United States, Europe. Answers an engine tailors to another place are flagged. Empty = the search location."
+                  >
+                    <input
+                      id="markets"
+                      className={inputClass}
+                      placeholder="United States, Europe"
+                      value={String(draft.engines.markets ?? "")}
+                      onChange={(e) => set("engines", { markets: e.target.value })}
+                    />
+                  </Field>
+                </div>
+              </div>
+            </Card>
+
+            <Card>
+              <CardHeader
                 title="Data provider (paid, most accurate)"
                 description={
                   <>
@@ -460,37 +522,6 @@ function Settings() {
                     onChange={(v) => set("byok", { dataforseo: v })}
                   />
                 </div>
-                <Field label="Market" htmlFor="provider-location" hint="Where the answers are asked from, as DataForSEO names it: United States, United Kingdom, Germany…">
-                  <input
-                    id="provider-location"
-                    className={inputClass}
-                    value={String(draft.engines.providerLocation ?? "United States")}
-                    onChange={(e) => set("engines", { providerLocation: e.target.value })}
-                  />
-                </Field>
-                <div className="md:col-span-2">
-                  <Field
-                    label="Markets you measure"
-                    htmlFor="markets"
-                    hint="Comma separated, e.g. United States, United Kingdom, Europe. Answers that engines tailor to another place (such as where this computer is) are flagged. Empty = the market above."
-                  >
-                    <input
-                      id="markets"
-                      className={inputClass}
-                      placeholder="United States, Europe"
-                      value={String(draft.engines.markets ?? "")}
-                      onChange={(e) => set("engines", { markets: e.target.value })}
-                    />
-                  </Field>
-                </div>
-                <Field label="Language" htmlFor="provider-language" hint="Language code: en, de, fr, es, pt-BR…">
-                  <input
-                    id="provider-language"
-                    className={cn(inputClass, "w-32")}
-                    value={String(draft.engines.providerLanguage ?? "en")}
-                    onChange={(e) => set("engines", { providerLanguage: e.target.value })}
-                  />
-                </Field>
               </div>
             </Card>
 

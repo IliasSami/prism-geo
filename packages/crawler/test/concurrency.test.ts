@@ -7,6 +7,8 @@ import path from "node:path";
 // Throwaway database; never the repo's data/ directory
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prismgeo-concurrency-"));
 process.env.PRISMGEO_DB_PATH = path.join(tmp, "data", "test.db");
+// Crawls in tests run as if from the default search location (no network check)
+process.env.PRISMGEO_CONNECTION_COUNTRY = "us";
 
 const { getRawDb, setSettings } = await import("@prismgeo/db");
 const { CrawlerOrchestrator, configureCitedPageFetch, apiConcurrency } = await import("../src/queue/crawler-orchestrator");

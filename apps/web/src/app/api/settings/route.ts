@@ -27,6 +27,8 @@ const DEFAULT_ENGINES = {
   providerLocation: "United States",
   providerLanguage: "en",
   markets: "",
+  // Only use routes that ask from the search location (a browser here only when this computer connects from there)
+  strictLocation: true,
 };
 
 const DEFAULT_CRAWLER = {
@@ -85,6 +87,7 @@ function readSettings() {
   engines.mode = (ENGINE_MODES as readonly unknown[]).includes(storedEngines.mode) ? storedEngines.mode : DEFAULT_ENGINES.mode;
   engines.providerLocation = typeof storedEngines.providerLocation === "string" && storedEngines.providerLocation ? storedEngines.providerLocation : DEFAULT_ENGINES.providerLocation;
   engines.markets = typeof storedEngines.markets === "string" ? storedEngines.markets : "";
+  engines.strictLocation = storedEngines.strictLocation !== false;
   engines.providerLanguage = typeof storedEngines.providerLanguage === "string" && storedEngines.providerLanguage ? storedEngines.providerLanguage : DEFAULT_ENGINES.providerLanguage;
   const crawler = { ...DEFAULT_CRAWLER, ...getSettings<Record<string, unknown>>("crawler_settings", {}) } as typeof DEFAULT_CRAWLER;
   return { byok, engines, crawler };

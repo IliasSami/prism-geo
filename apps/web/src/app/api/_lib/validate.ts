@@ -226,6 +226,8 @@ export const engineSettingsSchema = z.strictObject({
     .max(200, "List at most a few markets")
     .regex(/^[\p{L} ,.'()|;-]*$/u, "List markets as names, e.g. United States, United Kingdom, Europe")
     .optional(),
+  /** Only use routes that ask from the search location (providerLocation). */
+  strictLocation: z.boolean({ error: "strictLocation must be true or false" }).optional(),
   /** Language code for the provider, e.g. "en", "de", "pt-BR". */
   providerLanguage: z
     .string({ error: "The language must be text" })

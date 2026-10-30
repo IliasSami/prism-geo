@@ -19,7 +19,8 @@ import { CopilotEngineCrawler } from "../engines/copilot";
 import { GeminiEngineCrawler } from "../engines/gemini";
 import { ChatGptEngineCrawler } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
-import { runApiEngine, apiKeyFor, apiRouteFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
+import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteTargetsLocation, countryCodeFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
+import { connectionCountry, countryName, planRoutes } from "../engines/location";
 import { fetchPublicPage } from "../net/safe-fetch";
 import { readProfile, verifyProfile, listAccounts, isProfileConnected, activeAccountLabel, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
 const isProfileEngine = (e: string): e is ProfileEngine => (PROFILE_ENGINES as string[]).includes(e);
@@ -59,6 +60,7 @@ export interface RunFailure {
     | "no_answer"
     | "unavailable"
     | "session_expired"
+    | "wrong_location"
     | "skipped_after_blocks"
     | "skipped_after_network"
     | "skipped_setup"
@@ -364,10 +366,16 @@ export class CrawlerOrchestrator {
         ? rawPrompts.slice(0, options.promptLimit)
         : rawPrompts;
 
-    const engineSettings = getSettings<{ mode?: EngineMode; providerLocation?: string; providerLanguage?: string; markets?: string }>("engine_settings", {});
-    // Where a data provider (DataForSEO) asks from, as a buyer in that market would
-    const providerOptions = { location: engineSettings.providerLocation, language: engineSettings.providerLanguage };
+    const engineSettings = getSettings<{ mode?: EngineMode; providerLocation?: string; providerLanguage?: string; markets?: string; strictLocation?: boolean }>("engine_settings", {});
+    // The search location: every route asks from here, as a buyer in that market would
+    const searchLocation = engineSettings.providerLocation?.trim() || "United States";
+    const providerOptions = { location: searchLocation, language: engineSettings.providerLanguage };
+    const targetCountry = countryCodeFor(searchLocation);
+    const strictLocation = engineSettings.strictLocation !== false;
+    // Where a browser on this computer is answered for: its connection (or proxy) country
+    const connection = await connectionCountry();
     const locale = localeFromSettings(engineSettings);
+    if (connection) locale.origin = countryName(connection);
     // Hybrid is the default: identical to browser-only until a key is saved, then keys are used when blocked
     const mode: EngineMode = engineSettings.mode === "byok" || engineSettings.mode === "stealth" ? engineSettings.mode : "hybrid";
     const apiKeys = getSettings<ApiKeys>("byok_api_keys", {});
@@ -392,7 +400,29 @@ export class CrawlerOrchestrator {
         });
       }
     }
+    // Which routes may answer each engine from the search location
+    const plans = new Map(
+      requestedEngines.map((engine) => [
+        engine,
+        planRoutes({
+          engineLabel: ENGINES[engine].label,
+          strict: strictLocation,
+          target: targetCountry,
+          targetLabel: searchLocation,
+          connection,
+          // The mode only orders the routes (see viaApi); every engine but AI Mode has a browser route
+          hasBrowser: engine !== "google_ai_mode",
+          apiRoute: hasApi(engine) ? (apiRouteTargetsLocation(engine, apiKeys) ? "located" : "unlocated") : null,
+        }),
+      ])
+    );
+    const apiAllowed = (engine: EngineName) => plans.get(engine)?.api === true;
     const engines = requestedEngines.filter((engine) => {
+      const plan = plans.get(engine)!;
+      if (plan.skip && !(engine === "google_ai_mode" && !hasApi(engine))) {
+        failures.push({ engine, promptId: null, kind: "wrong_location", message: plan.skip });
+        return false;
+      }
       // Google AI Mode has no dependable browser route: it is answered through a key or provider only
       if (engine === "google_ai_mode" && !hasApi(engine)) {
         failures.push({
@@ -406,7 +436,7 @@ export class CrawlerOrchestrator {
         });
         return false;
       }
-      if (engine === "copilot" && !CopilotEngineCrawler.available) {
+      if (engine === "copilot" && plan.browser && !CopilotEngineCrawler.available) {
         failures.push({ engine, promptId: null, kind: "unavailable", message: CopilotEngineCrawler.unavailableReason });
         return false;
       }
@@ -494,7 +524,8 @@ export class CrawlerOrchestrator {
           // Each block doubles the pause between queries (max 4x); successes halve it again
           let pacingFactor = 1;
           // byok: API whenever a key exists. hybrid: browser first, API when the browser fails.
-          let viaApi = (mode === "byok" || engine === "google_ai_mode") && hasApi(engine);
+          // A browser outside the search location is never used when only that location counts
+          let viaApi = (mode === "byok" || engine === "google_ai_mode" || !plans.get(engine)!.browser) && apiAllowed(engine);
           const pause = () => {
             const [min, max] = pacingFor(engine, viaApi);
             return new Promise((r) => setTimeout(r, (min + Math.random() * (max - min)) * pacingFactor * pacingScale));
@@ -573,7 +604,7 @@ export class CrawlerOrchestrator {
               if (engine === "copilot") return CopilotEngineCrawler.execute(prompt.queryText, browser);
               if (engine === "gemini") return GeminiEngineCrawler.execute(prompt.queryText, browser);
               if (engine === "chatgpt") return ChatGptEngineCrawler.execute(prompt.queryText, browser);
-              if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser);
+              if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser, { country: targetCountry, language: engineSettings.providerLanguage });
               throw new Error(`Unknown engine: ${engine}`);
             };
             const runEngine = (): Promise<EngineAnswer> => (viaApi ? runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions) : runBrowser());
@@ -583,7 +614,7 @@ export class CrawlerOrchestrator {
               } catch (firstErr) {
                 const kind = classifyFailure(engine, prompt.id, firstErr).kind;
                 // The API cannot help when this machine has no connection, and "no AI Overview" is a real outcome
-                if (!viaApi && mode === "hybrid" && hasApi(engine) && kind !== "no_ai_overview" && kind !== "network") {
+                if (!viaApi && mode === "hybrid" && apiAllowed(engine) && kind !== "no_ai_overview" && kind !== "network") {
                   console.warn(`[CrawlerOrchestrator] ${engine} browser ${kind}; falling back to API: ${(firstErr as Error).message}`);
                   if (kind === "blocked" || kind === "setup") viaApi = true; // stop using a browser that cannot work
                   engineResult = await runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions);
@@ -615,6 +646,8 @@ export class CrawlerOrchestrator {
               }
               return;
             }
+            // A browser answer is asked from this computer's connection country
+            if (!engineResult.searchedFrom && engineResult.captureMethod !== "manual" && connection) engineResult = { ...engineResult, searchedFrom: connection };
             consecutiveBlocks = 0;
             consecutiveNetwork = 0;
             if (pacingFactor > 1 && ++successesSinceBlock >= PACING_DECAY_AFTER) {
@@ -762,6 +795,8 @@ export class CrawlerOrchestrator {
     if (engineResult.provider) flags.provider = engineResult.provider;
     if (typeof engineResult.costUsd === "number" && engineResult.costUsd > 0) flags.costUsd = engineResult.costUsd;
     if (engineResult.model) flags.model = engineResult.model;
+    // Country the question was asked from ("US"), so answers from outside the market can be told apart
+    if (engineResult.searchedFrom) flags.searchedFrom = engineResult.searchedFrom.toUpperCase();
     // Which signed-in account answered (its label), so persona results can be told apart
     if (engineResult.captureMethod === "browser_signed_in") {
       const account = activeAccountLabel(engine);

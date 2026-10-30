@@ -44,6 +44,16 @@ Every engine can also be **captured by hand** with the free browser extension (b
 
 Modes (Settings → Engines & access): **Browser only**, **Keys and provider only** (the key or provider where one exists), **Hybrid** (browser first, key or provider when the browser is blocked). Every stored answer records how it was captured: `browser`, `browser_signed_in`, `api` (a model API), `provider` (the consumer interface, captured by DataForSEO) or `manual` (captured by hand). Dashboards warn when an engine's answers mix methods, because a model API answers differently from the app buyers use.
 
+### Search location: ask from your buyers' country
+
+Answers, sources and recommended companies differ by country, so every question is asked from one **search location** (Settings → Engines & access; default United States, language `en`), the way a rank checker is set to a country or city.
+
+- **Paid routes are asked from the search location:** DataForSEO (country or city), SerpApi (`gl`, `hl`, `location`), Apify (country), OpenAI web search and Perplexity Sonar (user location). Gemini's API has no location setting.
+- **A browser on this computer is answered for the country this computer connects from** (or the proxy's). Before every audit PrismGEO checks that country, and every stored answer records where it was asked from (`searchedFrom`).
+- **Only search from here** (on by default): a route that would ask from another country is never used. When this computer is outside the search location, browser engines are skipped with the reason, and engines run through the routes above or through a proxy in that country that you control. Turn it off to store such answers anyway, labelled with their country.
+
+`PRISMGEO_CONNECTION_COUNTRY=us` sets the connection country where the check cannot run (an offline server).
+
 ### Most accurate paid route: DataForSEO
 
 Model APIs answer differently from the apps buyers use (published comparisons find only a minority of cited sources and named brands in common), so PrismGEO can use [DataForSEO](https://dataforseo.com) to capture what ChatGPT's and Gemini's interfaces, and Google's results page, actually showed. One pay-as-you-go account covers four engines at roughly $0.002–0.005 per answer (check their [current prices](https://dataforseo.com/pricing/ai-optimization/llm-scraper)).

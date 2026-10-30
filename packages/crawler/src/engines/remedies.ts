@@ -20,6 +20,8 @@ export function engineRemedy(engine: string, kind: FailureKind): string | null {
   if (kind === "skipped_after_network") kind = "network";
   if (kind === "skipped_setup") kind = "setup";
   if (kind === "blocked" || kind === "skipped_after_blocks" || kind === "unavailable") return BLOCK_REMEDIES[engine] ?? null;
+  if (kind === "wrong_location")
+    return "Not run, because this computer connects from outside the search location (Settings → Engines & access). Add the DataForSEO data provider, SerpApi for Google or a proxy in that country that you control, or turn off “Only search from the search location”.";
   if (kind === "session_expired") return "The saved signed-in session expired or was signed out, so the engine ran logged out. Connect it again on the Engines page.";
   if (kind === "no_ai_overview") return "Google showed no AI Overview for this search. That is a real result, not an error.";
   if (kind === "no_answer") return "The page loaded without a readable answer. If this repeats, the engine's page may have changed; check data/crawl-debug/.";

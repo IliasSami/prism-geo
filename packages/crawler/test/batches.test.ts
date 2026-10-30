@@ -7,6 +7,8 @@ import path from "node:path";
 // Point the database at a throwaway file before any module opens it
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prismgeo-test-"));
 process.env.PRISMGEO_DB_PATH = path.join(tmp, "test.db");
+// Crawls in tests run as if from the default search location (no network check)
+process.env.PRISMGEO_CONNECTION_COUNTRY = "us";
 
 test("batches whose process stopped sending heartbeats are closed as interrupted", async () => {
   const { getRawDb } = await import("@prismgeo/db");

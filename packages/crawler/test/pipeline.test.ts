@@ -8,6 +8,8 @@ import { CASES, PROFILE } from "../../core/test/fixtures";
 // Throwaway database; never the repo's data/ directory
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prismgeo-pipeline-"));
 process.env.PRISMGEO_DB_PATH = path.join(tmp, "data", "test.db");
+// Crawls in tests run as if from the default search location (no network check)
+process.env.PRISMGEO_CONNECTION_COUNTRY = "us";
 
 const { getRawDb, setSettings, loadReportInput } = await import("@prismgeo/db");
 const { buildVisibilityReport } = await import("@prismgeo/core");
@@ -92,9 +94,11 @@ test("the full pipeline stores mentions, echoes, stance, confusion flags and ver
 
   // entity confusion: flagged on the run and on the brand mention
   const f = sqlite.prepare("SELECT flags_json FROM prompt_runs WHERE prompt_id = 'p-F'").get() as any;
-  assert.deepEqual(JSON.parse(f.flags_json), { entityConfusion: { lookalikeDomains: ["northwindvoiceai.com"] } });
+  assert.deepEqual(JSON.parse(f.flags_json), { entityConfusion: { lookalikeDomains: ["northwindvoiceai.com"] }, searchedFrom: "US" });
   assert.equal(rows.find((r) => r.prompt_id === "p-F").entity_confusion, 1);
-  assert.equal((sqlite.prepare("SELECT COUNT(*) AS n FROM prompt_runs WHERE flags_json <> '{}'").get() as any).n, 1);
+  assert.equal((sqlite.prepare("SELECT COUNT(*) AS n FROM prompt_runs WHERE json_extract(flags_json, '$.entityConfusion') IS NOT NULL").get() as any).n, 1);
+  // every answer records the country it was asked from (this computer's connection, for a browser)
+  assert.equal((sqlite.prepare("SELECT COUNT(*) AS n FROM prompt_runs WHERE json_extract(flags_json, '$.searchedFrom') IS NOT 'US'").get() as any).n, 0);
 
   // citations: canonical URLs in document order, engine titles on the right URL
   const cits = sqlite.prepare("SELECT c.url, c.title, c.rank FROM citations c JOIN prompt_runs r ON r.id = c.run_id WHERE r.prompt_id = 'p-D' ORDER BY c.rank").all() as any[];

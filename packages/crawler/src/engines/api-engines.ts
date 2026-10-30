@@ -65,6 +65,15 @@ export function apiRouteLabel(engine: string, keys: ApiKeys): string | null {
   return { dataforseo: "DataForSEO", gemini: "Gemini API", openai: "OpenAI API", perplexity: "Perplexity API", serpapi: "SerpApi", apify: "Apify" }[route.kind];
 }
 
+/**
+ * True when the engine's paid route is asked from a chosen country (Settings → Search location).
+ * Gemini's API has no location setting, so its answers cannot be placed in a market.
+ */
+export function apiRouteTargetsLocation(engine: string, keys: ApiKeys): boolean {
+  const route = apiRouteFor(engine, keys);
+  return route !== null && route.kind !== "gemini";
+}
+
 /** The API rejected the key or the account has no access; retrying cannot help. */
 export class ApiKeyRejectedError extends Error {}
 
@@ -118,13 +127,11 @@ async function geminiApi(query: string, key: string): Promise<Omit<EngineAnswer,
   return { responseText: text, citations, subQueries: meta.webSearchQueries || [], captureMethod: "api" };
 }
 
-async function openAiApi(query: string, key: string): Promise<Omit<EngineAnswer, "executionMs">> {
-  const data = await postJson(
-    "OpenAiApi",
-    "https://api.openai.com/v1/responses",
-    { authorization: `Bearer ${key}` },
-    { model: OPENAI_MODEL, input: query, tools: [{ type: "web_search" }] }
-  );
+async function openAiApi(query: string, key: string, opts: DataForSeoOptions): Promise<Omit<EngineAnswer, "executionMs">> {
+  const country = countryCodeFor(opts.location);
+  // Web search answers as for a user in the search location
+  const tool = country ? { type: "web_search", user_location: { type: "approximate", country: country.toUpperCase() } } : { type: "web_search" };
+  const data = await postJson("OpenAiApi", "https://api.openai.com/v1/responses", { authorization: `Bearer ${key}` }, { model: OPENAI_MODEL, input: query, tools: [tool] });
   const output: any[] = data.output || [];
   const parts = output.filter((o) => o.type === "message").flatMap((o) => o.content || []).filter((c: any) => c.type === "output_text");
   const text = parts.map((p: any) => p.text).join("\n").trim();
@@ -141,13 +148,12 @@ async function openAiApi(query: string, key: string): Promise<Omit<EngineAnswer,
   return { responseText: text, citations, subQueries: [...new Set(subQueries)], captureMethod: "api" };
 }
 
-async function perplexityApi(query: string, key: string): Promise<Omit<EngineAnswer, "executionMs">> {
-  const data = await postJson(
-    "PerplexityApi",
-    "https://api.perplexity.ai/chat/completions",
-    { authorization: `Bearer ${key}` },
-    { model: PERPLEXITY_MODEL, messages: [{ role: "user", content: query }] }
-  );
+async function perplexityApi(query: string, key: string, opts: DataForSeoOptions): Promise<Omit<EngineAnswer, "executionMs">> {
+  const country = countryCodeFor(opts.location);
+  const body: Record<string, unknown> = { model: PERPLEXITY_MODEL, messages: [{ role: "user", content: query }] };
+  // Search results as for a user in the search location
+  if (country) body.web_search_options = { user_location: { country: country.toUpperCase() } };
+  const data = await postJson("PerplexityApi", "https://api.perplexity.ai/chat/completions", { authorization: `Bearer ${key}` }, body);
   // Inline markers like [1] point into the citations list; they carry no text of their own
   const text = String(data.choices?.[0]?.message?.content || "").replace(/\[\d+\]/g, "").trim();
   const results: Array<{ url: string; title?: string }> = data.search_results || (data.citations || []).map((url: string) => ({ url }));
@@ -182,8 +188,9 @@ function overviewText(blocks: any[]): string {
   return lines.join("\n").trim();
 }
 
-async function serpApiOverview(query: string, key: string): Promise<Omit<EngineAnswer, "executionMs">> {
-  const params = new URLSearchParams({ engine: "google", q: query, hl: "en", gl: "us", api_key: key });
+async function serpApiOverview(query: string, key: string, opts: DataForSeoOptions): Promise<Omit<EngineAnswer, "executionMs">> {
+  const params = new URLSearchParams({ engine: "google", q: query, hl: (opts.language || "en").slice(0, 2), gl: countryCodeFor(opts.location) || "us", api_key: key });
+  if (opts.location) params.set("location", opts.location);
   const data = await getJson("SerpApiAio", `https://serpapi.com/search.json?${params}`);
   if (data.error) throw new Error(`[SerpApiAio] ${data.error}`);
   let overview = data.ai_overview;
@@ -214,6 +221,8 @@ interface SerpBlock {
 async function serpApiAiMode(query: string, key: string, opts: DataForSeoOptions): Promise<Omit<EngineAnswer, "executionMs">> {
   const params = new URLSearchParams({ engine: "google_ai_mode", q: query, api_key: key, hl: (opts.language || "en").slice(0, 2) });
   if (opts.location) params.set("location", opts.location);
+  const country = countryCodeFor(opts.location);
+  if (country) params.set("gl", country);
   const data = await getJson("SerpApiAiMode", `https://serpapi.com/search.json?${params}`);
   if (data.error) throw new Error(`[SerpApiAiMode] ${data.error}`);
   const lines: string[] = [];
@@ -320,15 +329,16 @@ export async function runApiEngine(engine: ApiEngine, query: string, keys: ApiKe
       route.kind === "gemini"
         ? await geminiApi(query, route.key)
         : route.kind === "openai"
-          ? await openAiApi(query, route.key)
+          ? await openAiApi(query, route.key, providerOptions)
           : route.kind === "apify"
             ? await apifyAiMode(query, route.key, providerOptions)
             : route.kind === "serpapi"
             ? engine === "google_ai_mode"
               ? await serpApiAiMode(query, route.key, providerOptions)
-              : await serpApiOverview(query, route.key)
-            : await perplexityApi(query, route.key);
+              : await serpApiOverview(query, route.key, providerOptions)
+            : await perplexityApi(query, route.key, providerOptions);
   }
   assertRealAnswer(result.responseText, `${engine}-${route.kind}`, query);
-  return { ...result, executionMs: Date.now() - start };
+  const country = apiRouteTargetsLocation(engine, keys) ? countryCodeFor(providerOptions.location) : null;
+  return { ...result, ...(country ? { searchedFrom: country } : {}), executionMs: Date.now() - start };
 }

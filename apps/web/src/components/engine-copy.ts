@@ -40,6 +40,7 @@ export const KIND_PHRASE: Record<string, string> = {
   api_key_rejected: "API key rejected",
   unavailable: "needs a signed-in account",
   session_expired: "signed-in session expired; ran logged out",
+  wrong_location: "not run: would have searched from outside the search location",
   error: "unexpected error",
 };
 
@@ -113,6 +114,13 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
         cta: keyFirst ? "Add a key" : "Connect a session",
       };
     }
+    case "wrong_location":
+      return {
+        title: `${list} not run from the search location`,
+        next: "This computer connects from another country, so a browser here would answer for the wrong market. Add the DataForSEO data provider (or SerpApi for Google), use a proxy in the search location that you control, or turn off “Only search from the search location”.",
+        href: "/settings?tab=engines",
+        cta: "Search location",
+      };
     case "session_expired":
       return {
         title: `The signed-in session for ${list} expired`,

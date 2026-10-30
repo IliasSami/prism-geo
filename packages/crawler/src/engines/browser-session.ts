@@ -49,6 +49,8 @@ export interface EngineAnswer {
   subQueries: string[];
   executionMs: number;
   captureMethod: CaptureMethod;
+  /** Country the question was asked from (lower-case ISO code), when known. */
+  searchedFrom?: string;
   /** Data provider that captured the answer (e.g. "dataforseo"), when one did. */
   provider?: string;
   /** What the provider charged for this answer, in USD. */
