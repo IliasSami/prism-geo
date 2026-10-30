@@ -227,7 +227,14 @@ export async function assertNotBlocked(page: Page, tag: string): Promise<void> {
   const head = ((await page.evaluate(() => document.body?.innerText || "")) as string).slice(0, 3000).toLowerCase();
   const hit = BLOCK_SIGNALS.find((s) => head.includes(s));
   if (hit) throw new EngineBlockedError(`[${tag}] Blocked by engine ("${hit}")`);
+  // An account's usage limit is shown as a dialog after the page text, so the whole page is read
+  const body = ((await page.evaluate(() => document.body?.innerText || "")) as string).toLowerCase();
+  const limit = USAGE_LIMIT_SIGNALS.find((s) => body.includes(s));
+  if (limit) throw new EngineBlockedError(`[${tag}] The account's usage limit is reached ("${limit}"); it resets after a few hours`);
 }
+
+/** Usage-limit dialogs of signed-in free accounts (seen live on Perplexity). Specific enough not to match an answer. */
+const USAGE_LIMIT_SIGNALS = ["reached your free search limit", "you've reached our limit of messages", "you've hit the free plan limit"];
 
 /** The answer was still streaming when the wait ran out; storing it would undercount late mentions. */
 export class AnswerNotFinishedError extends Error {}
