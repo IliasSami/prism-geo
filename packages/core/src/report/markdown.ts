@@ -157,6 +157,23 @@ export function renderReportMarkdown(report: Report, meta: MarkdownReportMeta): 
     }
   }
 
+  // AI Overviews vs Google's organic ranking (same results page)
+  const ao = report.aioVsOrganic;
+  if (ao && ao.answers > 0) {
+    const pctOf = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : "–");
+    push(
+      "## Google AI Overviews vs organic ranking",
+      "",
+      `For ${ao.answers} Google searches with an AI Overview, the organic top 10 of the same results page was captured.`,
+      "",
+      `- ${pctOf(ao.citedInTop10, ao.citedSites)} of the sites the Overviews cite also rank in the organic top 10 (${pctOf(ao.citedInTop3, ao.citedSites)} in the top 3); the rest are cited without ranking there.`,
+      `- Your site ranks in the top 10 for ${ao.brand.ranksTop10} of these searches${ao.brand.averagePosition !== null ? ` (average position ${ao.brand.averagePosition})` : ""} and is cited in ${ao.brand.cited} Overviews.`,
+      ...(ao.brand.ranksNotCited > 0 ? [`- In ${ao.brand.ranksNotCited} searches you rank in the top 10 but the Overview does not cite you: the closest wins.`] : []),
+      ...(ao.citedOutsideTop10.length ? [`- Cited most often without ranking in the top 10: ${ao.citedOutsideTop10.slice(0, 5).map((s) => `${s.domain} (${s.answers})`).join(", ")}.`] : []),
+      ""
+    );
+  }
+
   // Method
   push(
     "## Method and limits",

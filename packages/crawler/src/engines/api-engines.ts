@@ -1,6 +1,6 @@
 import { EngineBlockedError, assertRealAnswer, cleanCitationUrl, type EngineAnswer } from "./browser-session";
 import { NoAiOverviewError } from "./google-aio";
-import { ProviderAccountError, markdownToText, runDataForSeo, type DataForSeoOptions } from "./dataforseo";
+import { ProviderAccountError, markdownToText, organicFrom, runDataForSeo, type DataForSeoOptions } from "./dataforseo";
 
 /**
  * Official API access to the engines, using the user's own keys (Settings → API keys).
@@ -233,7 +233,8 @@ async function serpApiOverview(query: string, key: string, opts: DataForSeoOptio
   const citations = (overview.references || [])
     .filter((r: any) => r?.link)
     .map((r: any) => ({ url: cleanCitationUrl(r.link), title: r.title || r.source || r.link }));
-  return { responseText: overviewText(overview.text_blocks), citations, subQueries: [], captureMethod: "api" };
+  // The organic results of the same search come in the same response, at no extra cost
+  return { responseText: overviewText(overview.text_blocks), citations, subQueries: [], captureMethod: "provider", provider: "serpapi", organic: organicFrom(data.organic_results) };
 }
 
 /**

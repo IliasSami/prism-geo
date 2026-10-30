@@ -176,6 +176,18 @@ export function parseLlmScraper(result: DfsResult): Omit<DataForSeoAnswer, "cost
 }
 
 /** Google organic SERP result → the AI Overview on it, or NoAiOverviewError when Google showed none. */
+/** Top 10 organic results from a SerpApi or DataForSEO results list (position, url, title). */
+export function organicFrom(items: unknown): Array<{ position: number; url: string; title: string }> {
+  const out: Array<{ position: number; url: string; title: string }> = [];
+  for (const i of Array.isArray(items) ? items : []) {
+    const url = typeof i?.link === "string" ? i.link : typeof i?.url === "string" ? i.url : "";
+    const position = Number(i?.position ?? i?.rank_group);
+    if (!/^https?:\/\//.test(url) || !(position >= 1)) continue;
+    out.push({ position, url: cleanCitationUrl(url), title: String(i.title || "") });
+  }
+  return out.sort((a, b) => a.position - b.position).filter((o) => o.position <= 10);
+}
+
 export function parseSerpAiOverview(result: DfsResult, query: string): Omit<DataForSeoAnswer, "costUsd" | "provider"> {
   const overview = list<DfsNode>(result.items).find((i) => i.type === "ai_overview");
   if (!overview) throw new NoAiOverviewError(`[DataForSEO google_aio] No AI Overview shown for "${query}"`);
@@ -194,7 +206,9 @@ export function parseSerpAiOverview(result: DfsResult, query: string): Omit<Data
     : elements.map((e) => firstText(e.markdown, e.text)).filter(Boolean).join("\n\n");
   const text = markdownToText(markdown);
   if (!text) throw new NoAiOverviewError(`[DataForSEO google_aio] The AI Overview for "${query}" had no text`);
-  return { responseText: text, citations, subQueries: [], captureMethod: "provider" };
+  // The organic results of the same results page come in the same response
+  const organic = organicFrom(list<DfsNode>(result.items).filter((i) => i.type === "organic"));
+  return { responseText: text, citations, subQueries: [], captureMethod: "provider", ...(organic.length ? { organic } : {}) };
 }
 
 /**

@@ -22,6 +22,7 @@ import { ChatGptEngineCrawler } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
 import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteLocation, countryCodeFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { connectionCountry, countryName, planRoutes } from "../engines/location";
+import { blockGroup, browserCoolingDown, recordBrowserBlock, recordBrowserSuccess, untilText } from "../engines/block-memory";
 import { fetchPublicPage } from "../net/safe-fetch";
 import { readProfile, verifyProfile, listAccounts, isProfileConnected, activeAccountLabel, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
 const isProfileEngine = (e: string): e is ProfileEngine => (PROFILE_ENGINES as string[]).includes(e);
@@ -62,6 +63,7 @@ export interface RunFailure {
     | "unavailable"
     | "session_expired"
     | "wrong_location"
+    | "cooling_down"
     | "skipped_after_blocks"
     | "skipped_after_network"
     | "skipped_setup"
@@ -425,6 +427,8 @@ export class CrawlerOrchestrator {
       }
     }
     // Which routes may answer each engine from the search location
+    // An engine whose browser blocked this computer recently rests until the block has passed
+    const resting = new Map(requestedEngines.map((engine) => [engine, browserCoolingDown(engine)] as const));
     const plans = new Map(
       requestedEngines.map((engine) => [
         engine,
@@ -435,7 +439,7 @@ export class CrawlerOrchestrator {
           targetLabel: searchLocation,
           connection,
           // The mode only orders the routes (see viaApi); every engine but AI Mode has a browser route
-          hasBrowser: engine !== "google_ai_mode",
+          hasBrowser: engine !== "google_ai_mode" && !resting.get(engine),
           // Google's browser route sends the location itself (uule); trusted once calibrated
           browserLocated: engine === "google_aio" && uuleTrusted,
           apiRoute: hasApi(engine) ? apiRouteLocation(engine, apiKeys) : null,
@@ -445,6 +449,16 @@ export class CrawlerOrchestrator {
     const apiAllowed = (engine: EngineName) => plans.get(engine)?.api === true;
     const engines = requestedEngines.filter((engine) => {
       const plan = plans.get(engine)!;
+      const rest = resting.get(engine);
+      if (rest && !plan.api) {
+        failures.push({
+          engine,
+          promptId: null,
+          kind: "cooling_down",
+          message: `Not run: ${ENGINES[engine].label} blocked this computer's browser (${rest.blocks} time${rest.blocks > 1 ? "s" : ""} in a row, last at ${untilText(rest.lastBlockAt)}). PrismGEO waits until ${untilText(rest.until)} so the block is not extended; a key or provider route is not affected.`,
+        });
+        return false;
+      }
       if (plan.skip && !(engine === "google_ai_mode" && !hasApi(engine))) {
         failures.push({ engine, promptId: null, kind: "wrong_location", message: plan.skip });
         return false;
@@ -639,6 +653,13 @@ export class CrawlerOrchestrator {
                 engineResult = await runEngine();
               } catch (firstErr) {
                 const kind = classifyFailure(engine, prompt.id, firstErr).kind;
+                // Google's blocks and an account's usage limit last hours: rest the browser route at once
+                // (other engines get the in-audit cool-downs first, see below)
+                if (!viaApi && kind === "blocked" && (blockGroup(engine) === "google_search" || /usage limit/i.test((firstErr as Error).message))) {
+                  const rest = recordBrowserBlock(engine, (firstErr as Error).message);
+                  if (!(mode === "hybrid" && apiAllowed(engine)))
+                    stopped = { kind: "cooling_down", message: `Not run: ${ENGINES[engine].label} blocked this computer's browser; PrismGEO waits until ${untilText(rest.until)} so the block is not extended` };
+                }
                 // The API cannot help when this machine has no connection, and "no AI Overview" is a real outcome
                 if (!viaApi && mode === "hybrid" && apiAllowed(engine) && kind !== "no_ai_overview" && kind !== "network") {
                   console.warn(`[CrawlerOrchestrator] ${engine} browser ${kind}; falling back to API: ${(firstErr as Error).message}`);
@@ -672,6 +693,7 @@ export class CrawlerOrchestrator {
               }
               return;
             }
+            if (engineResult.captureMethod === "browser" || engineResult.captureMethod === "browser_signed_in") recordBrowserSuccess(engine);
             // A browser answer is asked from this computer's connection country
             if (!engineResult.searchedFrom && engineResult.captureMethod !== "manual" && connection) engineResult = { ...engineResult, searchedFrom: connection };
             consecutiveBlocks = 0;
@@ -722,6 +744,8 @@ export class CrawlerOrchestrator {
           // Assigned inside the workers, which control-flow analysis does not follow
           const stopReason = stopped as { kind: RunFailure["kind"] } | null;
           if (skipped > 0) console.warn(`[CrawlerOrchestrator] ${engine}: ${skipped} runs not attempted (${stopReason?.kind || "still blocked after cool-downs"})`);
+          // Still blocked after the in-audit cool-downs: the next audits leave the browser route alone for a while
+          if (paused && !viaApi && !browserCoolingDown(engine)) recordBrowserBlock(engine, `${ENGINES[engine].label} still blocked after ${cooldownsUsed} cool-down(s)`);
           enginesWorking--;
         })
       );

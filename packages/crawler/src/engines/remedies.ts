@@ -20,6 +20,8 @@ export function engineRemedy(engine: string, kind: FailureKind): string | null {
   if (kind === "skipped_after_network") kind = "network";
   if (kind === "skipped_setup") kind = "setup";
   if (kind === "blocked" || kind === "skipped_after_blocks" || kind === "unavailable") return BLOCK_REMEDIES[engine] ?? null;
+  if (kind === "cooling_down")
+    return "The engine blocked this computer's browser, so PrismGEO waits (1 h, then 3, 6, 12, 24 h after blocks in a row) instead of extending the block. Add a key or the data provider to keep measuring meanwhile.";
   if (kind === "wrong_location")
     return "Not run, because this computer connects from outside the search location (Settings → Engines & access). Add the DataForSEO data provider, SerpApi for Google or a proxy in that country that you control, or turn off “Only search from the search location”.";
   if (kind === "session_expired") return "The saved signed-in session expired or was signed out, so the engine ran logged out. Connect it again on the Engines page.";

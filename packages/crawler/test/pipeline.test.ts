@@ -218,3 +218,57 @@ test("database files are private", () => {
   assert.equal(mode(process.env.PRISMGEO_DB_PATH!), 0o600);
   assert.equal(mode(path.dirname(process.env.PRISMGEO_DB_PATH!)), 0o700);
 });
+
+test("a Google block rests the browser route across audits instead of searching into the block", async () => {
+  const { GoogleAioCrawler } = await import("../src/engines/google-aio");
+  const { EngineBlockedError } = await import("../src/engines/browser-session");
+  const { browserCoolingDown, recordBrowserSuccess } = await import("../src/engines/block-memory");
+  const ids = CASES.slice(0, 5).map((c) => `p-${c.id}`);
+  let searches = 0;
+  (GoogleAioCrawler as any).execute = async () => {
+    searches++;
+    throw new EngineBlockedError('[GoogleAioCrawler] Blocked by engine ("unusual traffic")');
+  };
+  const b1 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["google_aio"], sampleSize: 1, promptIds: ids, pacingScale: 0 });
+  const e1 = JSON.parse((sqlite.prepare("SELECT errors_json FROM crawl_batches WHERE id = ?").get(b1) as any).errors_json) as any[];
+  assert.equal(searches, 1, "one blocked search, not one per question");
+  assert.deepEqual(e1.map((e) => e.kind), ["blocked", "cooling_down", "cooling_down", "cooling_down", "cooling_down"]);
+  const rest = browserCoolingDown("google_ai_mode");
+  assert.ok(rest, "AI Mode shares Google Search's rest period");
+  assert.ok(Date.parse(rest!.until) - Date.now() > 55 * 60_000, "about an hour after the first block");
+
+  // The next audit leaves Google alone and says until when
+  const b2 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["google_aio"], sampleSize: 1, promptIds: ids, pacingScale: 0 });
+  const e2 = JSON.parse((sqlite.prepare("SELECT errors_json FROM crawl_batches WHERE id = ?").get(b2) as any).errors_json) as any[];
+  assert.equal(searches, 1, "no search while resting");
+  assert.deepEqual(e2.map((e) => e.kind), ["cooling_down"]);
+  assert.match(e2[0].message, /waits until/);
+
+  // After the rest, a real answer ends the streak and its organic results reach the report
+  setSettings("browser_blocks", {});
+  (GoogleAioCrawler as any).execute = async (q: string) => ({
+    ...answerFor(q, "google_aio"),
+    citations: [{ url: "https://www.g2.com/categories/voice", title: "G2" }, { url: "https://northwindvoice.ai/voice", title: "Northwind" }],
+    organic: [
+      { position: 1, url: "https://www.g2.com/categories/voice", title: "G2" },
+      { position: 4, url: "https://northwindvoice.ai/", title: "Northwind" },
+    ],
+    searchUrl: "https://www.google.com/search?q=x&gl=us&hl=en&uule=w%2BCAIQICINVW5pdGVkIFN0YXRlcw",
+    locationSignal: "United States",
+  });
+  const b3 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["google_aio"], sampleSize: 1, promptIds: ids.slice(0, 1), pacingScale: 0 });
+  recordBrowserSuccess("google_aio");
+  assert.equal(browserCoolingDown("google_aio"), null);
+  const run = sqlite.prepare("SELECT flags_json FROM prompt_runs WHERE batch_id = ?").get(b3) as any;
+  const flags = JSON.parse(run.flags_json);
+  assert.equal(flags.locationSignal, "United States");
+  assert.match(flags.searchUrl, /uule=/);
+  assert.equal(flags.organic.length, 2);
+  const report = buildVisibilityReport(loadReportInput("b1"));
+  assert.equal(report.aioVsOrganic.answers, 1);
+  assert.equal(report.aioVsOrganic.citedSites, 2);
+  assert.equal(report.aioVsOrganic.citedInTop10, 2);
+  assert.equal(report.aioVsOrganic.citedInTop3, 1);
+  assert.equal(report.aioVsOrganic.brand.ranksTop10, 1);
+  assert.equal(report.aioVsOrganic.brand.averagePosition, 4);
+});

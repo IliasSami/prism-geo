@@ -1,6 +1,6 @@
 import { ENGINE_IDS } from "@prismgeo/core";
 import { getRawDb, getSettings } from "@prismgeo/db";
-import { isProfileConnected, apiKeyFor, apiRouteLabel, engineRemedy, type ApiKeys } from "@prismgeo/crawler";
+import { isProfileConnected, apiKeyFor, apiRouteLabel, engineRemedy, browserCoolingDown, type ApiKeys } from "@prismgeo/crawler";
 
 export const ALL_ENGINES = ENGINE_IDS;
 export type EngineId = (typeof ALL_ENGINES)[number];
@@ -28,12 +28,15 @@ export interface EngineHealth {
    * the health percentage.
    */
   lastFailureKind: string | null;
+  /** The browser route rests after a block until then (ISO), or null. */
+  restingUntil: string | null;
 }
 
 /** Failures that are about this machine, not the engine: they select the audit but are not counted. */
 const LOCAL_FAILURES = new Set(["network", "setup", "skipped_after_network", "skipped_setup"]);
 /** Never a failure of anything: real outcomes and prompt edits. */
-const NOT_FAILURES = new Set(["no_ai_overview", "unavailable", "prompt_removed", "prompt_paused"]);
+// Not run because of the search location, or resting after an earlier block (counted when it happened)
+const NOT_FAILURES = new Set(["no_ai_overview", "unavailable", "prompt_removed", "prompt_paused", "wrong_location", "cooling_down"]);
 
 /** Most frequent kind, preferring engine failures over local ones on ties. */
 function topKind(kinds: string[]): string | null {
@@ -121,6 +124,7 @@ export function getEngineHealth(brandId: string | undefined): EngineHealth[] {
         : lastFailureKind && LOCAL_FAILURES.has(lastFailureKind)
           ? engineRemedy(engine, lastFailureKind)
           : null;
-    return { engine, enabled, status, captured, attempted, route, apiFallback: mode === "hybrid" && hasKey, routeLabel: hasKey ? apiRouteLabel(engine, keys) : null, remedy, lastRunAt, lastFailureKind };
+    const restingUntil = browserCoolingDown(engine)?.until ?? null;
+    return { engine, enabled, status, captured, attempted, route, apiFallback: mode === "hybrid" && hasKey, routeLabel: hasKey ? apiRouteLabel(engine, keys) : null, remedy, lastRunAt, lastFailureKind, restingUntil };
   });
 }

@@ -41,6 +41,7 @@ export const KIND_PHRASE: Record<string, string> = {
   unavailable: "needs a signed-in account",
   session_expired: "signed-in session expired; ran logged out",
   wrong_location: "not run: would have searched from outside the search location",
+  cooling_down: "not run: resting after the engine blocked this computer",
   error: "unexpected error",
 };
 
@@ -114,6 +115,13 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
         cta: keyFirst ? "Add a key" : "Connect a session",
       };
     }
+    case "cooling_down":
+      return {
+        title: `${list} resting after a block`,
+        next: "The engine blocked this computer's browser, so PrismGEO leaves it alone for a while (longer after each block in a row) instead of extending the block. A key or the data provider still answers in the meantime.",
+        href: "/settings?tab=engines",
+        cta: "Add a key",
+      };
     case "wrong_location":
       return {
         title: `${list} not run from the search location`,

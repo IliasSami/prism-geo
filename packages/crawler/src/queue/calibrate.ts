@@ -2,6 +2,7 @@ import { getRawDb, getSettings, nowIso, rowToBrand, setSettings } from "@prismge
 import { detectMentions, hostKey, languageFor, seededShuffle } from "@prismgeo/core";
 import { GoogleAioCrawler, NoAiOverviewError } from "../engines/google-aio";
 import { EngineBlockedError, type EngineAnswer } from "../engines/browser-session";
+import { browserCoolingDown, recordBrowserBlock, recordBrowserSuccess, untilText } from "../engines/block-memory";
 import { apiRouteLabel, apiRouteLocation, countryCodeFor, runApiEngine, type ApiKeys } from "../engines/api-engines";
 import { connectionCountry, countryName } from "../engines/location";
 import { trackedEntitiesFor } from "./manual-capture";
@@ -29,7 +30,9 @@ export interface CalibrationQuestion {
 }
 
 export interface CalibrationResult {
-  status: "running" | "done" | "failed";
+  /** "waiting": queued until a reference route is saved and Google's browser route is not resting; it then starts by itself. */
+  status: "waiting" | "running" | "done" | "failed";
+  brandId?: string;
   country: string;
   place: string;
   connection: string | null;
@@ -45,6 +48,8 @@ export interface CalibrationResult {
   };
   trusted: boolean;
   reason: string;
+  /** After a block: when the calibration is tried again by itself. */
+  retryAfter?: string;
 }
 
 const KEY = "location_calibration";
@@ -105,6 +110,8 @@ export function getCalibration(): CalibrationResult | null {
  */
 export async function calibrateLocation(brandId: string, { sample = 10, pauseMs = [15000, 30000] as [number, number] } = {}): Promise<CalibrationResult> {
   if (running) throw new Error("A calibration is already running");
+  const rest = browserCoolingDown("google_aio");
+  if (rest) throw new Error(`Google's browser route is resting after a block until ${untilText(rest.until)}; the calibration waits for it.`);
   const s = getSettings<{ providerLocation?: string; providerLanguage?: string; searchPlace?: string }>("engine_settings", {});
   const location = s.providerLocation?.trim() || "United States";
   const country = countryCodeFor(location);
@@ -125,6 +132,7 @@ export async function calibrateLocation(brandId: string, { sample = 10, pauseMs 
     place,
     connection: await connectionCountry(),
     reference: apiRouteLabel("google_aio", keys),
+    brandId,
     startedAt: nowIso(),
     questions: [],
     trusted: false,
@@ -151,9 +159,15 @@ export async function calibrateLocation(brandId: string, { sample = 10, pauseMs 
       let browser: EngineAnswer | null;
       try {
         browser = await overviewOrNull(() => GoogleAioCrawler.execute(p.query_text, undefined, { country, language: options.language, place }));
+        recordBrowserSuccess("google_aio");
       } catch (err) {
-        // A blocked or failed browser search cannot be compared; it is skipped, not counted as "no Overview"
-        if (err instanceof EngineBlockedError && result.questions.length === 0 && i >= 2) throw new Error(`Google is blocking searches from this computer (${countryName(result.connection)}); try again in a few hours.`);
+        // A block ends the calibration at once: searching on would only extend it. It is queued again.
+        if (err instanceof EngineBlockedError) {
+          const rest = recordBrowserBlock("google_aio", (err as Error).message);
+          result.retryAfter = rest.until;
+          throw new Error(`Google blocked this computer's browser (${countryName(result.connection)}); calibration resumes by itself after ${untilText(rest.until)}.`);
+        }
+        // Any other failed browser search cannot be compared; it is skipped, not counted as "no Overview"
         continue;
       }
       const reference = await overviewOrNull(() => runApiEngine("google_aio", p.query_text, keys, options)).catch(() => undefined);
@@ -170,10 +184,76 @@ export async function calibrateLocation(brandId: string, { sample = 10, pauseMs 
     }
     Object.assign(result, summarizeCalibration(result.questions), { status: "done", finishedAt: nowIso() });
   } catch (err) {
-    Object.assign(result, { status: "failed", trusted: false, reason: (err as Error).message, finishedAt: nowIso() });
+    // Blocked: queued again, resumed by the scheduler when the rest period is over
+    Object.assign(result, { status: result.retryAfter ? "waiting" : "failed", trusted: false, reason: (err as Error).message, finishedAt: nowIso() });
   } finally {
     running = false;
     setSettings(KEY, result);
   }
   return result;
+}
+
+/** Why a calibration cannot start now, or null when it can. */
+export function calibrationBlocker(): string | null {
+  const keys = getSettings<ApiKeys>("byok_api_keys", {});
+  if (apiRouteLocation("google_aio", keys) !== "interface")
+    return "Waiting for a route asked from inside the country: it starts by itself once a SerpApi key (free plan) or the DataForSEO data provider is saved.";
+  const rest = browserCoolingDown("google_aio");
+  if (rest) return `Waiting for Google's browser route, which rests after a block until ${untilText(rest.until)}; it starts by itself then.`;
+  return null;
+}
+
+/**
+ * Starts a calibration now when it can run, otherwise queues it ("waiting"); the scheduler starts
+ * a queued calibration by itself as soon as nothing blocks it. Returns the stored state.
+ */
+export function requestCalibration(brandId: string): CalibrationResult {
+  const current = getCalibration();
+  if (current?.status === "running") return current;
+  const blocker = calibrationBlocker();
+  if (!blocker) {
+    calibrateLocation(brandId).catch((err) => console.warn("[Calibration]", (err as Error).message));
+    return getCalibration() ?? { status: "running", country: "", place: "", connection: null, reference: null, startedAt: nowIso(), questions: [], trusted: false, reason: "Starting" };
+  }
+  const s = getSettings<{ providerLocation?: string; searchPlace?: string }>("engine_settings", {});
+  const location = s.providerLocation?.trim() || "United States";
+  const waiting: CalibrationResult = {
+    status: "waiting",
+    brandId,
+    country: countryCodeFor(location) || "",
+    place: placeInCountry(s.searchPlace, location) || location,
+    connection: current?.connection ?? null,
+    reference: null,
+    startedAt: nowIso(),
+    questions: [],
+    trusted: current?.trusted === true && current.country === countryCodeFor(location),
+    reason: blocker,
+  };
+  // A trusted result stays in force while a new calibration waits
+  if (current?.status === "done" && current.trusted) Object.assign(waiting, { agreement: current.agreement, reason: `${blocker} The last calibration (trusted) stays in force meanwhile.` });
+  setSettings(KEY, waiting);
+  return waiting;
+}
+
+/**
+ * Scheduler hook: starts a queued calibration when it can run and no audit is crawling, and
+ * queues one when this computer is outside the search country and that country was never
+ * calibrated (so the free Google route is checked without anyone having to ask).
+ */
+export async function runPendingCalibration(activeBrandId: string | null): Promise<void> {
+  if (running) return;
+  const crawling = (getRawDb().prepare("SELECT COUNT(*) AS n FROM crawl_batches WHERE status = 'running'").get() as { n: number }).n > 0;
+  if (crawling) return;
+  let current = getCalibration();
+  const s = getSettings<{ providerLocation?: string }>("engine_settings", {});
+  const target = countryCodeFor(s.providerLocation?.trim() || "United States");
+  if (!current || (current.country !== target && current.status !== "waiting")) {
+    if (!activeBrandId || !target) return;
+    const connection = await connectionCountry();
+    if (!connection || connection === target) return;
+    current = requestCalibration(activeBrandId);
+  }
+  if (current.status === "waiting" && current.brandId && !calibrationBlocker()) {
+    await calibrateLocation(current.brandId).catch((err) => console.warn("[Calibration]", (err as Error).message));
+  }
 }

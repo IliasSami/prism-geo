@@ -5,7 +5,7 @@ import { Gauge, Loader2, MapPin } from "lucide-react";
 import { Button, Notice } from "../ui";
 
 interface Calibration {
-  status: "running" | "done" | "failed";
+  status: "waiting" | "running" | "done" | "failed";
   place: string;
   reference: string | null;
   startedAt: string;
@@ -54,11 +54,11 @@ function CalibrationPanel({ location }: { location: string }) {
           <p className="mt-0.5 text-sm text-zinc-500">
             Google AI Overviews searched from this computer carry {location} as Google&apos;s location signal (uule). Calibration checks on 10 of your questions whether
             those answers match answers asked from inside the country (needs SerpApi&apos;s free plan or DataForSEO; uses 20 of their searches). Until it passes, they are
-            labelled as asked from this computer.
+            labelled as asked from this computer. It is queued by itself and starts as soon as it can.
           </p>
         </div>
-        <Button size="sm" variant="secondary" onClick={start} disabled={cal?.status === "running"}>
-          {cal?.status === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />} {cal?.status === "running" ? "Calibrating…" : "Calibrate"}
+        <Button size="sm" variant="secondary" onClick={start} disabled={cal?.status === "running" || cal?.status === "waiting"}>
+          {cal?.status === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />} {cal?.status === "running" ? "Calibrating…" : cal?.status === "waiting" ? "Queued" : "Calibrate"}
         </Button>
       </div>
       {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
@@ -66,6 +66,8 @@ function CalibrationPanel({ location }: { location: string }) {
         <div className="mt-3 text-sm text-zinc-700">
           {cal.status === "running" ? (
             <p>{cal.questions.length} of 10 questions compared (about 10 minutes; searches are paced like an audit).</p>
+          ) : cal.status === "waiting" ? (
+            <p className="text-zinc-600">Queued. {cal.reason}</p>
           ) : (
             <>
               <p className={cal.trusted ? "text-emerald-700" : "text-zinc-700"}>

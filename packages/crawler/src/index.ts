@@ -17,3 +17,4 @@ export * from "./queue/manual-capture";
 export * from "./engines/location";
 export * from "./geo/geotargets";
 export * from "./queue/calibrate";
+export * from "./engines/block-memory";

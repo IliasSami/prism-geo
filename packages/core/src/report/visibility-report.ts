@@ -170,6 +170,32 @@ export interface Localisation {
   byEngine: Array<{ engine: string; answers: number; localised: number; places: Record<string, number> }>;
 }
 
+/**
+ * Google AI Overviews compared with Google's organic top 10 on the same results page: whether the
+ * Overview cites the pages that rank, and where the brand ranks versus whether it is cited.
+ */
+export interface AioVsOrganic {
+  /** AI Overview answers whose results page's organic top 10 was captured. */
+  answers: number;
+  /** Cited sites (one per site per answer), and how many of them also rank in the organic top 10 / top 3. */
+  citedSites: number;
+  citedInTop10: number;
+  citedInTop3: number;
+  brand: {
+    /** Answers where the brand's site ranks in the organic top 10, and its average position there. */
+    ranksTop10: number;
+    averagePosition: number | null;
+    /** Answers whose Overview cites the brand's site. */
+    cited: number;
+    /** Ranks in the top 10 but the Overview does not cite it (the closest win). */
+    ranksNotCited: number;
+    /** Cited without ranking in the top 10. */
+    citedNotRanking: number;
+  };
+  /** Sites the Overviews cite most that do not rank in the top 10 for that search. */
+  citedOutsideTop10: Array<{ domain: string; answers: number }>;
+}
+
 export interface BrandAccuracy {
   /** Answers (active prompts) that name the brand. */
   answersNamingBrand: number;
@@ -209,6 +235,7 @@ export interface Report {
   headline: StratifiedHeadline;
   brandAccuracy: BrandAccuracy;
   localisation: Localisation;
+  aioVsOrganic: AioVsOrganic;
   /** Same shape as `entities`, restricted to one engine's answers. */
   entitiesByEngine: Record<string, EntityRow[]>;
 }
@@ -277,6 +304,7 @@ const FAILURE_BUCKET: Record<string, keyof FailureCounts | null> = {
   unavailable: null,
   session_expired: null,
   wrong_location: null,
+  cooling_down: "skipped",
 };
 
 export function buildVisibilityReport(input: ReportInput): Report {
@@ -612,6 +640,50 @@ export function buildVisibilityReport(input: ReportInput): Report {
     .sort((a, b) => b.answers - a.answers)
     .slice(0, 10);
 
+  // ---- AI Overview sources vs the organic top 10 of the same results page
+  const sameSite = (a: string, b: string) => domainMatches(a, b) || domainMatches(b, a);
+  const aio: AioVsOrganic = {
+    answers: 0,
+    citedSites: 0,
+    citedInTop10: 0,
+    citedInTop3: 0,
+    brand: { ranksTop10: 0, averagePosition: null, cited: 0, ranksNotCited: 0, citedNotRanking: 0 },
+    citedOutsideTop10: [],
+  };
+  const outside = new Map<string, number>();
+  let brandPositions = 0;
+  for (const ri of activeRuns) {
+    const r = allRuns[ri];
+    if (r.engine !== "google_aio" || !r.flags_json || r.flags_json === "{}") continue;
+    const organicTop = (parseJson<{ organic?: Array<{ position: number; url: string }> }>(r.flags_json, {}).organic || [])
+      .filter((o) => typeof o?.url === "string" && o.position >= 1 && o.position <= 10)
+      .map((o) => ({ position: o.position, host: hostKey(o.url) }));
+    if (!organicTop.length) continue;
+    aio.answers++;
+    const cites = [...new Set(domainsBy[ri] || [])];
+    for (const d of cites) {
+      aio.citedSites++;
+      const hit = organicTop.find((o) => sameSite(d, o.host));
+      if (hit) {
+        aio.citedInTop10++;
+        if (hit.position <= 3) aio.citedInTop3++;
+      } else outside.set(d, (outside.get(d) || 0) + 1);
+    }
+    if (brandDomain) {
+      const ranked = organicTop.find((o) => sameSite(o.host, brandDomain));
+      const cited = cites.some((d) => sameSite(d, brandDomain));
+      if (ranked) {
+        aio.brand.ranksTop10++;
+        brandPositions += ranked.position;
+      }
+      if (cited) aio.brand.cited++;
+      if (ranked && !cited) aio.brand.ranksNotCited++;
+      if (cited && !ranked) aio.brand.citedNotRanking++;
+    }
+  }
+  aio.brand.averagePosition = aio.brand.ranksTop10 ? Math.round((brandPositions / aio.brand.ranksTop10) * 10) / 10 : null;
+  aio.citedOutsideTop10 = [...outside.entries()].map(([domain, answers]) => ({ domain, answers })).sort((a, b) => b.answers - a.answers).slice(0, 8);
+
   const brandedClusters = new Map<number, PromptCluster>();
   for (const ri of brandedRuns) {
     const c = brandedClusters.get(runPrompt[ri]) ?? brandedClusters.set(runPrompt[ri], { hits: 0, runs: 0 }).get(runPrompt[ri])!;
@@ -639,6 +711,7 @@ export function buildVisibilityReport(input: ReportInput): Report {
     headline,
     brandAccuracy,
     localisation,
+    aioVsOrganic: aio,
     entitiesByEngine,
   };
 }
