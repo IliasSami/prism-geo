@@ -28,6 +28,7 @@ test("a session counts only with the service's own sign-in cookie, unexpired", (
   assert.equal(sessionFromCookies("gemini", visitor, now).signedIn, false);
   assert.equal(sessionFromCookies("perplexity", [...visitor, { name: "__Secure-next-auth.session-token", domain: "www.perplexity.ai", expires: future }], now).signedIn, true);
   assert.equal(sessionFromCookies("chatgpt", [{ name: "__Secure-next-auth.session-token.0", domain: "chatgpt.com", expires: future }], now).signedIn, true, "chunked token");
+  assert.equal(sessionFromCookies("perplexity", [{ name: "__Secure-authjs.session-token", domain: "www.perplexity.ai", expires: future }], now).signedIn, true, "Auth.js v5 name");
   assert.equal(sessionFromCookies("gemini", [{ name: "__Secure-1PSID", domain: ".google.com", expires: future }], now).signedIn, true);
   assert.equal(sessionFromCookies("google_aio", [{ name: "SID", domain: ".google.com", expires: past }], now).signedIn, false, "expired");
   assert.equal(sessionFromCookies("chatgpt", [{ name: "__Secure-next-auth.session-token", domain: "www.perplexity.ai", expires: future }], now).signedIn, false, "another service's cookie");
@@ -36,7 +37,7 @@ test("a session counts only with the service's own sign-in cookie, unexpired", (
 });
 
 /** Writes cookies into a real Chromium profile, as a sign-in window would leave it. */
-async function profileWith(engine: "perplexity" | "gemini", cookies: Array<{ name: string; domain: string; expires: number }>) {
+async function profileWith(engine: "google_aio" | "gemini", cookies: Array<{ name: string; domain: string; expires: number }>) {
   const dir = profileDir(engine);
   fs.mkdirSync(dir, { recursive: true });
   const ctx = await chromium.launchPersistentContext(dir, { headless: true });
@@ -56,13 +57,15 @@ try {
 
 test("an unverified saved profile is checked from disk: no sign-in → not connected; a real session cookie → connected", { skip: !browserAvailable && "no Chromium installed" }, async () => {
   const soon = Date.now() / 1000 + 86_400 * 30;
-  await profileWith("perplexity", [{ name: "pplx.visitor-id", domain: "www.perplexity.ai", expires: soon }]);
-  assert.equal(isProfileConnected("perplexity"), false, "an unverified marker is not trusted");
-  assert.deepEqual(await verifyProfile("perplexity"), { signedIn: false, expiresAt: null });
-  const status = getProfileStatuses().find((s) => s.engine === "perplexity")!;
+  // Google has no session endpoint, so this check reads cookies only (no network in tests)
+  await profileWith("google_aio", [{ name: "NID", domain: ".google.com", expires: soon }]);
+  assert.equal(isProfileConnected("google_aio"), false, "an unverified marker is not trusted");
+  assert.deepEqual(await verifyProfile("google_aio"), { signedIn: false, expiresAt: null });
+  const status = getProfileStatuses().find((s) => s.engine === "google_aio")!;
   assert.equal(status.state, "not_signed_in");
   assert.equal(status.connected, false);
   assert.match(status.lastError || "", /sign in before closing/);
+  assert.deepEqual(status.cookieNames, ["NID"], "cookie names (never values) explain what was found");
 
   await profileWith("gemini", [{ name: "__Secure-1PSID", domain: ".google.com", expires: soon }]);
   const g = await verifyProfile("gemini");

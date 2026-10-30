@@ -35,8 +35,9 @@ const SIGN_IN_URLS: Record<ProfileEngine, string> = {
  * Visitor, consent, Cloudflare and sign-in-flow cookies (next-auth.state, pkce) do not count.
  */
 const SESSION_RULES: Record<ProfileEngine, { domain: RegExp; name: RegExp; account: string }> = {
-  chatgpt: { domain: /(^|\.)(chatgpt\.com|openai\.com)$/, name: /^__Secure-next-auth\.session-token(\.\d+)?$/, account: "OpenAI account" },
-  perplexity: { domain: /(^|\.)perplexity\.ai$/, name: /^__Secure-next-auth\.session-token(\.\d+)?$/, account: "Perplexity account" },
+  // NextAuth (v4) and Auth.js (v5) name the session cookie differently
+  chatgpt: { domain: /(^|\.)(chatgpt\.com|openai\.com)$/, name: /^(__Secure-)?(next-auth|authjs)\.session-token(\.\d+)?$/, account: "OpenAI account" },
+  perplexity: { domain: /(^|\.)perplexity\.ai$/, name: /^(__Secure-)?(next-auth|authjs)\.session-token(\.\d+)?$/, account: "Perplexity account" },
   gemini: { domain: /(^|\.)google\.com$/, name: /^(__Secure-1PSID|__Secure-3PSID|SID)$/, account: "Google account" },
   google_aio: { domain: /(^|\.)google\.com$/, name: /^(__Secure-1PSID|__Secure-3PSID|SID)$/, account: "Google account" },
   copilot: { domain: /(^|\.)(live\.com|microsoft\.com|microsoftonline\.com)$/, name: /^(MSPAuth|__Host-MSAAUTHP|__Host-MSAAUTH|ESTSAUTHPERSISTENT)$/, account: "Microsoft account" },
@@ -84,7 +85,19 @@ export interface ProfileStatus {
   verifiedAt: string | null;
   /** Why the last sign-in window failed, or why the profile is not connected; cleared on success. */
   lastError: string | null;
+  /** Cookie names (never values) seen for the service when no sign-in was found, for diagnosing. */
+  cookieNames: string[];
 }
+
+/**
+ * Sites whose own session endpoint says who is signed in (NextAuth / Auth.js: /api/auth/session
+ * returns the user only for a signed-in visitor). Asked from inside the open window, so it works
+ * whatever the session cookie is called.
+ */
+const SESSION_ENDPOINTS: Partial<Record<ProfileEngine, string>> = {
+  chatgpt: "https://chatgpt.com/api/auth/session",
+  perplexity: "https://www.perplexity.ai/api/auth/session",
+};
 
 const MARKER_FILE = "prismgeo-profile.json";
 const g = globalThis as typeof globalThis & {
@@ -92,11 +105,14 @@ const g = globalThis as typeof globalThis & {
   __prismProfileConnecting?: Set<ProfileEngine>;
   __prismProfileDetected?: Set<ProfileEngine>;
   __prismProfileChecking?: Set<ProfileEngine>;
+  __prismProfileCookieNames?: Map<ProfileEngine, string[]>;
 };
 const lastErrors = (g.__prismProfileErrors ??= new Map<ProfileEngine, string>());
 const connecting = (g.__prismProfileConnecting ??= new Set<ProfileEngine>());
 const detected = (g.__prismProfileDetected ??= new Set<ProfileEngine>());
 const checking = (g.__prismProfileChecking ??= new Set<ProfileEngine>());
+/** Names (never values) of the service's cookies when no sign-in was found, to diagnose cookie renames. */
+const cookieNames = (g.__prismProfileCookieNames ??= new Map<ProfileEngine, string[]>());
 
 /** The last sign-in window failure for an engine, or null. */
 export function profileLastError(engine: ProfileEngine): string | null {
@@ -121,9 +137,10 @@ function writeMarker(marker: ProfileMarker): void {
 
 const expired = (m: ProfileMarker, now = Date.now()) => Boolean(m.sessionExpiresAt && Date.parse(m.sessionExpiresAt) <= now);
 
-/** True only for a verified, unexpired signed-in session. */
-export function isProfileConnected(engine: ProfileEngine): boolean {
-  const m = readProfile(engine);
+/** True only for a verified, unexpired signed-in session (false for engines without sessions). */
+export function isProfileConnected(engine: string): boolean {
+  if (!(PROFILE_ENGINES as string[]).includes(engine)) return false;
+  const m = readProfile(engine as ProfileEngine);
   return Boolean(m && m.signedIn === true && !expired(m));
 }
 
@@ -159,13 +176,54 @@ export function getProfileStatuses(): ProfileStatus[] {
       sessionExpiresAt: marker?.sessionExpiresAt ?? null,
       verifiedAt: marker?.verifiedAt ?? null,
       lastError: reason,
+      cookieNames: state === "signed_in" ? [] : (cookieNames.get(engine) ?? []),
     };
   });
 }
 
-async function readSession(context: BrowserContext, engine: ProfileEngine) {
+async function readSession(context: BrowserContext, engine: ProfileEngine, opts: { askEndpoint?: boolean } = {}) {
   const cookies = (await context.cookies()) as SessionCookie[];
-  return sessionFromCookies(engine, cookies);
+  const byCookie = sessionFromCookies(engine, cookies);
+  if (byCookie.signedIn) {
+    cookieNames.delete(engine);
+    return byCookie;
+  }
+  const endpoint = SESSION_ENDPOINTS[engine];
+  if (opts.askEndpoint && endpoint) {
+    const origin = new URL(endpoint).origin;
+    const page = context.pages().find((p) => {
+      try {
+        return new URL(p.url()).origin === origin;
+      } catch {
+        return false;
+      }
+    });
+    if (page) {
+      const signedIn = await page
+        .evaluate(async (url) => {
+          try {
+            const r = await fetch(url, { credentials: "include", headers: { accept: "application/json" } });
+            const j = r.ok ? await r.json() : null;
+            return Boolean(j && typeof j === "object" && (j.user || j.account));
+          } catch {
+            return false;
+          }
+        }, endpoint)
+        .catch(() => false);
+      if (signedIn) {
+        cookieNames.delete(engine);
+        return { signedIn: true, expiresAt: null };
+      }
+    }
+  }
+  const rule = SESSION_RULES[engine];
+  cookieNames.set(engine, [...new Set(cookies.filter((c) => rule.domain.test(c.domain.replace(/^\./, ""))).map((c) => c.name))].sort());
+  return byCookie;
+}
+
+/** Cookie names (never values) seen for the service when no sign-in was found; for diagnosing. */
+export function profileCookieNames(engine: ProfileEngine): string[] {
+  return cookieNames.get(engine) ?? [];
 }
 
 /**
@@ -179,8 +237,26 @@ export async function verifyProfile(engine: ProfileEngine): Promise<{ signedIn: 
   checking.add(engine);
   let context: BrowserContext | null = null;
   try {
-    context = await chromium.launchPersistentContext(profileDir(engine), { headless: true, executablePath: getChromiumExecutablePath(), args: PROFILE_ARGS });
-    const session = await readSession(context, engine);
+    context = await chromium.launchPersistentContext(profileDir(engine), {
+      headless: true,
+      executablePath: getChromiumExecutablePath(),
+      args: PROFILE_ARGS,
+      ignoreDefaultArgs: ["--enable-automation"],
+      userAgent: marker.userAgent?.replace("HeadlessChrome", "Chrome") || undefined,
+    });
+    let session = await readSession(context, engine);
+    const endpoint = SESSION_ENDPOINTS[engine];
+    if (!session.signedIn && endpoint) {
+      // The cookie name may have changed: ask the site itself. If that cannot be done (offline,
+      // a bot check), the result is inconclusive and the saved state is kept.
+      const page = await context.newPage();
+      const loaded = await page
+        .goto(new URL(endpoint).origin, { waitUntil: "domcontentloaded", timeout: 30000 })
+        .then((r) => Boolean(r && r.status() < 400))
+        .catch(() => false);
+      if (!loaded) return null;
+      session = await readSession(context, engine, { askEndpoint: true });
+    }
     writeMarker({ ...marker, signedIn: session.signedIn, sessionExpiresAt: session.expiresAt, verifiedAt: new Date().toISOString() });
     if (session.signedIn) lastErrors.delete(engine);
     return session;
@@ -225,7 +301,7 @@ export async function openSignInWindow(engine: ProfileEngine): Promise<{ signedI
     let lastSeen = { signedIn: false, expiresAt: null as string | null };
     const check = async () => {
       try {
-        lastSeen = await readSession(context, engine);
+        lastSeen = await readSession(context, engine, { askEndpoint: true });
         if (lastSeen.signedIn) detected.add(engine);
         else detected.delete(engine);
       } catch {
