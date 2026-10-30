@@ -65,6 +65,11 @@ export interface LocationPlan {
   browser: boolean;
   /** The saved key or provider may be used. */
   api: boolean;
+  /**
+   * Use the key or provider before the browser: it captures the same interface from the search
+   * location while this computer is elsewhere, so it is the more faithful answer.
+   */
+  preferApi?: boolean;
   /** Why the engine cannot run at all from the search location, when neither may be used. */
   skip?: string;
 }
@@ -83,13 +88,18 @@ export function planRoutes(args: {
   connection: string | null;
   /** The engine has a browser route at all. */
   hasBrowser: boolean;
-  /** "located" = a saved key or provider that is asked from the target country; "unlocated" = one that is not; null = none. */
-  apiRoute: "located" | "unlocated" | null;
+  /** The saved key or provider: see apiRouteLocation; null = none saved. */
+  apiRoute: "interface" | "model" | "unlocated" | null;
 }): LocationPlan {
   const { engineLabel, strict, target, targetLabel, connection, hasBrowser, apiRoute } = args;
-  if (!strict || !target) return { browser: hasBrowser, api: apiRoute !== null };
-  const browser = hasBrowser && connection === target;
-  const api = apiRoute === "located";
+  const inMarket = target !== null && connection === target;
+  if (!strict || !target) {
+    // Every route may run, as before; the interface captured from the right country goes first
+    const preferApi = Boolean(target) && !inMarket && apiRoute === "interface";
+    return preferApi ? { browser: hasBrowser, api: true, preferApi } : { browser: hasBrowser, api: apiRoute !== null };
+  }
+  const browser = hasBrowser && inMarket;
+  const api = apiRoute === "interface" || apiRoute === "model";
   if (browser || api) return { browser, api };
   const where = connection ? `connects from ${countryName(connection)}` : "could not confirm which country it connects from";
   const fixes = [

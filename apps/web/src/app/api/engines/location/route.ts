@@ -21,6 +21,6 @@ export const GET = route("engines/location GET", async () => {
     connection: connection?.toUpperCase() ?? null,
     connectionName: connection ? countryName(connection) : null,
     browserInMarket: target !== null && connection === target,
-    strict: settings.strictLocation !== false,
+    strict: settings.strictLocation === true,
   });
 });

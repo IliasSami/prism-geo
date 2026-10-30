@@ -13,6 +13,7 @@ import { ApiKeyField } from "@/components/settings/ApiKeyField";
 import { LogViewer } from "@/components/settings/LogViewer";
 import { CaptureExtensionPanel } from "@/components/settings/CaptureExtensionPanel";
 import { SearchLocationStatus } from "@/components/settings/SearchLocationStatus";
+import { SEARCH_COUNTRIES, searchCountry } from "@prismgeo/core";
 import { cleanedHint, domainError } from "@/components/domain";
 
 type TabId = "client" | "competitors" | "engines" | "schedule" | "claude" | "data";
@@ -437,8 +438,8 @@ function Settings() {
                       type="checkbox"
                       role="switch"
                       aria-label="Only search from the search location"
-                      aria-checked={draft.engines.strictLocation !== false}
-                      checked={draft.engines.strictLocation !== false}
+                      aria-checked={draft.engines.strictLocation === true}
+                      checked={draft.engines.strictLocation === true}
                       onChange={(e) => set("engines", { strictLocation: e.target.checked })}
                       className="peer sr-only"
                     />
@@ -451,24 +452,53 @@ function Settings() {
                 }
               />
               <div className="grid grid-cols-1 gap-5 p-5 md:grid-cols-2">
-                <Field label="Search location" htmlFor="provider-location" hint="A country, or a city as DataForSEO names it: United States, New York,New York,United States, United Kingdom…">
-                  <input
-                    id="provider-location"
-                    className={inputClass}
-                    value={String(draft.engines.providerLocation ?? "United States")}
-                    onChange={(e) => set("engines", { providerLocation: e.target.value })}
-                  />
-                </Field>
-                <Field label="Language" htmlFor="provider-language" hint="Language code: en, de, fr, es, pt-BR…">
-                  <input
-                    id="provider-language"
-                    className={cn(inputClass, "w-32")}
-                    value={String(draft.engines.providerLanguage ?? "en")}
-                    onChange={(e) => set("engines", { providerLanguage: e.target.value })}
-                  />
-                </Field>
+                {(() => {
+                  const location = String(draft.engines.providerLocation || "United States");
+                  const language = String(draft.engines.providerLanguage || "en");
+                  const country = searchCountry(location);
+                  // A location saved before this list existed (a city, another country) stays selectable
+                  const custom = SEARCH_COUNTRIES.some((c) => c.name === location) ? null : location;
+                  const languages = country?.languages ?? [{ code: language, label: language }];
+                  return (
+                    <>
+                      <Field label="Country" htmlFor="provider-location" hint="Every question is asked as a buyer in this country.">
+                        <select
+                          id="provider-location"
+                          className={inputClass}
+                          value={location}
+                          onChange={(e) => {
+                            const next = searchCountry(e.target.value);
+                            const keep = next?.languages.some((l) => l.code === language);
+                            set("engines", { providerLocation: e.target.value, providerLanguage: keep || !next ? language : next.languages[0].code });
+                          }}
+                        >
+                          {custom && <option value={custom}>{custom} (saved earlier)</option>}
+                          {SEARCH_COUNTRIES.map((c) => (
+                            <option key={c.code} value={c.name}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Language" htmlFor="provider-language" hint={`Languages widely spoken in ${country?.name ?? location}. Questions are asked as written; this sets the language of results and Google's interface.`}>
+                        <select
+                          id="provider-language"
+                          className={inputClass}
+                          value={languages.some((l) => l.code === language) ? language : languages[0].code}
+                          onChange={(e) => set("engines", { providerLanguage: e.target.value })}
+                        >
+                          {languages.map((l) => (
+                            <option key={l.code} value={l.code}>
+                              {l.label}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    </>
+                  );
+                })()}
                 <div className="md:col-span-2">
-                  <SearchLocationStatus location={String(initial.engines.providerLocation ?? "United States")} strict={draft.engines.strictLocation !== false} />
+                  <SearchLocationStatus location={String(initial.engines.providerLocation ?? "United States")} strict={draft.engines.strictLocation === true} />
                 </div>
                 <div className="md:col-span-2">
                   <Field

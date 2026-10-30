@@ -8,6 +8,7 @@ import {
   ENGINES,
   type EngineId,
   detectLocalisation,
+  languageFor,
   originCountry,
   seededShuffle,
   stanceOf,
@@ -19,7 +20,7 @@ import { CopilotEngineCrawler } from "../engines/copilot";
 import { GeminiEngineCrawler } from "../engines/gemini";
 import { ChatGptEngineCrawler } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
-import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteTargetsLocation, countryCodeFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
+import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteLocation, countryCodeFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { connectionCountry, countryName, planRoutes } from "../engines/location";
 import { fetchPublicPage } from "../net/safe-fetch";
 import { readProfile, verifyProfile, listAccounts, isProfileConnected, activeAccountLabel, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
@@ -369,9 +370,11 @@ export class CrawlerOrchestrator {
     const engineSettings = getSettings<{ mode?: EngineMode; providerLocation?: string; providerLanguage?: string; markets?: string; strictLocation?: boolean }>("engine_settings", {});
     // The search location: every route asks from here, as a buyer in that market would
     const searchLocation = engineSettings.providerLocation?.trim() || "United States";
-    const providerOptions = { location: searchLocation, language: engineSettings.providerLanguage };
+    // A language not spoken in the chosen country falls back to the country's main one
+    const providerOptions = { location: searchLocation, language: languageFor(searchLocation, engineSettings.providerLanguage) };
     const targetCountry = countryCodeFor(searchLocation);
-    const strictLocation = engineSettings.strictLocation !== false;
+    // Off unless chosen: audits run as before, and every answer records where it was asked from
+    const strictLocation = engineSettings.strictLocation === true;
     // Where a browser on this computer is answered for: its connection (or proxy) country
     const connection = await connectionCountry();
     const locale = localeFromSettings(engineSettings);
@@ -412,7 +415,7 @@ export class CrawlerOrchestrator {
           connection,
           // The mode only orders the routes (see viaApi); every engine but AI Mode has a browser route
           hasBrowser: engine !== "google_ai_mode",
-          apiRoute: hasApi(engine) ? (apiRouteTargetsLocation(engine, apiKeys) ? "located" : "unlocated") : null,
+          apiRoute: hasApi(engine) ? apiRouteLocation(engine, apiKeys) : null,
         }),
       ])
     );
@@ -525,7 +528,7 @@ export class CrawlerOrchestrator {
           let pacingFactor = 1;
           // byok: API whenever a key exists. hybrid: browser first, API when the browser fails.
           // A browser outside the search location is never used when only that location counts
-          let viaApi = (mode === "byok" || engine === "google_ai_mode" || !plans.get(engine)!.browser) && apiAllowed(engine);
+          let viaApi = (mode === "byok" || engine === "google_ai_mode" || !plans.get(engine)!.browser || plans.get(engine)!.preferApi === true) && apiAllowed(engine);
           const pause = () => {
             const [min, max] = pacingFor(engine, viaApi);
             return new Promise((r) => setTimeout(r, (min + Math.random() * (max - min)) * pacingFactor * pacingScale));
@@ -604,7 +607,7 @@ export class CrawlerOrchestrator {
               if (engine === "copilot") return CopilotEngineCrawler.execute(prompt.queryText, browser);
               if (engine === "gemini") return GeminiEngineCrawler.execute(prompt.queryText, browser);
               if (engine === "chatgpt") return ChatGptEngineCrawler.execute(prompt.queryText, browser);
-              if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser, { country: targetCountry, language: engineSettings.providerLanguage });
+              if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser, { country: targetCountry, language: providerOptions.language });
               throw new Error(`Unknown engine: ${engine}`);
             };
             const runEngine = (): Promise<EngineAnswer> => (viaApi ? runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions) : runBrowser());

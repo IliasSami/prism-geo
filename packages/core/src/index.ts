@@ -12,3 +12,4 @@ export * from "./report/markdown";
 export * from "./text/localisation";
 export * from "./text/discover";
 export * from "./engines";
+export * from "./markets";

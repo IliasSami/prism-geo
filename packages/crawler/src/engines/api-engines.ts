@@ -70,8 +70,24 @@ export function apiRouteLabel(engine: string, keys: ApiKeys): string | null {
  * Gemini's API has no location setting, so its answers cannot be placed in a market.
  */
 export function apiRouteTargetsLocation(engine: string, keys: ApiKeys): boolean {
+  const kind = apiRouteLocation(engine, keys);
+  return kind === "interface" || kind === "model";
+}
+
+/**
+ * How the engine's paid route relates to the search location:
+ * - "interface": captures the engine's own consumer page, asked from the location (DataForSEO,
+ *   SerpApi, Apify for ChatGPT, Gemini and Google). The same answer a browser there would get.
+ * - "model": a model API with web search, given the location (OpenAI, Perplexity Sonar, also
+ *   when DataForSEO relays Sonar). Located, but a different product from the app buyers use.
+ * - "unlocated": Gemini's API, which cannot choose a country.
+ */
+export function apiRouteLocation(engine: string, keys: ApiKeys): "interface" | "model" | "unlocated" | null {
   const route = apiRouteFor(engine, keys);
-  return route !== null && route.kind !== "gemini";
+  if (!route) return null;
+  if (route.kind === "gemini") return "unlocated";
+  if (route.kind === "openai" || route.kind === "perplexity" || engine === "perplexity") return "model";
+  return "interface";
 }
 
 /** The API rejected the key or the account has no access; retrying cannot help. */

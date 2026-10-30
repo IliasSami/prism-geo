@@ -31,7 +31,7 @@ export function SearchLocationStatus({ location, strict }: { location: string; s
     };
   }, [location]);
 
-  if (failed) return <Notice tone="warning">PrismGEO could not check which country this computer connects from. With the switch on, browser engines are skipped until it can.</Notice>;
+  if (failed) return <Notice tone="warning">PrismGEO could not check which country this computer connects from. With “Only search from here” on, browser engines are skipped until it can.</Notice>;
   if (!status) return <p className="text-sm text-zinc-500">Checking where this computer connects from…</p>;
   const here = status.connectionName || "an unknown country";
   if (status.browserInMarket)
@@ -41,11 +41,11 @@ export function SearchLocationStatus({ location, strict }: { location: string; s
       </p>
     );
   return (
-    <Notice tone={strict ? "warning" : "danger"}>
-      This computer connects from {here}, not {status.location}. A browser here is answered for {here}.{" "}
+    <Notice tone={strict ? "warning" : "info"}>
+      This computer connects from {here}, not {status.location}, and a browser here is answered for {here}.{" "}
       {strict
-        ? "Browser engines are skipped; engines run only through routes asked from the search location: the DataForSEO data provider, SerpApi, Apify, OpenAI or Perplexity keys, or a proxy in that country that you control (Schedule & network)."
-        : "With the switch off, those answers are stored and labelled with the country they were asked from."}
+        ? `Browser engines are skipped; engines run only through routes asked from ${status.location}: the DataForSEO data provider, SerpApi, Apify, OpenAI or Perplexity keys, or a proxy there that you control (Schedule & network).`
+        : `Audits run as before and every answer is labelled with the country it was asked from. When DataForSEO, SerpApi or Apify is saved, it is used first for its engines, because it captures the same page from ${status.location}. Turn on “Only search from here” to skip everything else.`}
     </Notice>
   );
 }

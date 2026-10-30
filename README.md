@@ -46,11 +46,12 @@ Modes (Settings → Engines & access): **Browser only**, **Keys and provider onl
 
 ### Search location: ask from your buyers' country
 
-Answers, sources and recommended companies differ by country, so every question is asked from one **search location** (Settings → Engines & access; default United States, language `en`), the way a rank checker is set to a country or city.
+Answers, sources and recommended companies differ by country, so every question is asked from one **search location** (Settings → Engines & access: pick a country, then one of the languages widely spoken there; default United States, English), the way a rank checker is set to a country.
 
 - **Paid routes are asked from the search location:** DataForSEO (country or city), SerpApi (`gl`, `hl`, `location`), Apify (country), OpenAI web search and Perplexity Sonar (user location). Gemini's API has no location setting.
 - **A browser on this computer is answered for the country this computer connects from** (or the proxy's). Before every audit PrismGEO checks that country, and every stored answer records where it was asked from (`searchedFrom`).
-- **Only search from here** (on by default): a route that would ask from another country is never used. When this computer is outside the search location, browser engines are skipped with the reason, and engines run through the routes above or through a proxy in that country that you control. Turn it off to store such answers anyway, labelled with their country.
+- By default audits run as before. When this computer is outside the search location and DataForSEO, SerpApi or Apify is saved, that route is used first for its engines, because it captures the same page from the right country.
+- **Only search from here** (off by default): a route that would ask from another country is never used. When this computer is outside the search location, browser engines are skipped with the reason, and engines run through the routes above or through a proxy in that country that you control.
 
 `PRISMGEO_CONNECTION_COUNTRY=us` sets the connection country where the check cannot run (an offline server).
 

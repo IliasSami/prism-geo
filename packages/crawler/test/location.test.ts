@@ -6,7 +6,7 @@ import path from "node:path";
 
 process.env.PRISMGEO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "prismgeo-location-")), "test.db");
 const { countryFromTrace, countryName, planRoutes } = await import("../src/engines/location");
-const { apiRouteTargetsLocation, runApiEngine } = await import("../src/engines/api-engines");
+const { apiRouteTargetsLocation, apiRouteLocation, runApiEngine } = await import("../src/engines/api-engines");
 
 test("the connection's country comes from the Cloudflare trace", () => {
   assert.equal(countryFromTrace("fl=1\nip=45.114.89.161\nts=1\nloc=BD\ntls=TLSv1.3\n"), "bd");
@@ -22,8 +22,9 @@ test("only searching from the US: a browser counts only when this computer conne
   const fromDhaka = planRoutes({ ...base, connection: "bd", apiRoute: null });
   assert.equal(fromDhaka.browser, false);
   assert.match(fromDhaka.skip!, /connects from Bangladesh.*wrong market.*DataForSEO.*proxy in United States/);
-  // A key asked from the US answers instead of the browser
-  assert.deepEqual(planRoutes({ ...base, connection: "bd", apiRoute: "located" }), { browser: false, api: true });
+  // A provider or key asked from the US answers instead of the browser
+  assert.deepEqual(planRoutes({ ...base, connection: "bd", apiRoute: "interface" }), { browser: false, api: true });
+  assert.deepEqual(planRoutes({ ...base, connection: "bd", apiRoute: "model" }), { browser: false, api: true });
   // Gemini's API cannot choose a country: not used, and the reason says so
   const gemini = planRoutes({ ...base, engineLabel: "Gemini", connection: "bd", apiRoute: "unlocated" });
   assert.match(gemini.skip!, /saved key for Gemini cannot choose a country/);
@@ -32,11 +33,18 @@ test("only searching from the US: a browser counts only when this computer conne
   // An unknown connection never counts as the US
   assert.match(planRoutes({ ...base, connection: null, apiRoute: null }).skip!, /could not confirm/);
   // AI Mode has no browser route
-  assert.deepEqual(planRoutes({ ...base, engineLabel: "Google AI Mode", hasBrowser: false, connection: "bd", apiRoute: "located" }), { browser: false, api: true });
+  assert.deepEqual(planRoutes({ ...base, engineLabel: "Google AI Mode", hasBrowser: false, connection: "bd", apiRoute: "interface" }), { browser: false, api: true });
 });
 
-test("with the switch off every route may run (answers keep the country they came from)", () => {
+test("with the switch off (the default) audits run as before, with the right-country interface first", () => {
+  // No paid route, or one that is not the engine's own page: exactly as before
+  assert.deepEqual(planRoutes({ ...base, strict: false, connection: "bd", apiRoute: null }), { browser: true, api: false });
   assert.deepEqual(planRoutes({ ...base, strict: false, connection: "bd", apiRoute: "unlocated" }), { browser: true, api: true });
+  assert.deepEqual(planRoutes({ ...base, strict: false, connection: "bd", apiRoute: "model" }), { browser: true, api: true });
+  // The same page captured from the US beats a browser in Bangladesh
+  assert.deepEqual(planRoutes({ ...base, strict: false, connection: "bd", apiRoute: "interface" }), { browser: true, api: true, preferApi: true });
+  // In the US the browser stays first
+  assert.deepEqual(planRoutes({ ...base, strict: false, connection: "us", apiRoute: "interface" }), { browser: true, api: true });
 });
 
 test("which paid routes can be asked from a chosen country", () => {
@@ -45,6 +53,11 @@ test("which paid routes can be asked from a chosen country", () => {
   assert.equal(apiRouteTargetsLocation("chatgpt", { openai: "k" }), true);
   assert.equal(apiRouteTargetsLocation("perplexity", { perplexity: "k" }), true);
   assert.equal(apiRouteTargetsLocation("google_aio", { serpapi: "k" }), true);
+  assert.equal(apiRouteLocation("chatgpt", { dataforseo: "l:p" }), "interface");
+  assert.equal(apiRouteLocation("chatgpt", { openai: "k" }), "model");
+  assert.equal(apiRouteLocation("perplexity", { dataforseo: "l:p" }), "model", "DataForSEO relays Perplexity's API, not its page");
+  assert.equal(apiRouteLocation("google_ai_mode", { apify: "t" }), "interface");
+  assert.equal(apiRouteLocation("gemini", { gemini: "k" }), "unlocated");
 });
 
 /** Replaces fetch for one call and returns what was requested. */
