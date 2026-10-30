@@ -21,7 +21,7 @@ import { ChatGptEngineCrawler } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
 import { runApiEngine, apiKeyFor, apiRouteFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { fetchPublicPage } from "../net/safe-fetch";
-import { readProfile, verifyProfile, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
+import { readProfile, verifyProfile, listAccounts, isProfileConnected, activeAccountLabel, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
 const isProfileEngine = (e: string): e is ProfileEngine => (PROFILE_ENGINES as string[]).includes(e);
 import { storeManualCapture, trackedEntitiesFor, type ManualCaptureInput, type ManualCaptureResult } from "./manual-capture";
 import { chromium, type Browser } from "playwright";
@@ -378,9 +378,12 @@ export class CrawlerOrchestrator {
     // Saved sessions are re-checked before use: one that expired or was signed out is reported,
     // and the engine runs logged out (Copilot, which needs an account, is skipped)
     for (const engine of requestedEngines) {
-      if (!isProfileEngine(engine) || readProfile(engine)?.signedIn !== true) continue;
-      const session = await verifyProfile(engine);
-      if (session && !session.signedIn) {
+      if (!isProfileEngine(engine)) continue;
+      const signedInBefore = listAccounts(engine).filter((a) => readProfile(engine, a)?.signedIn === true);
+      if (!signedInBefore.length) continue;
+      for (const account of signedInBefore) await verifyProfile(engine, account);
+      // Only when every account that was signed in has lapsed does the engine fall back to logged out
+      if (!isProfileConnected(engine)) {
         failures.push({
           engine,
           promptId: null,
@@ -759,6 +762,11 @@ export class CrawlerOrchestrator {
     if (engineResult.provider) flags.provider = engineResult.provider;
     if (typeof engineResult.costUsd === "number" && engineResult.costUsd > 0) flags.costUsd = engineResult.costUsd;
     if (engineResult.model) flags.model = engineResult.model;
+    // Which signed-in account answered (its label), so persona results can be told apart
+    if (engineResult.captureMethod === "browser_signed_in") {
+      const account = activeAccountLabel(engine);
+      if (account) flags.account = account;
+    }
     // Answers tailored to this machine's location (not the measured market) are flagged, not mixed in.
     // Provider captures are asked from the chosen market; hand captures come from unknown places.
     if (args.locale && engineResult.captureMethod !== "provider" && engineResult.captureMethod !== "manual") {

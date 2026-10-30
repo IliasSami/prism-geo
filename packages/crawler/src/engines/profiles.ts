@@ -61,6 +61,10 @@ export function sessionFromCookies(engine: ProfileEngine, cookies: SessionCookie
 
 interface ProfileMarker {
   engine: ProfileEngine;
+  /** Account id within the engine ("default" for the first account). */
+  account?: string;
+  /** What this account stands for, e.g. "US founder", "UK ecom manager". */
+  label?: string;
   connectedAt: string;
   /** The real user agent of the window the user signed in with, reused headlessly. */
   userAgent: string;
@@ -75,6 +79,10 @@ export type SessionState = "signed_in" | "not_signed_in" | "expired" | "checking
 
 export interface ProfileStatus {
   engine: ProfileEngine;
+  account: string;
+  label: string | null;
+  /** The account audits use for this engine now (the first one with a verified session). */
+  active: boolean;
   connected: boolean;
   connecting: boolean;
   connectedAt: string | null;
@@ -100,51 +108,94 @@ const SESSION_ENDPOINTS: Partial<Record<ProfileEngine, string>> = {
 };
 
 const MARKER_FILE = "prismgeo-profile.json";
+/*
+ * Several accounts per engine are supported, as labelled personas ("US founder", "UK ecom
+ * manager"): each is its own profile with its own verified session. Audits use the first account
+ * whose session is valid; an expired or signed-out account is skipped. A usage limit or block is
+ * never worked around by switching accounts: it is recorded and cooled down like any block.
+ */
+export const DEFAULT_ACCOUNT = "default";
+const keyOf = (engine: ProfileEngine, account: string) => (account === DEFAULT_ACCOUNT ? engine : `${engine}@${account}`);
+
 const g = globalThis as typeof globalThis & {
-  __prismProfileErrors?: Map<ProfileEngine, string>;
-  __prismProfileConnecting?: Set<ProfileEngine>;
-  __prismProfileDetected?: Set<ProfileEngine>;
-  __prismProfileChecking?: Set<ProfileEngine>;
-  __prismProfileCookieNames?: Map<ProfileEngine, string[]>;
+  __prismProfileErrors?: Map<string, string>;
+  __prismProfileConnecting?: Set<string>;
+  __prismProfileDetected?: Set<string>;
+  __prismProfileChecking?: Set<string>;
+  __prismProfileCookieNames?: Map<string, string[]>;
 };
-const lastErrors = (g.__prismProfileErrors ??= new Map<ProfileEngine, string>());
-const connecting = (g.__prismProfileConnecting ??= new Set<ProfileEngine>());
-const detected = (g.__prismProfileDetected ??= new Set<ProfileEngine>());
-const checking = (g.__prismProfileChecking ??= new Set<ProfileEngine>());
+// Keyed by "engine" (default account) or "engine@account"
+const lastErrors = (g.__prismProfileErrors ??= new Map<string, string>());
+const connecting = (g.__prismProfileConnecting ??= new Set<string>());
+const detected = (g.__prismProfileDetected ??= new Set<string>());
+const checking = (g.__prismProfileChecking ??= new Set<string>());
 /** Names (never values) of the service's cookies when no sign-in was found, to diagnose cookie renames. */
-const cookieNames = (g.__prismProfileCookieNames ??= new Map<ProfileEngine, string[]>());
+const cookieNames = (g.__prismProfileCookieNames ??= new Map<string, string[]>());
 
-/** The last sign-in window failure for an engine, or null. */
-export function profileLastError(engine: ProfileEngine): string | null {
-  return lastErrors.get(engine) ?? null;
+/** An account id from a label: "UK ecom manager" → "uk-ecom-manager". */
+export function accountIdFrom(label: string): string {
+  const id = (label || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return id || DEFAULT_ACCOUNT;
 }
 
-export function profileDir(engine: ProfileEngine): string {
-  return path.join(path.dirname(getDbPath()), "browser-profiles", engine);
+/** The last sign-in window failure for an account, or null. */
+export function profileLastError(engine: ProfileEngine, account = DEFAULT_ACCOUNT): string | null {
+  return lastErrors.get(keyOf(engine, account)) ?? null;
 }
 
-export function readProfile(engine: ProfileEngine): ProfileMarker | null {
+const profilesRoot = () => path.join(path.dirname(getDbPath()), "browser-profiles");
+
+export function profileDir(engine: ProfileEngine, account = DEFAULT_ACCOUNT): string {
+  return path.join(profilesRoot(), keyOf(engine, account));
+}
+
+/** The engine's saved accounts: the default one first, then the others by name. */
+export function listAccounts(engine: ProfileEngine): string[] {
+  let names: string[] = [];
   try {
-    return JSON.parse(fs.readFileSync(path.join(profileDir(engine), MARKER_FILE), "utf8")) as ProfileMarker;
+    names = fs.readdirSync(profilesRoot());
+  } catch {
+    return [];
+  }
+  const others = names.filter((n) => n.startsWith(`${engine}@`)).map((n) => n.slice(engine.length + 1)).sort();
+  return [...(names.includes(engine) ? [DEFAULT_ACCOUNT] : []), ...others];
+}
+
+export function readProfile(engine: ProfileEngine, account = DEFAULT_ACCOUNT): ProfileMarker | null {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(profileDir(engine, account), MARKER_FILE), "utf8")) as ProfileMarker;
   } catch {
     return null;
   }
 }
 
 function writeMarker(marker: ProfileMarker): void {
-  fs.writeFileSync(path.join(profileDir(marker.engine), MARKER_FILE), JSON.stringify(marker, null, 2), { mode: PRIVATE_FILE_MODE });
+  const account = marker.account || DEFAULT_ACCOUNT;
+  fs.writeFileSync(path.join(profileDir(marker.engine, account), MARKER_FILE), JSON.stringify({ ...marker, account }, null, 2), { mode: PRIVATE_FILE_MODE });
 }
 
 const expired = (m: ProfileMarker, now = Date.now()) => Boolean(m.sessionExpiresAt && Date.parse(m.sessionExpiresAt) <= now);
+const valid = (m: ProfileMarker | null) => Boolean(m && m.signedIn === true && !expired(m));
 
-/** True only for a verified, unexpired signed-in session (false for engines without sessions). */
-export function isProfileConnected(engine: string): boolean {
-  if (!(PROFILE_ENGINES as string[]).includes(engine)) return false;
-  const m = readProfile(engine as ProfileEngine);
-  return Boolean(m && m.signedIn === true && !expired(m));
+/** The account audits use for an engine: the first with a verified, unexpired session, or null. */
+export function activeAccount(engine: string): string | null {
+  if (!(PROFILE_ENGINES as string[]).includes(engine)) return null;
+  return listAccounts(engine as ProfileEngine).find((a) => valid(readProfile(engine as ProfileEngine, a))) ?? null;
 }
 
-function stateOf(engine: ProfileEngine, m: ProfileMarker | null): SessionState {
+/** The label of the account in use, for provenance ("default" when unlabelled). */
+export function activeAccountLabel(engine: string): string | null {
+  const account = activeAccount(engine);
+  if (!account) return null;
+  return readProfile(engine as ProfileEngine, account)?.label || account;
+}
+
+/** True when the engine has at least one verified, unexpired signed-in account. */
+export function isProfileConnected(engine: string): boolean {
+  return activeAccount(engine) !== null;
+}
+
+function stateOf(m: ProfileMarker | null): SessionState {
   if (!m) return "not_connected";
   if (m.signedIn === undefined) return "checking";
   if (!m.signedIn) return "not_signed_in";
@@ -152,40 +203,49 @@ function stateOf(engine: ProfileEngine, m: ProfileMarker | null): SessionState {
 }
 
 export function getProfileStatuses(): ProfileStatus[] {
-  return PROFILE_ENGINES.map((engine) => {
-    const marker = readProfile(engine);
-    // Profiles saved before sign-in was verified are checked once, in the background
-    if (marker && marker.signedIn === undefined && !checking.has(engine) && !connecting.has(engine)) {
-      verifyProfile(engine).catch(() => null);
-    }
-    const state = stateOf(engine, marker);
-    const reason =
-      lastErrors.get(engine) ??
-      (state === "not_signed_in"
-        ? `No signed-in ${SESSION_RULES[engine].account} was found in the saved window. Connect again and sign in before closing it.`
-        : state === "expired"
-          ? `The ${SESSION_RULES[engine].account} session expired. Connect again to sign in.`
-          : null);
-    return {
-      engine,
-      connected: state === "signed_in",
-      connecting: connecting.has(engine),
-      connectedAt: marker?.connectedAt ?? null,
-      state: checking.has(engine) ? "checking" : state,
-      signedInDetected: detected.has(engine),
-      sessionExpiresAt: marker?.sessionExpiresAt ?? null,
-      verifiedAt: marker?.verifiedAt ?? null,
-      lastError: reason,
-      cookieNames: state === "signed_in" ? [] : (cookieNames.get(engine) ?? []),
-    };
+  return PROFILE_ENGINES.flatMap((engine) => {
+    const accounts = listAccounts(engine);
+    const active = activeAccount(engine);
+    return (accounts.length ? accounts : [DEFAULT_ACCOUNT]).map((account) => {
+      const key = keyOf(engine, account);
+      const marker = readProfile(engine, account);
+      // Profiles saved before sign-in was verified are checked once, in the background
+      if (marker && marker.signedIn === undefined && !checking.has(key) && !connecting.has(key)) {
+        verifyProfile(engine, account).catch(() => null);
+      }
+      const state = stateOf(marker);
+      const reason =
+        lastErrors.get(key) ??
+        (state === "not_signed_in"
+          ? `No signed-in ${SESSION_RULES[engine].account} was found in the saved window. Connect again and sign in before closing it.`
+          : state === "expired"
+            ? `The ${SESSION_RULES[engine].account} session expired. Connect again to sign in.`
+            : null);
+      return {
+        engine,
+        account,
+        label: marker?.label ?? null,
+        active: account === active,
+        connected: state === "signed_in",
+        connecting: connecting.has(key),
+        connectedAt: marker?.connectedAt ?? null,
+        state: checking.has(key) ? "checking" : state,
+        signedInDetected: detected.has(key),
+        sessionExpiresAt: marker?.sessionExpiresAt ?? null,
+        verifiedAt: marker?.verifiedAt ?? null,
+        lastError: reason,
+        cookieNames: state === "signed_in" ? [] : (cookieNames.get(key) ?? []),
+      };
+    });
   });
 }
 
-async function readSession(context: BrowserContext, engine: ProfileEngine, opts: { askEndpoint?: boolean } = {}) {
+async function readSession(context: BrowserContext, engine: ProfileEngine, opts: { askEndpoint?: boolean; key?: string } = {}) {
+  const key = opts.key ?? engine;
   const cookies = (await context.cookies()) as SessionCookie[];
   const byCookie = sessionFromCookies(engine, cookies);
   if (byCookie.signedIn) {
-    cookieNames.delete(engine);
+    cookieNames.delete(key);
     return byCookie;
   }
   const endpoint = SESSION_ENDPOINTS[engine];
@@ -211,19 +271,19 @@ async function readSession(context: BrowserContext, engine: ProfileEngine, opts:
         }, endpoint)
         .catch(() => false);
       if (signedIn) {
-        cookieNames.delete(engine);
+        cookieNames.delete(key);
         return { signedIn: true, expiresAt: null };
       }
     }
   }
   const rule = SESSION_RULES[engine];
-  cookieNames.set(engine, [...new Set(cookies.filter((c) => rule.domain.test(c.domain.replace(/^\./, ""))).map((c) => c.name))].sort());
+  cookieNames.set(key, [...new Set(cookies.filter((c) => rule.domain.test(c.domain.replace(/^\./, ""))).map((c) => c.name))].sort());
   return byCookie;
 }
 
 /** Cookie names (never values) seen for the service when no sign-in was found; for diagnosing. */
-export function profileCookieNames(engine: ProfileEngine): string[] {
-  return cookieNames.get(engine) ?? [];
+export function profileCookieNames(engine: ProfileEngine, account = DEFAULT_ACCOUNT): string[] {
+  return cookieNames.get(keyOf(engine, account)) ?? [];
 }
 
 /**
@@ -231,20 +291,21 @@ export function profileCookieNames(engine: ProfileEngine): string[] {
  * and records the result. Returns null when the profile cannot be opened right now (in use by
  * an audit or an open sign-in window); the saved state is then left as it was.
  */
-export async function verifyProfile(engine: ProfileEngine): Promise<{ signedIn: boolean; expiresAt: string | null } | null> {
-  const marker = readProfile(engine);
-  if (!marker || connecting.has(engine) || checking.has(engine)) return null;
-  checking.add(engine);
+export async function verifyProfile(engine: ProfileEngine, account = DEFAULT_ACCOUNT): Promise<{ signedIn: boolean; expiresAt: string | null } | null> {
+  const key = keyOf(engine, account);
+  const marker = readProfile(engine, account);
+  if (!marker || connecting.has(key) || checking.has(key)) return null;
+  checking.add(key);
   let context: BrowserContext | null = null;
   try {
-    context = await chromium.launchPersistentContext(profileDir(engine), {
+    context = await chromium.launchPersistentContext(profileDir(engine, account), {
       headless: true,
       executablePath: getChromiumExecutablePath(),
       args: PROFILE_ARGS,
       ignoreDefaultArgs: ["--enable-automation"],
       userAgent: marker.userAgent?.replace("HeadlessChrome", "Chrome") || undefined,
     });
-    let session = await readSession(context, engine);
+    let session = await readSession(context, engine, { key });
     const endpoint = SESSION_ENDPOINTS[engine];
     if (!session.signedIn && endpoint) {
       // The cookie name may have changed: ask the site itself. If that cannot be done (offline,
@@ -255,16 +316,16 @@ export async function verifyProfile(engine: ProfileEngine): Promise<{ signedIn: 
         .then((r) => Boolean(r && r.status() < 400))
         .catch(() => false);
       if (!loaded) return null;
-      session = await readSession(context, engine, { askEndpoint: true });
+      session = await readSession(context, engine, { askEndpoint: true, key });
     }
-    writeMarker({ ...marker, signedIn: session.signedIn, sessionExpiresAt: session.expiresAt, verifiedAt: new Date().toISOString() });
-    if (session.signedIn) lastErrors.delete(engine);
+    writeMarker({ ...marker, account, signedIn: session.signedIn, sessionExpiresAt: session.expiresAt, verifiedAt: new Date().toISOString() });
+    if (session.signedIn) lastErrors.delete(key);
     return session;
   } catch {
     return null;
   } finally {
     await context?.close().catch(() => null);
-    checking.delete(engine);
+    checking.delete(key);
   }
 }
 
@@ -277,13 +338,14 @@ export const PROFILE_ARGS = ["--disable-blink-features=AutomationControlled", "-
  * can say "signed in, you can close the window"; after it closes the profile is verified again.
  * The profile counts as connected only if a signed-in session was found.
  */
-export async function openSignInWindow(engine: ProfileEngine): Promise<{ signedIn: boolean }> {
-  if (connecting.has(engine)) throw new Error(`A sign-in window for ${engine} is already open`);
-  connecting.add(engine);
-  detected.delete(engine);
+export async function openSignInWindow(engine: ProfileEngine, account = DEFAULT_ACCOUNT, label?: string): Promise<{ signedIn: boolean }> {
+  const key = keyOf(engine, account);
+  if (connecting.has(key)) throw new Error(`A sign-in window for ${engine} (${account}) is already open`);
+  connecting.add(key);
+  detected.delete(key);
   let poll: ReturnType<typeof setInterval> | null = null;
   try {
-    const dir = profileDir(engine);
+    const dir = profileDir(engine, account);
     // Profiles hold session cookies: owner-only access
     ensurePrivateDir(path.dirname(dir));
     ensurePrivateDir(dir);
@@ -301,9 +363,9 @@ export async function openSignInWindow(engine: ProfileEngine): Promise<{ signedI
     let lastSeen = { signedIn: false, expiresAt: null as string | null };
     const check = async () => {
       try {
-        lastSeen = await readSession(context, engine, { askEndpoint: true });
-        if (lastSeen.signedIn) detected.add(engine);
-        else detected.delete(engine);
+        lastSeen = await readSession(context, engine, { askEndpoint: true, key });
+        if (lastSeen.signedIn) detected.add(key);
+        else detected.delete(key);
       } catch {
         // the window is closing
       }
@@ -314,34 +376,37 @@ export async function openSignInWindow(engine: ProfileEngine): Promise<{ signedI
     clearInterval(poll);
     poll = null;
 
-    const previous = readProfile(engine);
+    const previous = readProfile(engine, account);
     writeMarker({
       engine,
+      account,
+      label: label?.trim() || previous?.label || undefined,
       connectedAt: lastSeen.signedIn ? new Date().toISOString() : previous?.connectedAt || new Date().toISOString(),
       userAgent,
       signedIn: lastSeen.signedIn,
       sessionExpiresAt: lastSeen.expiresAt,
       verifiedAt: new Date().toISOString(),
     });
-    connecting.delete(engine);
+    connecting.delete(key);
     // The cookies are on disk now; confirm from there (also catches a sign-in in the last seconds)
-    const confirmed = (await verifyProfile(engine)) ?? lastSeen;
-    if (confirmed.signedIn) lastErrors.delete(engine);
-    else lastErrors.set(engine, `The window was closed without a signed-in ${SESSION_RULES[engine].account}. Connect again and sign in before closing it.`);
+    const confirmed = (await verifyProfile(engine, account)) ?? lastSeen;
+    if (confirmed.signedIn) lastErrors.delete(key);
+    else lastErrors.set(key, `The window was closed without a signed-in ${SESSION_RULES[engine].account}. Connect again and sign in before closing it.`);
     return { signedIn: confirmed.signedIn };
   } catch (err) {
-    lastErrors.set(engine, ((err as Error).message || String(err)).replace(/\u001b\[[0-9;]*m/g, "").split("\n")[0].slice(0, 300));
+    lastErrors.set(key, ((err as Error).message || String(err)).replace(/\u001b\[[0-9;]*m/g, "").split("\n")[0].slice(0, 300));
     throw err;
   } finally {
     if (poll) clearInterval(poll);
-    connecting.delete(engine);
-    detected.delete(engine);
+    connecting.delete(key);
+    detected.delete(key);
   }
 }
 
-/** Deletes the saved profile (cookies and session) for an engine. */
-export function removeProfile(engine: ProfileEngine): void {
-  if (connecting.has(engine)) throw new Error(`Close the open ${engine} sign-in window first`);
-  fs.rmSync(profileDir(engine), { recursive: true, force: true });
-  lastErrors.delete(engine);
+/** Deletes the saved profile (cookies and session) for one account of an engine. */
+export function removeProfile(engine: ProfileEngine, account = DEFAULT_ACCOUNT): void {
+  const key = keyOf(engine, account);
+  if (connecting.has(key)) throw new Error(`Close the open ${engine} sign-in window first`);
+  fs.rmSync(profileDir(engine, account), { recursive: true, force: true });
+  lastErrors.delete(key);
 }

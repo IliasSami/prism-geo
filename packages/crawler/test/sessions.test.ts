@@ -8,7 +8,7 @@ import path from "node:path";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prismgeo-sessions-"));
 process.env.PRISMGEO_DB_PATH = path.join(tmp, "data", "test.db");
 
-const { sessionFromCookies, verifyProfile, isProfileConnected, getProfileStatuses, profileDir } = await import("../src/engines/profiles");
+const { sessionFromCookies, verifyProfile, isProfileConnected, getProfileStatuses, profileDir, activeAccount, activeAccountLabel, listAccounts, accountIdFrom } = await import("../src/engines/profiles");
 const { chromium } = await import("playwright");
 
 const now = Date.parse("2026-10-30T00:00:00Z");
@@ -37,14 +37,14 @@ test("a session counts only with the service's own sign-in cookie, unexpired", (
 });
 
 /** Writes cookies into a real Chromium profile, as a sign-in window would leave it. */
-async function profileWith(engine: "google_aio" | "gemini", cookies: Array<{ name: string; domain: string; expires: number }>) {
-  const dir = profileDir(engine);
+async function profileWith(engine: "google_aio" | "gemini", cookies: Array<{ name: string; domain: string; expires: number }>, account = "default", label?: string) {
+  const dir = profileDir(engine, account);
   fs.mkdirSync(dir, { recursive: true });
   const ctx = await chromium.launchPersistentContext(dir, { headless: true });
   await ctx.addCookies(cookies.map((c) => ({ ...c, value: "test", path: "/", secure: true, sameSite: "Lax" as const })));
   await ctx.close();
   // A marker as written by older versions (before sign-in was verified)
-  fs.writeFileSync(path.join(dir, "prismgeo-profile.json"), JSON.stringify({ engine, connectedAt: new Date().toISOString(), userAgent: "" }));
+  fs.writeFileSync(path.join(dir, "prismgeo-profile.json"), JSON.stringify({ engine, account, label, connectedAt: new Date().toISOString(), userAgent: "" }));
 }
 
 let browserAvailable = true;
@@ -72,4 +72,22 @@ test("an unverified saved profile is checked from disk: no sign-in → not conne
   assert.equal(g?.signedIn, true);
   assert.equal(isProfileConnected("gemini"), true);
   assert.equal(getProfileStatuses().find((s) => s.engine === "gemini")!.state, "signed_in");
+});
+
+test("several labelled accounts per engine: audits use the first one with a valid session", { skip: !browserAvailable && "no Chromium installed" }, async () => {
+  const soon = Date.now() / 1000 + 86_400 * 30;
+  assert.equal(accountIdFrom("UK ecom manager!"), "uk-ecom-manager");
+  // google_aio default account is not signed in (from the previous test); add a signed-in persona
+  await profileWith("google_aio", [{ name: "__Secure-1PSID", domain: ".google.com", expires: soon }], "uk-founder", "UK founder");
+  await verifyProfile("google_aio", "uk-founder");
+  assert.deepEqual(listAccounts("google_aio"), ["default", "uk-founder"]);
+  assert.equal(activeAccount("google_aio"), "uk-founder", "the account without a session is skipped");
+  assert.equal(activeAccountLabel("google_aio"), "UK founder");
+  assert.equal(isProfileConnected("google_aio"), true);
+  const rows = getProfileStatuses().filter((s) => s.engine === "google_aio");
+  assert.deepEqual(rows.map((r) => [r.account, r.state, r.active]), [["default", "not_signed_in", false], ["uk-founder", "signed_in", true]]);
+  // A second valid account is not used while the first valid one works (no rotation)
+  await profileWith("google_aio", [{ name: "SID", domain: ".google.com", expires: soon }], "us-cmo", "US CMO");
+  await verifyProfile("google_aio", "us-cmo");
+  assert.equal(activeAccount("google_aio"), "uk-founder");
 });

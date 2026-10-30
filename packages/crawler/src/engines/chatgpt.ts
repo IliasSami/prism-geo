@@ -36,7 +36,10 @@ export class ChatGptEngineCrawler {
     const captureMethod = browserCaptureMethod("chatgpt");
 
     const answer = await withStealthPage("ChatGptCrawler", existingBrowser, async (page) => {
-      await page.goto(`https://chatgpt.com/?q=${encodeURIComponent(query)}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      // Signed in: a Temporary Chat (no memory, no chat history), so the account's past
+      // conversations do not shape the answer. Logged-out chats have no memory anyway.
+      const fresh = captureMethod === "browser_signed_in" ? "temporary-chat=true&" : "";
+      await page.goto(`https://chatgpt.com/?${fresh}q=${encodeURIComponent(query)}`, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page
         .waitForFunction(() => document.body.innerText.includes("ChatGPT said") || !!document.querySelector("[data-message-author-role='assistant']"), null, { timeout: 45000 })
         .catch(() => null);
