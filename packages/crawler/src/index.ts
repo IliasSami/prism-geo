@@ -15,3 +15,5 @@ export * from "./queue/reanalyze";
 export * from "./engines/dataforseo";
 export * from "./queue/manual-capture";
 export * from "./engines/location";
+export * from "./geo/geotargets";
+export * from "./queue/calibrate";

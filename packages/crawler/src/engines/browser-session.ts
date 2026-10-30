@@ -51,6 +51,12 @@ export interface EngineAnswer {
   captureMethod: CaptureMethod;
   /** Country the question was asked from (lower-case ISO code), when known. */
   searchedFrom?: string;
+  /** Place the search was asked as from (a uule location signal for Google), when set. */
+  locationSignal?: string;
+  /** The exact address searched, so the result can be checked again. */
+  searchUrl?: string;
+  /** Google's organic results on the same page (top 10), to compare with the pages the AI cites. */
+  organic?: Array<{ position: number; url: string; title: string }>;
   /** Data provider that captured the answer (e.g. "dataforseo"), when one did. */
   provider?: string;
   /** What the provider charged for this answer, in USD. */

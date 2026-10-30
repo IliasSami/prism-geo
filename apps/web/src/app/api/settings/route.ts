@@ -30,6 +30,8 @@ const DEFAULT_ENGINES = {
   // Only use routes that ask from the search location (a browser here only when this computer connects from there).
   // Off by default: audits run as before, and every answer records the country it was asked from.
   strictLocation: false,
+  // A city, state or postal code inside the country (Google's canonical name); "" = the whole country
+  searchPlace: "",
 };
 
 const DEFAULT_CRAWLER = {
@@ -89,6 +91,7 @@ function readSettings() {
   engines.providerLocation = typeof storedEngines.providerLocation === "string" && storedEngines.providerLocation ? storedEngines.providerLocation : DEFAULT_ENGINES.providerLocation;
   engines.markets = typeof storedEngines.markets === "string" ? storedEngines.markets : "";
   engines.strictLocation = storedEngines.strictLocation === true;
+  engines.searchPlace = typeof storedEngines.searchPlace === "string" ? storedEngines.searchPlace : "";
   engines.providerLanguage = typeof storedEngines.providerLanguage === "string" && storedEngines.providerLanguage ? storedEngines.providerLanguage : DEFAULT_ENGINES.providerLanguage;
   const crawler = { ...DEFAULT_CRAWLER, ...getSettings<Record<string, unknown>>("crawler_settings", {}) } as typeof DEFAULT_CRAWLER;
   return { byok, engines, crawler };

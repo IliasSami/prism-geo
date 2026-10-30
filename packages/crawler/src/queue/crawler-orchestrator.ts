@@ -305,6 +305,23 @@ function updateBatch(batchId: string, fields: Partial<Record<keyof typeof BATCH_
  * This machine's country and the measured markets (Settings → Engines & access). Markets default
  * to the data provider's market, which defaults to the United States.
  */
+/** The saved place when it lies in the search country ("Chicago,Illinois,United States" in United States), else null. */
+export function placeInCountry(place: string | undefined, country: string): string | null {
+  const p = (place || "").trim();
+  if (!p || !p.includes(",")) return null;
+  return p.split(",").pop()!.trim().toLowerCase() === country.split(",").pop()!.trim().toLowerCase() ? p : null;
+}
+
+/**
+ * Whether Google answers asked from this computer with a uule location signal were shown to match
+ * answers asked from inside the country (Settings → Search location → Calibrate), for that country.
+ */
+export function uuleCalibrationTrusted(country: string | null): boolean {
+  if (!country) return false;
+  const c = getSettings<{ country?: string; trusted?: boolean }>("location_calibration", {});
+  return c.trusted === true && c.country === country;
+}
+
 export function localeFromSettings(s: { markets?: string; providerLocation?: string }): { origin: string | null; markets: string[] } {
   // A provider location can contain commas ("London,England,United Kingdom"), so the fallback stays whole
   const markets = (s.markets ? s.markets.split(/\s*[,;|]\s*/) : [s.providerLocation || "United States"]).map((m) => m.trim()).filter(Boolean);
@@ -367,12 +384,16 @@ export class CrawlerOrchestrator {
         ? rawPrompts.slice(0, options.promptLimit)
         : rawPrompts;
 
-    const engineSettings = getSettings<{ mode?: EngineMode; providerLocation?: string; providerLanguage?: string; markets?: string; strictLocation?: boolean }>("engine_settings", {});
+    const engineSettings = getSettings<{ mode?: EngineMode; providerLocation?: string; providerLanguage?: string; markets?: string; strictLocation?: boolean; searchPlace?: string }>("engine_settings", {});
     // The search location: every route asks from here, as a buyer in that market would
     const searchLocation = engineSettings.providerLocation?.trim() || "United States";
     // A language not spoken in the chosen country falls back to the country's main one
-    const providerOptions = { location: searchLocation, language: languageFor(searchLocation, engineSettings.providerLanguage) };
+    // An optional place inside the country (Google's canonical name), used only when it is in that country
+    const place = placeInCountry(engineSettings.searchPlace, searchLocation);
+    const providerOptions = { location: searchLocation, place: place || undefined, language: languageFor(searchLocation, engineSettings.providerLanguage) };
     const targetCountry = countryCodeFor(searchLocation);
+    // Google answers from here count as asked from the search location only once calibration showed it
+    const uuleTrusted = uuleCalibrationTrusted(targetCountry);
     // Off unless chosen: audits run as before, and every answer records where it was asked from
     const strictLocation = engineSettings.strictLocation === true;
     // Where a browser on this computer is answered for: its connection (or proxy) country
@@ -415,6 +436,8 @@ export class CrawlerOrchestrator {
           connection,
           // The mode only orders the routes (see viaApi); every engine but AI Mode has a browser route
           hasBrowser: engine !== "google_ai_mode",
+          // Google's browser route sends the location itself (uule); trusted once calibrated
+          browserLocated: engine === "google_aio" && uuleTrusted,
           apiRoute: hasApi(engine) ? apiRouteLocation(engine, apiKeys) : null,
         }),
       ])
@@ -607,7 +630,7 @@ export class CrawlerOrchestrator {
               if (engine === "copilot") return CopilotEngineCrawler.execute(prompt.queryText, browser);
               if (engine === "gemini") return GeminiEngineCrawler.execute(prompt.queryText, browser);
               if (engine === "chatgpt") return ChatGptEngineCrawler.execute(prompt.queryText, browser);
-              if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser, { country: targetCountry, language: providerOptions.language });
+              if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser, { country: targetCountry, language: providerOptions.language, place: place || searchLocation });
               throw new Error(`Unknown engine: ${engine}`);
             };
             const runEngine = (): Promise<EngineAnswer> => (viaApi ? runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions) : runBrowser());
@@ -800,6 +823,10 @@ export class CrawlerOrchestrator {
     if (engineResult.model) flags.model = engineResult.model;
     // Country the question was asked from ("US"), so answers from outside the market can be told apart
     if (engineResult.searchedFrom) flags.searchedFrom = engineResult.searchedFrom.toUpperCase();
+    // The place the search was asked as from (Google's uule, or a provider's location) and the exact address
+    if (engineResult.locationSignal) flags.locationSignal = engineResult.locationSignal;
+    if (engineResult.searchUrl) flags.searchUrl = engineResult.searchUrl;
+    if (engineResult.organic?.length) flags.organic = engineResult.organic;
     // Which signed-in account answered (its label), so persona results can be told apart
     if (engineResult.captureMethod === "browser_signed_in") {
       const account = activeAccountLabel(engine);

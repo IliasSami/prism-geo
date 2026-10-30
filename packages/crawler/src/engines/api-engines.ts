@@ -143,10 +143,24 @@ async function geminiApi(query: string, key: string): Promise<Omit<EngineAnswer,
   return { responseText: text, citations, subQueries: meta.webSearchQueries || [], captureMethod: "api" };
 }
 
+/**
+ * City and region of a Google canonical place: "Chicago,Illinois,United States" → Chicago, Illinois;
+ * "60601,Illinois,United States" (a postal code) → Illinois; "Texas,United States" → Texas.
+ */
+export function placeParts(place: string | undefined): { city?: string; region?: string } {
+  const parts = (place || "").split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return {};
+  const region = parts.length >= 3 ? parts[parts.length - 2] : parts[0];
+  const city = parts.length >= 3 && !/^[\d\s-]+$/.test(parts[0]) ? parts[0] : undefined;
+  return city ? { city, region } : { region };
+}
+
 async function openAiApi(query: string, key: string, opts: DataForSeoOptions): Promise<Omit<EngineAnswer, "executionMs">> {
   const country = countryCodeFor(opts.location);
-  // Web search answers as for a user in the search location
-  const tool = country ? { type: "web_search", user_location: { type: "approximate", country: country.toUpperCase() } } : { type: "web_search" };
+  // Web search answers as for a user in the search location; a place adds its city and region
+  const userLocation: Record<string, string> = { type: "approximate", ...placeParts(opts.place) };
+  if (country) userLocation.country = country.toUpperCase();
+  const tool = country ? { type: "web_search", user_location: userLocation } : { type: "web_search" };
   const data = await postJson("OpenAiApi", "https://api.openai.com/v1/responses", { authorization: `Bearer ${key}` }, { model: OPENAI_MODEL, input: query, tools: [tool] });
   const output: any[] = data.output || [];
   const parts = output.filter((o) => o.type === "message").flatMap((o) => o.content || []).filter((c: any) => c.type === "output_text");
@@ -206,7 +220,7 @@ function overviewText(blocks: any[]): string {
 
 async function serpApiOverview(query: string, key: string, opts: DataForSeoOptions): Promise<Omit<EngineAnswer, "executionMs">> {
   const params = new URLSearchParams({ engine: "google", q: query, hl: (opts.language || "en").slice(0, 2), gl: countryCodeFor(opts.location) || "us", api_key: key });
-  if (opts.location) params.set("location", opts.location);
+  if (opts.place || opts.location) params.set("location", (opts.place || opts.location)!);
   const data = await getJson("SerpApiAio", `https://serpapi.com/search.json?${params}`);
   if (data.error) throw new Error(`[SerpApiAio] ${data.error}`);
   let overview = data.ai_overview;
@@ -236,7 +250,7 @@ interface SerpBlock {
 }
 async function serpApiAiMode(query: string, key: string, opts: DataForSeoOptions): Promise<Omit<EngineAnswer, "executionMs">> {
   const params = new URLSearchParams({ engine: "google_ai_mode", q: query, api_key: key, hl: (opts.language || "en").slice(0, 2) });
-  if (opts.location) params.set("location", opts.location);
+  if (opts.place || opts.location) params.set("location", (opts.place || opts.location)!);
   const country = countryCodeFor(opts.location);
   if (country) params.set("gl", country);
   const data = await getJson("SerpApiAiMode", `https://serpapi.com/search.json?${params}`);
@@ -356,5 +370,8 @@ export async function runApiEngine(engine: ApiEngine, query: string, keys: ApiKe
   }
   assertRealAnswer(result.responseText, `${engine}-${route.kind}`, query);
   const country = apiRouteTargetsLocation(engine, keys) ? countryCodeFor(providerOptions.location) : null;
-  return { ...result, ...(country ? { searchedFrom: country } : {}), executionMs: Date.now() - start };
+  // Routes that take a place inside the country: Google through SerpApi or DataForSEO, and OpenAI
+  const takesPlace = route.kind === "openai" || (engine.startsWith("google_") && (route.kind === "serpapi" || route.kind === "dataforseo"));
+  const place = country && takesPlace && providerOptions.place ? providerOptions.place : undefined;
+  return { ...result, ...(country ? { searchedFrom: country } : {}), ...(place ? { locationSignal: place } : {}), executionMs: Date.now() - start };
 }

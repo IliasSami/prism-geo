@@ -23,6 +23,11 @@ export const DATAFORSEO_ENGINES: readonly DataForSeoEngine[] = ["google_ai_mode"
 export interface DataForSeoOptions {
   /** Location name as DataForSEO lists it, e.g. "United States", "United Kingdom". */
   location?: string;
+  /**
+   * A place inside the country as Google names it ("Chicago,Illinois,United States"), for the
+   * Google endpoints, which take any geotarget. The model endpoints are asked from the country.
+   */
+  place?: string;
   /** Language code, e.g. "en". */
   language?: string;
   /** Perplexity model for LLM Responses (default "sonar"). */
@@ -232,10 +237,11 @@ function requestBody(engine: DataForSeoEngine, query: string, opts: DataForSeoOp
   if (engine === "perplexity") {
     return { user_prompt: query.slice(0, 500), model_name: opts.perplexityModel || process.env.PRISMGEO_DATAFORSEO_PERPLEXITY_MODEL || "sonar" };
   }
+  const google_location = opts.place?.trim() || location_name;
   if (engine === "google_aio") {
-    return { keyword: keyword(query), location_name, language_code, device: "desktop", depth: 10, load_async_ai_overview: true };
+    return { keyword: keyword(query), location_name: google_location, language_code, device: "desktop", depth: 10, load_async_ai_overview: true };
   }
-  if (engine === "google_ai_mode") return { keyword: keyword(query).slice(0, 700), location_name, language_code, device: "desktop" };
+  if (engine === "google_ai_mode") return { keyword: keyword(query).slice(0, 700), location_name: google_location, language_code, device: "desktop" };
   // ChatGPT decides itself whether to search, as it does for real users, so search is not forced
   return { keyword: keyword(query), location_name, language_code };
 }

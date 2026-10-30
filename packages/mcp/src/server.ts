@@ -371,6 +371,49 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "get_search_location",
+    {
+      title: "Search location",
+      description:
+        "Where questions are asked from: the search country, language and optional place (Google's canonical name), the country this computer's connection is in, " +
+        "whether 'only search from here' is on, and the last calibration of Google's location signal (uule) with its agreement figures.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async () => {
+      try {
+        const settings = getSettings<Record<string, unknown>>("engine_settings", {});
+        const location = await callApp("/api/engines/location");
+        const calibration = await callApp("/api/engines/location/calibrate");
+        return json({ language: settings.providerLanguage || "en", place: settings.searchPlace || null, ...(location as object), ...(calibration as object) });
+      } catch (err) {
+        return fail((err as Error).message);
+      }
+    }
+  );
+
+  server.registerTool(
+    "calibrate_location",
+    {
+      title: "Calibrate Google's location signal",
+      description:
+        "Checks whether Google AI Overviews searched from this computer with Google's location signal (uule) match answers asked from inside the search country. " +
+        "Searches 10 of the brand's questions three times (once from here, twice through SerpApi or DataForSEO, which set the noise floor); takes about 10 minutes. " +
+        "Needs a SerpApi key or DataForSEO. Poll get_search_location for the result; nothing is stored as an answer.",
+      inputSchema: brandArg,
+      annotations: { readOnlyHint: false, openWorldHint: true },
+    },
+    async ({ brand_id }) => {
+      const brand = resolveBrand(brand_id);
+      try {
+        return json(await callApp("/api/engines/location/calibrate", { method: "POST", body: JSON.stringify({ brandId: brand.id }) }));
+      } catch (err) {
+        return fail((err as Error).message);
+      }
+    }
+  );
+
+  server.registerTool(
     "list_prompts",
     {
       title: "List prompts",

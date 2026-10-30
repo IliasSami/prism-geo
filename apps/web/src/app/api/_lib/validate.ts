@@ -226,6 +226,13 @@ export const engineSettingsSchema = z.strictObject({
     .max(200, "List at most a few markets")
     .regex(/^[\p{L} ,.'()|;-]*$/u, "List markets as names, e.g. United States, United Kingdom, Europe")
     .optional(),
+  /** A place inside the search country, as Google names it ("Chicago,Illinois,United States"); "" = the whole country. */
+  searchPlace: z
+    .string({ error: "The place must be text" })
+    .trim()
+    .max(120, "The place name is too long")
+    .regex(/^[^<>{}\\]*$/u, "Choose a place from the list")
+    .optional(),
   /** Only use routes that ask from the search location (providerLocation). */
   strictLocation: z.boolean({ error: "strictLocation must be true or false" }).optional(),
   /** Language code for the provider, e.g. "en", "de", "pt-BR". */

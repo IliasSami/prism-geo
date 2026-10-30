@@ -88,11 +88,13 @@ export function planRoutes(args: {
   connection: string | null;
   /** The engine has a browser route at all. */
   hasBrowser: boolean;
+  /** The browser route sends the target location itself and was calibrated to match (Google's uule). */
+  browserLocated?: boolean;
   /** The saved key or provider: see apiRouteLocation; null = none saved. */
   apiRoute: "interface" | "model" | "unlocated" | null;
 }): LocationPlan {
-  const { engineLabel, strict, target, targetLabel, connection, hasBrowser, apiRoute } = args;
-  const inMarket = target !== null && connection === target;
+  const { engineLabel, strict, target, targetLabel, connection, hasBrowser, apiRoute, browserLocated = false } = args;
+  const inMarket = target !== null && (connection === target || (hasBrowser && browserLocated));
   if (!strict || !target) {
     // Every route may run, as before; the interface captured from the right country goes first
     const preferApi = Boolean(target) && !inMarket && apiRoute === "interface";

@@ -1,4 +1,5 @@
-import type { Browser } from "playwright";
+import type { Browser, Page } from "playwright";
+import { buildGoogleSearchUrl } from "@prismgeo/core";
 import { withStealthPage, browserCaptureMethod, type CaptureMethod, assertNotBlocked, assertRealAnswer, waitForStableAnswer, extractAnswer, cleanCitationUrl } from "./browser-session";
 
 export interface GoogleAioResult {
@@ -9,6 +10,58 @@ export interface GoogleAioResult {
   subQueries: string[];
   executionMs: number;
   captureMethod: CaptureMethod;
+  searchUrl: string;
+  locationSignal?: string;
+  organic: Array<{ position: number; url: string; title: string }>;
+}
+
+/** Where a Google search is asked as from: country (gl), language (hl) and a place sent as uule. */
+export interface GoogleMarket {
+  country?: string | null;
+  language?: string;
+  /** Canonical place name ("Chicago,Illinois,United States", or the country itself). */
+  place?: string | null;
+}
+
+/**
+ * Organic results on a Google results page, in order: links whose heading is a result title,
+ * outside the AI Overview and ads. Several selector strategies, since Google's markup changes.
+ */
+export async function readOrganicResults(page: Page, limit = 10): Promise<Array<{ position: number; url: string; title: string }>> {
+  const raw = (await page.evaluate(() => {
+    const out: Array<{ url: string; title: string }> = [];
+    const roots = [document.querySelector("#rso"), document.querySelector("#search"), document.body].filter(Boolean) as Element[];
+    for (const root of roots) {
+      for (const h3 of Array.from(root.querySelectorAll("a h3, a [role='heading'][aria-level='3']"))) {
+        const a = h3.closest("a");
+        if (!a || a.closest("#m-x-content, [data-subtree='aimc'], #tads, #bottomads, [data-text-ad]")) continue;
+        out.push({ url: a.href, title: (h3.textContent || "").trim() });
+      }
+      if (out.length) break;
+    }
+    return out;
+  })) as Array<{ url: string; title: string }>;
+  const seen = new Set<string>();
+  const results: Array<{ position: number; url: string; title: string }> = [];
+  for (const r of raw) {
+    let url = r.url;
+    try {
+      const u = new URL(url);
+      if (/(^|\.)google\.[a-z.]+$/.test(u.hostname)) {
+        if (u.pathname !== "/url") continue;
+        url = u.searchParams.get("q") || u.searchParams.get("url") || "";
+      }
+    } catch {
+      continue;
+    }
+    if (!/^https?:\/\//.test(url) || !r.title) continue;
+    const clean = cleanCitationUrl(url);
+    if (seen.has(clean)) continue;
+    seen.add(clean);
+    results.push({ position: results.length + 1, url: clean, title: r.title });
+    if (results.length >= limit) break;
+  }
+  return results;
 }
 
 /** Google showed a normal results page without an AI Overview for this query. */
@@ -25,14 +78,15 @@ export class GoogleAioCrawler {
    * Captures only the AI Overview block. Organic results are never stored as the "answer":
    * when Google shows no Overview the run fails with NoAiOverviewError so it is reported, not faked.
    */
-  public static async execute(query: string, existingBrowser?: Browser, market: { country?: string | null; language?: string } = {}): Promise<GoogleAioResult> {
+  public static async execute(query: string, existingBrowser?: Browser, market: GoogleMarket = {}): Promise<GoogleAioResult> {
     const startTime = Date.now();
     const captureMethod = browserCaptureMethod("google_aio");
+    // gl and hl set the market and language; uule sends the place as Google's location signal
+    const { url: searchUrl } = buildGoogleSearchUrl(query, { canonicalName: market.place || undefined, country: market.country || "us", language: market.language || "en" });
+    let organic: GoogleAioResult["organic"] = [];
 
     const answer = await withStealthPage("GoogleAioCrawler", existingBrowser, async (page) => {
-      // gl/hl ask for the search location's results; the connection itself must be in that country (see location.ts)
-      const hl = (market.language || "en").slice(0, 2);
-      await page.goto(`https://www.google.com/search?q=${encodeURIComponent(query)}&hl=${hl}&gl=${market.country || "us"}`, {
+      await page.goto(searchUrl, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
       });
@@ -57,6 +111,7 @@ export class GoogleAioCrawler {
         await page.waitForTimeout(1500);
       }
       const extracted = await extractAnswer(page, AIO_SELECTOR, ["google.com", "gstatic.com", "googleusercontent.com"]);
+      organic = await readOrganicResults(page).catch(() => []);
       // Checked inside the session so a failure snapshot of the page is saved
       assertRealAnswer(extracted.text, "GoogleAioCrawler", query);
       return extracted;
@@ -70,6 +125,9 @@ export class GoogleAioCrawler {
       subQueries: [],
       executionMs: Date.now() - startTime,
       captureMethod,
+      searchUrl,
+      locationSignal: market.place || undefined,
+      organic,
     };
   }
 }

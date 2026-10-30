@@ -13,6 +13,7 @@ import { ApiKeyField } from "@/components/settings/ApiKeyField";
 import { LogViewer } from "@/components/settings/LogViewer";
 import { CaptureExtensionPanel } from "@/components/settings/CaptureExtensionPanel";
 import { SearchLocationStatus } from "@/components/settings/SearchLocationStatus";
+import { PlacePicker } from "@/components/settings/PlacePicker";
 import { SEARCH_COUNTRIES, searchCountry } from "@prismgeo/core";
 import { cleanedHint, domainError } from "@/components/domain";
 
@@ -469,7 +470,8 @@ function Settings() {
                           onChange={(e) => {
                             const next = searchCountry(e.target.value);
                             const keep = next?.languages.some((l) => l.code === language);
-                            set("engines", { providerLocation: e.target.value, providerLanguage: keep || !next ? language : next.languages[0].code });
+                            // A place belongs to one country, so it is cleared when the country changes
+                            set("engines", { providerLocation: e.target.value, providerLanguage: keep || !next ? language : next.languages[0].code, searchPlace: "" });
                           }}
                         >
                           {custom && <option value={custom}>{custom} (saved earlier)</option>}
@@ -494,6 +496,22 @@ function Settings() {
                           ))}
                         </select>
                       </Field>
+                      {country && (
+                        <div className="md:col-span-2">
+                          <Field
+                            label="City, state or postal code (optional)"
+                            htmlFor="search-place"
+                            hint="Narrows Google AI Overviews and AI Mode to where your buyers are, using Google's own location names. ChatGPT through an OpenAI key also gets the city; other engines are asked from the country."
+                          >
+                            <PlacePicker
+                              country={country.code}
+                              countryName={country.name}
+                              value={String(draft.engines.searchPlace || "")}
+                              onChange={(place) => set("engines", { searchPlace: place })}
+                            />
+                          </Field>
+                        </div>
+                      )}
                     </>
                   );
                 })()}

@@ -53,6 +53,10 @@ Answers, sources and recommended companies differ by country, so every question 
 - By default audits run as before. When this computer is outside the search location and DataForSEO, SerpApi or Apify is saved, that route is used first for its engines, because it captures the same page from the right country.
 - **Only search from here** (off by default): a route that would ask from another country is never used. When this computer is outside the search location, browser engines are skipped with the reason, and engines run through the routes above or through a proxy in that country that you control.
 
+- **A city, state or postal code** (optional) narrows the search inside the country. Places come from Google's own geotargets list (downloaded once into `data/geo/`, never committed), so the name is exactly what Google, DataForSEO and SerpApi accept. Google routes and OpenAI use the place; the other engines are asked from the country.
+- **Google's location signal (uule).** Google AI Overviews searched in the browser carry the place as Google's `uule` parameter with `gl` and `hl`, the way SERP location checkers work. uule changes where Google treats the search as coming from, not the connection, so these answers are labelled with both. Each Google answer also keeps the exact search address and the top 10 organic results on the same page.
+- **Calibration** (Settings → Search location → Calibrate, or the `calibrate_location` MCP tool): for 10 of your questions, Google AI Overviews is searched once from this computer with uule and twice from inside the country through SerpApi or DataForSEO. The two reference searches set the noise floor; uule answers count as asked from the search location (also for "Only search from here") only when they agree with the reference as closely as the reference agrees with itself. Nothing from a calibration is stored as an answer.
+
 `PRISMGEO_CONNECTION_COUNTRY=us` sets the connection country where the check cannot run (an offline server).
 
 ### Most accurate paid route: DataForSEO
