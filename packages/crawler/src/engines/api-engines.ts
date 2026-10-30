@@ -1,6 +1,6 @@
 import { EngineBlockedError, assertRealAnswer, cleanCitationUrl, type EngineAnswer } from "./browser-session";
 import { NoAiOverviewError } from "./google-aio";
-import { ProviderAccountError, runDataForSeo, type DataForSeoOptions } from "./dataforseo";
+import { ProviderAccountError, markdownToText, runDataForSeo, type DataForSeoOptions } from "./dataforseo";
 
 /**
  * Official API access to the engines, using the user's own keys (Settings → API keys).
@@ -12,7 +12,7 @@ import { ProviderAccountError, runDataForSeo, type DataForSeoOptions } from "./d
  * Google AI Overviews has no official API; SerpApi (free monthly tier) returns the Overview from
  * its own infrastructure, which avoids the "unusual traffic" blocks a single IP gets.
  */
-export type ApiEngine = "gemini" | "chatgpt" | "perplexity" | "google_aio";
+export type ApiEngine = "gemini" | "chatgpt" | "perplexity" | "google_aio" | "google_ai_mode";
 
 export interface ApiKeys {
   gemini?: string;
@@ -42,7 +42,7 @@ export function apiRouteFor(engine: string, keys: ApiKeys): ApiRoute | null {
   const provider = dfs ? ({ kind: "dataforseo", credential: dfs } as const) : null;
   if (engine === "chatgpt") return provider || own("openai");
   if (engine === "gemini") return provider || own("gemini");
-  if (engine === "google_aio") return provider || own("serpapi");
+  if (engine === "google_aio" || engine === "google_ai_mode") return provider || own("serpapi");
   if (engine === "perplexity") return own("perplexity") || provider;
   return null;
 }
@@ -193,6 +193,42 @@ async function serpApiOverview(query: string, key: string): Promise<Omit<EngineA
   return { responseText: overviewText(overview.text_blocks), citations, subQueries: [], captureMethod: "api" };
 }
 
+/**
+ * Google AI Mode through SerpApi (engine=google_ai_mode). The answer is reconstructed_markdown
+ * when present, otherwise the typed text_blocks; references are the cited pages.
+ */
+interface SerpBlock {
+  type?: string;
+  snippet?: string;
+  title?: string;
+  list?: SerpBlock[];
+  text_blocks?: SerpBlock[];
+  rows?: string[][];
+}
+async function serpApiAiMode(query: string, key: string, opts: DataForSeoOptions): Promise<Omit<EngineAnswer, "executionMs">> {
+  const params = new URLSearchParams({ engine: "google_ai_mode", q: query, api_key: key, hl: (opts.language || "en").slice(0, 2) });
+  if (opts.location) params.set("location", opts.location);
+  const data = await getJson("SerpApiAiMode", `https://serpapi.com/search.json?${params}`);
+  if (data.error) throw new Error(`[SerpApiAiMode] ${data.error}`);
+  const lines: string[] = [];
+  const walk = (blocks: SerpBlock[] | undefined) => {
+    for (const b of blocks || []) {
+      if (b.snippet) lines.push(b.title ? `${b.title}: ${b.snippet}` : b.snippet);
+      else if (b.title) lines.push(b.title);
+      for (const row of b.rows || []) lines.push(row.join(" | "));
+      walk(b.list);
+      walk(b.text_blocks);
+    }
+  };
+  walk(data.text_blocks);
+  const text = (typeof data.reconstructed_markdown === "string" && data.reconstructed_markdown.trim() ? markdownToText(data.reconstructed_markdown) : lines.join("\n")).trim();
+  if (!text) throw new Error(`[SerpApiAiMode] AI Mode returned no answer for "${query}"`);
+  const citations = (Array.isArray(data.references) ? data.references : [])
+    .filter((r: { link?: string }) => typeof r?.link === "string")
+    .map((r: { link: string; title?: string; source?: string }) => ({ url: cleanCitationUrl(r.link), title: r.title || r.source || r.link }));
+  return { responseText: text, citations, subQueries: [], captureMethod: "provider", provider: "serpapi" };
+}
+
 export async function runApiEngine(engine: ApiEngine, query: string, keys: ApiKeys, providerOptions: DataForSeoOptions = {}): Promise<EngineAnswer> {
   const route = apiRouteFor(engine, keys);
   if (!route) throw new ApiKeyRejectedError(`No API key saved for ${engine}`);
@@ -213,7 +249,9 @@ export async function runApiEngine(engine: ApiEngine, query: string, keys: ApiKe
         : route.kind === "openai"
           ? await openAiApi(query, route.key)
           : route.kind === "serpapi"
-            ? await serpApiOverview(query, route.key)
+            ? engine === "google_ai_mode"
+              ? await serpApiAiMode(query, route.key, providerOptions)
+              : await serpApiOverview(query, route.key)
             : await perplexityApi(query, route.key);
   }
   assertRealAnswer(result.responseText, `${engine}-${route.kind}`, query);

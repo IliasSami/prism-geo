@@ -17,8 +17,8 @@ import { NoAiOverviewError } from "./google-aio";
  * DataForSEO reports for each task is kept with the run.
  */
 
-export type DataForSeoEngine = "chatgpt" | "gemini" | "google_aio" | "perplexity";
-export const DATAFORSEO_ENGINES: readonly DataForSeoEngine[] = ["chatgpt", "gemini", "google_aio", "perplexity"];
+export type DataForSeoEngine = "chatgpt" | "gemini" | "google_aio" | "google_ai_mode" | "perplexity";
+export const DATAFORSEO_ENGINES: readonly DataForSeoEngine[] = ["google_ai_mode", "google_aio", "gemini", "chatgpt", "perplexity"];
 
 export interface DataForSeoOptions {
   /** Location name as DataForSEO lists it, e.g. "United States", "United Kingdom". */
@@ -45,6 +45,7 @@ const PATHS: Record<DataForSeoEngine, string> = {
   chatgpt: "/v3/ai_optimization/chat_gpt/llm_scraper/live/advanced",
   gemini: "/v3/ai_optimization/gemini/llm_scraper/live/advanced",
   google_aio: "/v3/serp/google/organic/live/advanced",
+  google_ai_mode: "/v3/serp/google/ai_mode/live/advanced",
   perplexity: "/v3/ai_optimization/perplexity/llm_responses/live",
 };
 
@@ -191,6 +192,24 @@ export function parseSerpAiOverview(result: DfsResult, query: string): Omit<Data
   return { responseText: text, citations, subQueries: [], captureMethod: "provider" };
 }
 
+/**
+ * Google AI Mode result → answer. DataForSEO returns it as an ai_overview item (same structure as
+ * on the results page) with the cited pages also listed at the item's top level. AI Mode always
+ * answers, so a missing answer is "no answer", not "no AI Overview".
+ */
+export function parseAiMode(result: DfsResult, query: string): Omit<DataForSeoAnswer, "costUsd" | "provider"> {
+  const item = list<DfsNode>(result.items).find((i) => i.type === "ai_overview");
+  if (!item) throw new Error(`[DataForSEO google_ai_mode] No extractable response for "${query}"`);
+  try {
+    const parsed = parseSerpAiOverview({ items: [item] }, query);
+    const seen = new Set(parsed.citations.map((c) => c.url));
+    for (const r of list<DfsLink>(item.references)) addCitation(parsed.citations, seen, r, "title", "source", "domain");
+    return parsed;
+  } catch {
+    throw new Error(`[DataForSEO google_ai_mode] No extractable response for "${query}"`);
+  }
+}
+
 /** Perplexity LLM Responses result → answer (Sonar API, so capture_method 'api'). */
 export function parseLlmResponses(result: DfsResult): Omit<DataForSeoAnswer, "costUsd" | "provider"> {
   const sections = list<DfsNode>(result.items).flatMap((i) => list<DfsNode>(i.sections));
@@ -216,6 +235,7 @@ function requestBody(engine: DataForSeoEngine, query: string, opts: DataForSeoOp
   if (engine === "google_aio") {
     return { keyword: keyword(query), location_name, language_code, device: "desktop", depth: 10, load_async_ai_overview: true };
   }
+  if (engine === "google_ai_mode") return { keyword: keyword(query).slice(0, 700), location_name, language_code, device: "desktop" };
   // ChatGPT decides itself whether to search, as it does for real users, so search is not forced
   return { keyword: keyword(query), location_name, language_code };
 }
@@ -261,7 +281,13 @@ export async function runDataForSeo(
     throw new Error(`[DataForSEO ${engine}] task returned no result`);
   }
   const parsed =
-    engine === "google_aio" ? parseSerpAiOverview(result, query) : engine === "perplexity" ? parseLlmResponses(result) : parseLlmScraper(result);
+    engine === "google_aio"
+      ? parseSerpAiOverview(result, query)
+      : engine === "google_ai_mode"
+        ? parseAiMode(result, query)
+        : engine === "perplexity"
+          ? parseLlmResponses(result)
+          : parseLlmScraper(result);
   const costUsd = Number(task.cost ?? data.cost ?? 0);
   return { ...parsed, provider: "dataforseo", costUsd: Number.isFinite(costUsd) ? costUsd : 0 };
 }

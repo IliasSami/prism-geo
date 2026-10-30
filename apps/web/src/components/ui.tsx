@@ -368,6 +368,7 @@ export const ENGINE_LABELS: Record<string, string> = {
   gemini: "Gemini",
   perplexity: "Perplexity",
   google_aio: "Google AI Overviews",
+  google_ai_mode: "Google AI Mode",
   copilot: "Copilot",
 };
 

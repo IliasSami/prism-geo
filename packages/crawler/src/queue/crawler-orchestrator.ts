@@ -4,6 +4,9 @@ import {
   detectMentions,
   lookalikeDomains,
   prominenceScore,
+  ENGINE_IDS,
+  ENGINES,
+  type EngineId,
   detectLocalisation,
   originCountry,
   seededShuffle,
@@ -18,7 +21,8 @@ import { ChatGptEngineCrawler } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
 import { runApiEngine, apiKeyFor, apiRouteFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { fetchPublicPage } from "../net/safe-fetch";
-import { readProfile, verifyProfile } from "../engines/profiles";
+import { readProfile, verifyProfile, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
+const isProfileEngine = (e: string): e is ProfileEngine => (PROFILE_ENGINES as string[]).includes(e);
 import { storeManualCapture, trackedEntitiesFor, type ManualCaptureInput, type ManualCaptureResult } from "./manual-capture";
 import { chromium, type Browser } from "playwright";
 import { getChromiumExecutablePath } from "../stealth/fingerprint";
@@ -26,7 +30,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import * as cheerio from "cheerio";
 
-export type EngineName = "perplexity" | "google_aio" | "copilot" | "gemini" | "chatgpt";
+export type EngineName = EngineId;
 
 export interface CrawlBatchOptions {
   batchId?: string;
@@ -96,14 +100,14 @@ const COOLDOWNS_MS = [10, 20, 30].map((minutes) => minutes * 60_000);
  */
 function pacingFor(engine: EngineName, viaApi: boolean): [number, number] {
   if (viaApi) return [500, 1500];
-  if (engine === "google_aio") return [15000, 30000];
+  if (engine === "google_aio" || engine === "google_ai_mode") return [15000, 30000];
   if (engine === "perplexity") return [8000, 15000];
   return [4000, 8000];
 }
 
 /** Engine access mode from Settings: browser only, API keys only, or browser with API fallback. */
 type EngineMode = "stealth" | "byok" | "hybrid";
-const API_ENGINES: EngineName[] = ["gemini", "chatgpt", "perplexity", "google_aio"];
+const API_ENGINES: EngineName[] = ENGINE_IDS.filter((e) => ENGINES[e].routes.keyed.length > 0);
 
 // ---------------------------------------------------------------- cited pages (reverse-RAG)
 
@@ -339,7 +343,7 @@ export class CrawlerOrchestrator {
     const brandId = options.brandId;
     const sampleSize = options.sampleSize || 5;
     const pacingScale = Math.max(0, options.pacingScale ?? 1);
-    const requestedEngines: EngineName[] = options.engines || ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"];
+    const requestedEngines: EngineName[] = options.engines || [...ENGINE_IDS];
 
     // 1. Fetch brand and competitor configurations
     const sqlite = getRawDb();
@@ -374,7 +378,7 @@ export class CrawlerOrchestrator {
     // Saved sessions are re-checked before use: one that expired or was signed out is reported,
     // and the engine runs logged out (Copilot, which needs an account, is skipped)
     for (const engine of requestedEngines) {
-      if (readProfile(engine)?.signedIn !== true) continue;
+      if (!isProfileEngine(engine) || readProfile(engine)?.signedIn !== true) continue;
       const session = await verifyProfile(engine);
       if (session && !session.signedIn) {
         failures.push({
@@ -386,6 +390,19 @@ export class CrawlerOrchestrator {
       }
     }
     const engines = requestedEngines.filter((engine) => {
+      // Google AI Mode has no dependable browser route: it is answered through a key or provider only
+      if (engine === "google_ai_mode" && !hasApi(engine)) {
+        failures.push({
+          engine,
+          promptId: null,
+          kind: "unavailable",
+          message:
+            mode === "stealth"
+              ? "Google AI Mode is read through SerpApi or DataForSEO, which free browser mode does not use. Choose another mode in Settings → Engines & access."
+              : "Google AI Mode needs a SerpApi key or the DataForSEO data provider (Settings → Engines & access).",
+        });
+        return false;
+      }
       if (engine === "copilot" && !CopilotEngineCrawler.available) {
         failures.push({ engine, promptId: null, kind: "unavailable", message: CopilotEngineCrawler.unavailableReason });
         return false;
@@ -474,7 +491,7 @@ export class CrawlerOrchestrator {
           // Each block doubles the pause between queries (max 4x); successes halve it again
           let pacingFactor = 1;
           // byok: API whenever a key exists. hybrid: browser first, API when the browser fails.
-          let viaApi = mode === "byok" && hasApi(engine);
+          let viaApi = (mode === "byok" || engine === "google_ai_mode") && hasApi(engine);
           const pause = () => {
             const [min, max] = pacingFor(engine, viaApi);
             return new Promise((r) => setTimeout(r, (min + Math.random() * (max - min)) * pacingFactor * pacingScale));

@@ -5,6 +5,8 @@
 export type FailureKind = "blocked" | "no_answer" | "no_ai_overview" | "error" | "network" | "setup" | "unavailable" | "skipped_after_blocks" | string;
 
 const BLOCK_REMEDIES: Record<string, string> = {
+  google_ai_mode:
+    "Google AI Mode is read through a SerpApi key or the DataForSEO data provider (Settings → Engines & access); there is no dependable browser route.",
   google_aio:
     "Google limits automated searches from this computer's address. Add a free SerpApi key or the DataForSEO data provider (Settings → Engines & access) to read AI Overviews; a signed-in Google session helps a little but does not lift the limit.",
   perplexity:

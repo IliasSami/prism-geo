@@ -177,3 +177,55 @@ test("a refused DataForSEO login stops the engine like a rejected API key", asyn
     globalThis.fetch = original;
   }
 });
+
+test("Google AI Mode through DataForSEO: its own endpoint, item and top-level references, a missing answer is no_answer", async () => {
+  const aiMode = {
+    items: [
+      {
+        type: "ai_overview",
+        markdown: `**Short answer:** ${LONG}`,
+        items: [{ type: "ai_overview_element", references: [{ url: "https://talkly.com/blog", title: "Talkly blog" }] }],
+        references: [{ type: "ai_overview_reference", url: "https://northwindvoice.ai/pricing", title: "Pricing", source: "Northwind" }],
+      },
+    ],
+  };
+  const { impl, calls } = fakeFetch(envelope(aiMode, 0.0012));
+  const a = await runDataForSeo("google_ai_mode", "ai voice agents for shopify", "a@b.co:pw", { location: "United States" }, impl);
+  assert.match(calls[0].url, /\/v3\/serp\/google\/ai_mode\/live\/advanced$/);
+  assert.deepEqual(JSON.parse(calls[0].init.body), [{ keyword: "ai voice agents for shopify", location_name: "United States", language_code: "en", device: "desktop" }]);
+  assert.ok(a.responseText.startsWith("Short answer: Northwind Voice"));
+  assert.deepEqual(a.citations.map((c) => c.url), ["https://talkly.com/blog", "https://northwindvoice.ai/pricing"]);
+  assert.equal(a.captureMethod, "provider");
+
+  const empty = fakeFetch(envelope({ items: [] }));
+  await assert.rejects(runDataForSeo("google_ai_mode", "q", "a@b.co:pw", {}, empty.impl), (e: Error) => !(e instanceof NoAiOverviewError) && /No extractable response/.test(e.message));
+});
+
+test("Google AI Mode through SerpApi: typed text blocks and references; DataForSEO is preferred when both are saved", async () => {
+  assert.equal(apiRouteFor("google_ai_mode", { serpapi: "s", dataforseo: "a@b.co:pw" })?.kind, "dataforseo");
+  assert.equal(apiRouteFor("google_ai_mode", { serpapi: "s" })?.kind, "serpapi");
+  const original = globalThis.fetch;
+  let url = "";
+  globalThis.fetch = (async (u: string) => {
+    url = u;
+    return new Response(
+      JSON.stringify({
+        text_blocks: [
+          { type: "paragraph", snippet: LONG },
+          { type: "list", list: [{ title: "Northwind Voice", snippet: "pay per recovered order" }, { title: "Talkly", snippet: "monthly plan" }] },
+        ],
+        references: [{ link: "https://talkly.com/?utm_source=x", title: "Talkly", source: "talkly.com" }],
+      })
+    );
+  }) as typeof fetch;
+  try {
+    const a = await runApiEngine("google_ai_mode", "ai voice agents for shopify", { serpapi: "key" }, { location: "United States" });
+    assert.match(url, /engine=google_ai_mode/);
+    assert.match(url, /location=United\+States/);
+    assert.ok(a.responseText.includes("Northwind Voice: pay per recovered order"));
+    assert.deepEqual(a.citations.map((c) => c.url), ["https://talkly.com"]);
+    assert.equal(a.captureMethod, "provider");
+  } finally {
+    globalThis.fetch = original;
+  }
+});

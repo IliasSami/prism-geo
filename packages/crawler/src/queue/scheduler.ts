@@ -1,3 +1,4 @@
+import { ENGINE_IDS } from "@prismgeo/core";
 import { getRawDb, getSettings, setSettings } from "@prismgeo/db";
 import { CrawlerOrchestrator, BatchRunningError, recoverInterruptedBatches, type EngineName } from "./crawler-orchestrator";
 
@@ -19,7 +20,7 @@ export interface ScheduleSettings {
 }
 
 const STATE_KEY = "schedule_state";
-const ALL_ENGINES: EngineName[] = ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"];
+const ALL_ENGINES: EngineName[] = [...ENGINE_IDS];
 
 /** The server's own IANA zone (UTC in most containers). */
 export const serverTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";

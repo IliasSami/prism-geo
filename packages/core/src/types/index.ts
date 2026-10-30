@@ -1,5 +1,6 @@
 export type EngineType =
   | "perplexity"
+  | "google_ai_mode"
   | "google_aio"
   | "chatgpt"
   | "claude"

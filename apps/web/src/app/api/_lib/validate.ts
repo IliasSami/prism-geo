@@ -2,7 +2,8 @@ import { z } from "zod";
 
 /** Validation rules shared by the API routes, so the same input is accepted (or refused) everywhere. */
 
-export const ENGINE_IDS = ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"] as const;
+export { ENGINE_IDS } from "@prismgeo/core";
+import { ENGINE_IDS } from "@prismgeo/core";
 export type EngineId = (typeof ENGINE_IDS)[number];
 export const ENGINE_MODES = ["stealth", "byok", "hybrid"] as const;
 export const BYOK_PROVIDERS = ["openai", "gemini", "perplexity", "serpapi", "dataforseo"] as const;

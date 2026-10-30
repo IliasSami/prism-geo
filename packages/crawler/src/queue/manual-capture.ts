@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { getRawDb, nowIso, rowToBrand, type BrandRecord } from "@prismgeo/db";
-import { entityTerms } from "@prismgeo/core";
+import { ENGINE_IDS, entityTerms } from "@prismgeo/core";
 import { assertRealAnswer, cleanCitationUrl } from "../engines/browser-session";
 import type { CrawlEntity } from "./crawler-orchestrator";
 
@@ -19,7 +19,7 @@ export const MANUAL_BATCH_OWNER = "manual-capture";
 /** SQL condition that leaves hand-capture batches out (for health and latest-audit queries). */
 export const NOT_MANUAL_BATCH = `COALESCE(owner, '') <> '${MANUAL_BATCH_OWNER}'`;
 
-export const MANUAL_ENGINES = ["chatgpt", "gemini", "perplexity", "google_aio", "copilot"] as const;
+export const MANUAL_ENGINES = ENGINE_IDS;
 export type ManualEngine = (typeof MANUAL_ENGINES)[number];
 
 /** The brand and its active competitors as the crawler tracks them. */

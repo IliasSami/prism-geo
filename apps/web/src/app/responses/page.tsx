@@ -1,3 +1,4 @@
+import { ENGINE_IDS } from "@prismgeo/core";
 import { getRawDb } from "@prismgeo/db";
 import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { MessageSquare } from "lucide-react";
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Answers" };
 
 const PAGE_SIZE = 25;
-const ENGINES = ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"];
+const ENGINES: readonly string[] = ENGINE_IDS;
 
 export default async function ResponsesPage({
   searchParams,

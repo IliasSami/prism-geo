@@ -40,7 +40,7 @@ const IDLE: AuditStatus = { status: "idle", completedRuns: 0, failedRuns: 0, tot
  * Seconds per question per engine as measured on live runs (answer time plus pacing between
  * queries). Engines run side by side, so an audit takes as long as its slowest engine.
  */
-const SECONDS_PER_QUERY: Record<string, number> = { chatgpt: 36, gemini: 41, perplexity: 37, google_aio: 38, copilot: 36 };
+const SECONDS_PER_QUERY: Record<string, number> = { chatgpt: 36, gemini: 41, perplexity: 37, google_aio: 38, google_ai_mode: 10, copilot: 36 };
 
 function estimate(engines: string[], questions: number, repeats: number): string {
   if (!engines.length || !questions) return "nothing to run";

@@ -19,11 +19,14 @@ export function extractFromPage() {
           : host === "copilot.microsoft.com"
             ? "copilot"
             : /^google\.[a-z.]+$/.test(host) && location.pathname.startsWith("/search")
-              ? "google_aio"
+              ? // AI Mode is the chat tab (udm=50); the results page with an Overview is AI Overviews
+                new URL(location.href).searchParams.get("udm") === "50"
+                ? "google_ai_mode"
+                : "google_aio"
               : null;
   const pageUrl = location.href;
   if (!engine) {
-    return { engine: null, pageUrl, error: "Open an answer in ChatGPT, Gemini, Perplexity, Copilot or a Google search with an AI Overview, then click again." };
+    return { engine: null, pageUrl, error: "Open an answer in ChatGPT, Gemini, Perplexity, Copilot, Google AI Mode or a Google search with an AI Overview, then click again." };
   }
 
   const all = (sel) => Array.from(document.querySelectorAll(sel));
@@ -113,17 +116,7 @@ export function extractFromPage() {
     streaming = stopButton();
   } else if (engine === "google_aio") {
     question = clean(document.querySelector("textarea[name='q'], input[name='q']")?.value);
-    // Google AI Mode (the chat tab, udm=50) is a different surface from AI Overviews on the results page
-    const aiMode =
-      new URL(location.href).searchParams.get("udm") === "50" || all("h1, h2, div[role='heading'], span").some((el) => /^AI Mode reply\b/.test(clean(el.textContent)));
-    if (aiMode) {
-      return {
-        engine,
-        question,
-        pageUrl,
-        error: "This is Google AI Mode, not an AI Overview. PrismGEO tracks AI Overviews: open the normal results page (the All tab) and save the AI Overview shown there.",
-      };
-    }
+
     // The Overview block is introduced by an "AI Overview" heading; take the smallest block around
     // it that has real content beyond the heading (short Overviews are real Overviews too)
     const heading = all("h1, h2, h3, div[role='heading'], span").find((el) => clean(el.textContent) === "AI Overview");
@@ -137,6 +130,17 @@ export function extractFromPage() {
     streaming = !!answerEl?.querySelector("[aria-busy='true']");
   }
 
+  if (engine === "google_ai_mode") {
+    question = clean(document.querySelector("textarea[name='q'], input[name='q']")?.value) || new URL(location.href).searchParams.get("q") || "";
+    // The latest reply: introduced by an "AI Mode reply" label, or the main column
+    const label = all("h1, h2, h3, div[role='heading'], span").filter((el) => /^AI Mode reply\b/.test(clean(el.textContent))).pop();
+    let node = label;
+    while (node && node !== document.body && clean(node.textContent).length < clean(label.textContent).length + 120) node = node.parentElement;
+    answerEl = node && node !== document.body ? node : document.querySelector("[role='main']");
+    if (answerEl && clean(answerEl.textContent).length > 40000) answerEl = null;
+    streaming = stopButton() || !!answerEl?.querySelector("[aria-busy='true']");
+  }
+
   if (!answerEl) {
     const why =
       engine === "google_aio"
@@ -146,5 +150,6 @@ export function extractFromPage() {
   }
   let answerText = textOf(answerEl);
   if (engine === "google_aio") answerText = answerText.replace(/^AI Overview\s*/i, "").replace(/\n?(Show more|Show all|AI responses may include mistakes\.?.*)$/gim, "").trim();
+  if (engine === "google_ai_mode") answerText = answerText.replace(/^AI Mode reply for[^\n]*\n?/i, "").replace(/\n?(AI responses may include mistakes\.?.*)$/gim, "").trim();
   return { engine, question, answerText, citations: linksOf([answerEl, ...extraRoots]), pageUrl, streaming };
 }

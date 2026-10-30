@@ -1,3 +1,4 @@
+import { ENGINES } from "../engines";
 import { entityTerms, isGenericHost, namesEntity } from "../text/mentions";
 import { domainMatches, hostKey } from "../url/canonical";
 import { clusteredRate, wilsonInterval, type PromptCluster } from "../metrics/visibility-stats";
@@ -10,13 +11,7 @@ import { competitorMatcher } from "../parser/reverse-rag";
  * between surfaces. The field-by-field contract is documented at the top of apps/web/src/lib/report.ts.
  */
 
-export const ENGINE_LABELS: Record<string, string> = {
-  chatgpt: "ChatGPT",
-  perplexity: "Perplexity",
-  gemini: "Gemini",
-  google_aio: "Google AI Overviews",
-  copilot: "Copilot",
-};
+export const ENGINE_LABELS: Record<string, string> = Object.fromEntries(Object.values(ENGINES).map((e) => [e.id, e.label]));
 
 /** How each capture method is named in the dashboard and reports. */
 export const CAPTURE_METHOD_LABELS: Record<string, string> = {

@@ -1,7 +1,8 @@
+import { ENGINE_IDS } from "@prismgeo/core";
 import { getRawDb, getSettings } from "@prismgeo/db";
 import { isProfileConnected, apiKeyFor, apiRouteLabel, engineRemedy, type ApiKeys } from "@prismgeo/crawler";
 
-export const ALL_ENGINES = ["chatgpt", "gemini", "perplexity", "google_aio", "copilot"] as const;
+export const ALL_ENGINES = ENGINE_IDS;
 export type EngineId = (typeof ALL_ENGINES)[number];
 
 export type HealthStatus = "working" | "degraded" | "blocked" | "untested" | "not_set_up";
@@ -107,6 +108,8 @@ export function getEngineHealth(brandId: string | undefined): EngineHealth[] {
     const attempted = captured + failed;
     let status: HealthStatus;
     if (engine === "copilot" && !signedIn) status = "not_set_up";
+    // Google AI Mode is read only through a key or provider (no dependable browser route)
+    else if (engine === "google_ai_mode" && !hasKey) status = "not_set_up";
     else if (attempted === 0 && lastFailureKind && /setup/.test(lastFailureKind)) status = "not_set_up";
     else if (attempted === 0) status = "untested";
     else if (captured / attempted >= 0.8) status = "working";

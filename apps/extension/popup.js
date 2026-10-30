@@ -1,7 +1,7 @@
 import { extractFromPage } from "./extract.js";
 import { api, loadSettings, saveSettings } from "./settings.js";
 
-const ENGINE_NAMES = { chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity", copilot: "Copilot", google_aio: "Google AI Overview" };
+const ENGINE_NAMES = { chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity", copilot: "Copilot", google_aio: "Google AI Overview", google_ai_mode: "Google AI Mode" };
 const NEW = "__new__";
 const $ = (id) => document.getElementById(id);
 

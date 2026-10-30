@@ -19,6 +19,7 @@ export const dynamic = "force-dynamic";
 const DEFAULT_ENGINES = {
   perplexity: true,
   google_aio: true,
+  google_ai_mode: true,
   copilot: true,
   gemini: true,
   chatgpt: true,

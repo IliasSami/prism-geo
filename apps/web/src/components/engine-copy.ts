@@ -20,6 +20,7 @@ const ENGINE_NAMES: Record<string, string> = {
   gemini: "Gemini",
   perplexity: "Perplexity",
   google_aio: "Google AI Overviews",
+  google_ai_mode: "Google AI Mode",
   copilot: "Copilot",
 };
 const name = (engine: string) => ENGINE_NAMES[engine] || engine;
@@ -67,6 +68,7 @@ export interface ReasonCopy {
 
 /** What reliably stops each engine blocking (shown with "blocked" failures). */
 const BLOCK_FIX: Record<string, string> = {
+  google_ai_mode: "Google AI Mode is read through a SerpApi key or the DataForSEO data provider.",
   perplexity:
     "Perplexity limits logged-out visitors: connect your free Perplexity account (sign in fully before closing the window), or add a Perplexity API key or the DataForSEO data provider.",
   google_aio:
@@ -102,7 +104,7 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
     case "skipped_after_blocks": {
       // What reliably unblocks each engine differs: Google limits this computer's address, so a key
       // route is the dependable fix; the others mostly limit logged-out visitors, so an account fixes it
-      const keyFirst = engines.length > 0 && engines.every((e) => e === "google_aio");
+      const keyFirst = engines.length > 0 && engines.every((e) => e === "google_aio" || e === "google_ai_mode");
       const fixes = engines.map((e) => BLOCK_FIX[e]).filter(Boolean);
       return {
         title: `${list} blocked the questions`,

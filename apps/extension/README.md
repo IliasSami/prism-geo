@@ -40,5 +40,6 @@ The extension refuses to save an answer that is still being written, a page with
 | Perplexity | perplexity.ai answers |
 | Copilot | copilot.microsoft.com conversations |
 | Google AI Overviews | google.com search results with an AI Overview |
+| Google AI Mode | google.com AI Mode (the AI Mode tab) |
 
 Engines change their pages often. If an answer is not found, please open an issue with the engine and what you saw.

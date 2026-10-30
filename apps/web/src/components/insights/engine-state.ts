@@ -137,6 +137,9 @@ export function getEngineViews(brandId: string | undefined, context: "engines-pa
     } else if (state === "not_set_up" && h.engine === "copilot") {
       fix = reasonCopy("unavailable", [h.engine], context);
       reason = "Copilot has no logged-out chat; it needs a signed-in Microsoft account.";
+    } else if (state === "not_set_up" && h.engine === "google_ai_mode") {
+      fix = { title: "Google AI Mode needs a key", next: "Add a SerpApi key or the DataForSEO data provider to read AI Mode answers.", href: "/settings?tab=engines", cta: "Add a key" };
+      reason = "Google AI Mode is read through SerpApi or DataForSEO; there is no dependable browser route.";
     } else if (state === "not_run") {
       reason = "No audit has asked this engine yet.";
     }
@@ -160,7 +163,8 @@ export function getEngineViews(brandId: string | undefined, context: "engines-pa
 
 /** Header chip: "3 working · 1 partly blocked", or the one state every engine shares. */
 export function engineSummary(views: EngineView[]): { text: string; tone: Tone; title: string } {
-  const on = views.filter((v) => v.enabled && !(v.engine === "copilot" && v.state === "not_set_up"));
+  // Engines that cannot run until set up (Copilot without a session, AI Mode without a key) are not "failing"
+  const on = views.filter((v) => v.enabled && !((v.engine === "copilot" || v.engine === "google_ai_mode") && v.state === "not_set_up"));
   const order: EngineState[] = ["working", "partly_blocked", "blocked", "not_set_up", "not_run"];
   const counts = order.map((s) => [s, on.filter((v) => v.state === s).length] as const).filter(([, n]) => n > 0);
   if (on.length === 0) return { text: "No engines switched on", tone: "neutral", title: "Switch engines on in Settings" };

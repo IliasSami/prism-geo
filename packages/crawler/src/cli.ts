@@ -1,3 +1,4 @@
+import { ENGINE_IDS } from "@prismgeo/core";
 import { getActiveBrand, getAllBrands, installFileLogging } from "@prismgeo/db";
 import { CrawlerOrchestrator, BatchRunningError, recoverInterruptedBatches } from "./queue/crawler-orchestrator";
 import { stalestPromptIdsByEngine } from "./queue/scheduler";
@@ -21,7 +22,7 @@ async function main() {
     process.exit(1);
   }
 
-  const validEngines = ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"] as const;
+  const validEngines = ENGINE_IDS;
   type EngineType = (typeof validEngines)[number];
   const engines: EngineType[] = arg("engines")
     ? arg("engines")!.split(",").filter((e): e is EngineType => (validEngines as readonly string[]).includes(e))

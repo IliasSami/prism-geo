@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { getRawDb, getDbPath, getActiveBrand, getAllBrands, getSettings, setSettings, loadReportInput, type BrandRecord } from "@prismgeo/db";
-import { buildVisibilityReport } from "@prismgeo/core";
+import { buildVisibilityReport, ENGINE_IDS } from "@prismgeo/core";
 import crypto from "node:crypto";
 import pkg from "../package.json";
 import { MAX_ROWS, runGuardedQuery } from "./sql";
@@ -70,7 +70,7 @@ function readOnly(): DatabaseSync {
 }
 
 const brandArg = { brand_id: z.string().optional().describe("Brand id or slug; defaults to the active brand") };
-const ENGINES = ["perplexity", "google_aio", "copilot", "gemini", "chatgpt"] as const;
+const ENGINES = ENGINE_IDS;
 
 async function callApp(path: string, init?: RequestInit): Promise<unknown> {
   let res: Response;
