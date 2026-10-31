@@ -13,6 +13,7 @@ export interface GoogleAioResult {
   searchUrl: string;
   locationSignal?: string;
   organic: Array<{ position: number; url: string; title: string }>;
+  googleSurface: "ai_overview" | "ai_mode";
 }
 
 /** Where a Google search is asked as from: country (gl), language (hl) and a place sent as uule. */
@@ -62,6 +63,16 @@ export async function readOrganicResults(page: Page, limit = 10): Promise<Array<
     if (results.length >= limit) break;
   }
   return results;
+}
+
+/**
+ * Which AI answer Google put on the results page. Google sometimes fills the Overview slot with an
+ * AI Mode reply (headed "AI Mode reply for <query>"); it is kept, labelled as AI Mode, without that header.
+ */
+export function googleAnswerSurface(raw: string): { text: string; surface: "ai_overview" | "ai_mode" } {
+  const aiMode = /^\s*AI Mode (?:reply|response)\b[^\n]*\n/i.exec(raw);
+  if (aiMode) return { text: raw.slice(aiMode[0].length).trim(), surface: "ai_mode" };
+  return { text: raw.replace(/^AI Overview\n/, ""), surface: "ai_overview" };
 }
 
 /** Google showed a normal results page without an AI Overview for this query. */
@@ -117,10 +128,11 @@ export class GoogleAioCrawler {
       return extracted;
     }, { profile: "google_aio" });
 
+    const { text: responseText, surface: googleSurface } = googleAnswerSurface(answer.text);
     return {
       engine: "google_aio",
       query,
-      responseText: answer.text.replace(/^AI Overview\n/, ""),
+      responseText,
       citations: answer.links.map((l) => ({ url: cleanCitationUrl(l.url), title: l.title })),
       subQueries: [],
       executionMs: Date.now() - startTime,
@@ -128,6 +140,7 @@ export class GoogleAioCrawler {
       searchUrl,
       locationSignal: market.place || undefined,
       organic,
+      googleSurface,
     };
   }
 }

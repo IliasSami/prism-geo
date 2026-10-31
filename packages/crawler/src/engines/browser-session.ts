@@ -63,6 +63,8 @@ export interface EngineAnswer {
   costUsd?: number;
   /** Model the engine or provider reported, when known. */
   model?: string;
+  /** Which Google AI answer filled the results page: an AI Overview, or an AI Mode reply Google showed in its place. */
+  googleSurface?: "ai_overview" | "ai_mode";
 }
 
 /** The capture method a browser engine will use: its signed-in profile when one is saved. */
@@ -235,11 +237,20 @@ export async function assertNotBlocked(page: Page, tag: string): Promise<void> {
   const head = ((await page.evaluate(() => document.body?.innerText || "")) as string).slice(0, 3000).toLowerCase();
   const hit = BLOCK_SIGNALS.find((s) => head.includes(s));
   if (hit) throw new EngineBlockedError(`[${tag}] Blocked by engine ("${hit}")`);
+  // A Cloudflare check draws "Verify you are human" inside its own frame, so the page text above
+  // misses it; its markup still shows it. It is reported as a block, never answered.
+  const challenge = (await page
+    .evaluate((sel) => !!document.querySelector(sel) || /[?&]__cf_chl_/.test(location.href), CHALLENGE_SELECTOR)
+    .catch(() => false)) as boolean;
+  if (challenge) throw new EngineBlockedError(`[${tag}] Blocked by engine (a "verify you are human" check)`);
   // An account's usage limit is shown as a dialog after the page text, so the whole page is read
   const body = ((await page.evaluate(() => document.body?.innerText || "")) as string).toLowerCase();
   const limit = USAGE_LIMIT_SIGNALS.find((s) => body.includes(s));
   if (limit) throw new EngineBlockedError(`[${tag}] The account's usage limit is reached ("${limit}"); it resets after a few hours`);
 }
+
+/** Markup of a Cloudflare human check (Turnstile widget or challenge page). */
+export const CHALLENGE_SELECTOR = "iframe[src*='challenges.cloudflare.com'], .cf-turnstile, #challenge-form, input[name='cf-turnstile-response']";
 
 /** Usage-limit dialogs of signed-in free accounts (seen live on Perplexity). Specific enough not to match an answer. */
 const USAGE_LIMIT_SIGNALS = ["reached your free search limit", "you've reached our limit of messages", "you've hit the free plan limit"];

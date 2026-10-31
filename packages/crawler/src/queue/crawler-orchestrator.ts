@@ -851,6 +851,8 @@ export class CrawlerOrchestrator {
     if (engineResult.locationSignal) flags.locationSignal = engineResult.locationSignal;
     if (engineResult.searchUrl) flags.searchUrl = engineResult.searchUrl;
     if (engineResult.organic?.length) flags.organic = engineResult.organic;
+    // Google sometimes answers with an AI Mode reply in the Overview slot: labelled, not mixed in silently
+    if (engineResult.googleSurface) flags.googleSurface = engineResult.googleSurface;
     // Which signed-in account answered (its label), so persona results can be told apart
     if (engineResult.captureMethod === "browser_signed_in") {
       const account = activeAccountLabel(engine);
