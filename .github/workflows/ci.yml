@@ -77,3 +77,50 @@ jobs:
           exit 1
       - name: Runs as pwuser
         run: test "$(docker exec prismgeo id -un)" = "pwuser"
+
+  install:
+    # A fresh machine following the README quick start: clone, install, download the browser,
+    # build, start, and check that the dashboard answers.
+    name: Fresh install on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Download the browser
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            pnpm --filter @prismgeo/crawler exec playwright install --with-deps chromium
+          else
+            pnpm browsers
+          fi
+      - run: pnpm build
+      - name: Starts, answers and opens the setup wizard
+        run: |
+          pnpm start > start.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3333/api/health; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:3333/api/health
+          curl -fsSL -o setup.html -w "setup page: %{http_code}\n" http://127.0.0.1:3333/setup
+          grep -q "Add a client" setup.html
+      - name: Server log
+        if: always()
+        run: cat start.log || true

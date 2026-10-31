@@ -84,3 +84,20 @@ test("category grammar: head noun before a qualifying phrase, uncountable nouns 
   assert.equal(categoryForms("email marketing platform").many, "email marketing platforms");
   assert.equal(categoryForms("cart recovery").one, "cart recovery tool");
 });
+
+test("an audience already in the category or starting with 'small' is not repeated", () => {
+  const prompts = IcpPromptSynthesizer.generatePrompts({
+    brandName: "Northwind Ledger",
+    domain: "northwindledger.com",
+    niche: "Bookkeeping software for small online shops that sell on Shopify.",
+    category: "bookkeeping software for online shops",
+    aliases: [],
+    competitors: [{ name: "Contoso Books", domain: "contosobooks.com" }],
+    valuePropositions: [],
+  }).map((p) => p.queryText);
+  for (const q of prompts) {
+    assert.doesNotMatch(q, /for online shops for /i, q);
+    assert.doesNotMatch(q, /\bsmall small\b/i, q);
+  }
+  assert.ok(prompts.includes("I'm a founder of a small online shop: is a bookkeeping software for online shops worth it, and which one should I start with?"), prompts.join("\n"));
+});

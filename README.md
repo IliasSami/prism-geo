@@ -20,7 +20,7 @@ Everything runs on your machine: a Next.js dashboard, a Playwright crawler and a
 
 PrismGEO is in public beta. This is what has been tested, and what has not:
 
-- **Automated checks on every push:** lint, type checks for every package, 156 unit and integration tests, a production build on Node 22.13 and 24, a dependency audit, and a Docker build ([CI](https://github.com/IliasSami/prism-geo/actions/workflows/ci.yml)).
+- **Automated checks on every push:** lint, type checks for every package, 157 unit and integration tests, a production build on Node 22.13 and 24, a dependency audit, a Docker build, and a fresh install that starts and opens the setup wizard on Ubuntu, macOS and Windows ([CI](https://github.com/IliasSami/prism-geo/actions/workflows/ci.yml)).
 - **A real audit (October 2026):** 110 buyer questions for a real ecommerce SaaS brand and 5 competitors, run from one laptop with no API keys. ChatGPT (logged out) returned 133 answers and Gemini (logged out) 129, all stored with their sources, mentions and stance. Real-world problems found in that audit are fixed in [CHANGELOG.md](CHANGELOG.md) (for example, an engine's "I encountered an error" reply is now a failure, not an answer).
 - **What didn't work without keys:** Google blocked AI Overviews and AI Mode for the automated browser on that connection, and logged-out Perplexity hit its anonymous cap after a few questions. PrismGEO recorded these as failures with the reason, as designed. For dependable Google and Perplexity data, add a free SerpApi key and a free Gemini key, or a signed-in session ([below](#staying-within-rate-limits-for-free)).
 - **Location:** a browser answers for the country your computer connects from. To measure another market (e.g. the US from abroad), use a provider route that asks from that country. See [Search location](#search-location-ask-from-your-buyers-country).
@@ -95,19 +95,22 @@ The crawler paces queries per engine, slows down after a block, cools down for 1
 
 ## Quick start
 
-Requirements: Node.js 22.13 or later (PrismGEO uses the built-in `node:sqlite`) and pnpm 10.
+Works on macOS, Windows and Linux. Requirements: [Node.js](https://nodejs.org) 22.13 or later (PrismGEO uses the built-in `node:sqlite`) and pnpm 10. If you don't have pnpm, run `corepack enable` once (it ships with Node).
 
 ```bash
 git clone https://github.com/IliasSami/prism-geo.git
 cd prism-geo
 pnpm install
 pnpm browsers     # downloads the Chromium build that matches the locked Playwright version
-pnpm dev          # http://localhost:3333
+pnpm build
+pnpm start        # open http://localhost:3333
 ```
 
-The first visit opens the setup wizard: brand, competitors, buyer prompts. Then press **Run audit** in the header (start small: a few prompts, 1 run each).
+The first visit opens the setup wizard: your brand, your competitors, then PrismGEO writes 10 buyer questions for you to review. Press **Run audit** in the header (start small: a few questions, 1 run each).
 
-Production: `pnpm build && pnpm start`. See [Security model](#security-model) before making it reachable from other machines.
+- **Linux:** if Chromium won't start, install its system libraries once: `pnpm --filter @prismgeo/crawler exec playwright install-deps chromium` (needs sudo).
+- **While developing:** `pnpm dev` instead of `build` + `start`.
+- Every push is checked by a fresh install on Ubuntu, macOS and Windows ([CI](https://github.com/IliasSami/prism-geo/actions/workflows/ci.yml)). See [Security model](#security-model) before making it reachable from other machines.
 
 ## Docker
 

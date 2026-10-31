@@ -159,7 +159,10 @@ export class IcpPromptSynthesizer {
     const category = deriveCategory(profile);
     const { one, many, article } = categoryForms(category || "software");
     const audience = audienceOf(profile.niche || "");
-    const forAudience = audience ? ` for ${audience}` : "";
+    // A category that already names its buyers ("bookkeeping software for online shops") is not
+    // given a second "for ..." from the description.
+    const forAudience = audience && !/\bfor\s+\S/i.test(category || "") ? ` for ${audience}` : "";
+    const founderOf = audience ? audience.replace(/^(?:small|smaller|tiny)\s+/i, "").replace(/s$/, "") : "company";
     const ecommerce = /\b(e-?commerce|shopify|store|shop|retail|dtc|checkout|cart)\b/i.test(`${profile.niche} ${category || ""}`);
     const director = ecommerce ? { persona: "ecom_director" as const, title: "an ecommerce director" } : { persona: "head_of_growth" as const, title: "a head of growth" };
     const peers = ecommerce ? "other stores" : "other companies";
@@ -172,7 +175,7 @@ export class IcpPromptSynthesizer {
       set.add(`What are the best ${many}${forAudience} right now?`, "category", "growth_buyer", "Unbranded category shortlist: who the engines recommend by default.");
       set.add(`Which ${one} would you recommend${forAudience}?`, "category", "head_of_growth", "Recommendation phrasing of the category shortlist.");
       set.add(`best ${lowerFirst(many)}${forAudience}`, "category", "growth_buyer", "Search-style short query, as typed into a search box.");
-      set.add(`I'm a founder of a small${audience ? ` ${audience.replace(/s$/, "")}` : " company"}: is ${article} ${one} worth it, and which one should I start with?`, "category", "founder", "Founder persona: worth-it question with a shortlist.");
+      set.add(`I'm a founder of a small ${founderOf}: is ${article} ${one} worth it, and which one should I start with?`, "category", "founder", "Founder persona: worth-it question with a shortlist.");
       set.add(`As ${director.title}, how do I choose ${article} ${one}?`, "category", director.persona, "Director persona: selection criteria and vendors named while answering.");
     }
 

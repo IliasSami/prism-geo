@@ -21,6 +21,8 @@ All notable changes to PrismGEO are listed here. Versions follow [Semantic Versi
 
 ### Fixed
 
+- Generated questions no longer repeat the audience ("for online shops for small online shops", "a small small online shop").
+- `pnpm start` and `pnpm dev` work in Windows' default shell.
 - Engine blocks are remembered across audits: the browser route rests for 1, 3, 6, 12, then 24 hours after repeated blocks instead of searching straight into an active block, and a key or provider answers meanwhile.
 - A signed-in account's usage-limit dialog counts as a block, not a missing answer. A signed-in session counts only when the service's own sign-in check confirms it.
 - Failures are grouped with the fix that works for each engine.
