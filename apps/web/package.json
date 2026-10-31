@@ -1,6 +1,6 @@
 {
   "name": "@prismgeo/web",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-beta.2",
   "private": true,
   "scripts": {
     "dev": "next dev -H ${PRISMGEO_HOST:-127.0.0.1} -p ${PRISMGEO_PORT:-3333}",

@@ -58,7 +58,7 @@ function brandLike(name: string): boolean {
   if (canonicalCountry(name)) return false;
   const words = lower.split(/\s+/);
   if (words.every((w) => GENERIC.has(w) || COMMON_WORDS.has(w) || PLATFORMS.has(w))) {
-    // "Loop Voice" style names are all common words; keep them only with a brand signal
+    // "Northwind Voice" style names are all common words; keep them only with a brand signal
     return /[a-z][A-Z]|\.(io|ai|com|co)\b/.test(name);
   }
   return true;

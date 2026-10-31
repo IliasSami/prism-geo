@@ -1,6 +1,6 @@
 {
   "name": "@prismgeo/mcp",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-beta.2",
   "private": true,
   "type": "module",
   "description": "MCP connector that lets Claude (Desktop, Code or claude.ai) read and operate a PrismGEO workspace",

@@ -14,6 +14,17 @@
 
 Everything runs on your machine: a Next.js dashboard, a Playwright crawler and a single SQLite file. No telemetry, no hosted service.
 
+> **Beta testers wanted.** We are taking **10 beta users** (SEO and GEO consultants, agencies, in-house marketers) for feedback before the wider launch. [Apply here](https://github.com/IliasSami/prism-geo/issues/new?template=beta-tester.yml). It takes two minutes.
+
+## Tested
+
+PrismGEO is in public beta. This is what has been tested, and what has not:
+
+- **Automated checks on every push:** lint, type checks for every package, 156 unit and integration tests, a production build on Node 22.13 and 24, a dependency audit, and a Docker build ([CI](https://github.com/IliasSami/prism-geo/actions/workflows/ci.yml)).
+- **A real audit (October 2026):** 110 buyer questions for a real ecommerce SaaS brand and 5 competitors, run from one laptop with no API keys. ChatGPT (logged out) returned 133 answers and Gemini (logged out) 129, all stored with their sources, mentions and stance. Real-world problems found in that audit are fixed in [CHANGELOG.md](CHANGELOG.md) (for example, an engine's "I encountered an error" reply is now a failure, not an answer).
+- **What didn't work without keys:** Google blocked AI Overviews and AI Mode for the automated browser on that connection, and logged-out Perplexity hit its anonymous cap after a few questions. PrismGEO recorded these as failures with the reason, as designed. For dependable Google and Perplexity data, add a free SerpApi key and a free Gemini key, or a signed-in session ([below](#staying-within-rate-limits-for-free)).
+- **Location:** a browser answers for the country your computer connects from. To measure another market (e.g. the US from abroad), use a provider route that asks from that country. See [Search location](#search-location-ask-from-your-buyers-country).
+
 ## What you get
 
 | Page | Answers the question |

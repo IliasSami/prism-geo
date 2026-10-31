@@ -1,6 +1,6 @@
 {
   "name": "prism-geo-monorepo",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-beta.2",
   "private": true,
   "description": "PrismGEO: track how AI assistants name your brand (self-hosted, open source)",
   "scripts": {

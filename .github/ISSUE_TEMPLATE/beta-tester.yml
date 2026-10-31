@@ -1,0 +1,53 @@
+name: Join the beta (10 places)
+description: Apply to be one of PrismGEO's 10 beta testers and help shape the first stable release.
+title: "Beta tester: <your name or company>"
+labels: ["beta-tester"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your interest. Beta testers run PrismGEO on their own machine for a few weeks and share feedback in a short call or in issues.
+        **This issue is public.** Don't include private client names, data or API keys.
+  - type: dropdown
+    id: role
+    attributes:
+      label: What best describes you?
+      options:
+        - SEO / GEO consultant
+        - Agency
+        - In-house marketer
+        - Founder
+        - Developer
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: use
+    attributes:
+      label: What would you use PrismGEO for?
+      description: For example, how many brands you track, which AI engines matter to you, and which countries.
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: Where would you run it?
+      options:
+        - My laptop (macOS)
+        - My laptop (Windows)
+        - My laptop (Linux)
+        - A server or Docker
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: How should we reach you? (optional)
+      description: A public profile such as LinkedIn or X. Leave empty to be contacted here on GitHub.
+  - type: checkboxes
+    id: agree
+    attributes:
+      label: Feedback
+      options:
+        - label: I can share feedback (issues or a 20-minute call) within 3 weeks.
+          required: true

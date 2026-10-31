@@ -2,10 +2,18 @@
 
 All notable changes to PrismGEO are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.0.0-beta.2 (2026-10-31)
 
 ### New
 
+- **Search location**: every route asks from one chosen country (then a language spoken there), checked before each audit. Each answer records where it was asked from. Google routes can use a city, state or postal code from Google's own geotargets list, with Google's `uule` location signal in the browser.
+- **Calibration**: checks whether this computer's Google answers match answers asked from inside the chosen country. It starts by itself once a SerpApi key or DataForSEO is saved.
+- **Google AI Mode** as an engine, through SerpApi or Apify's AI Mode actor. One engine registry now drives the whole app.
+- **Signed-in personas**: several signed-in accounts per engine, each labelled; ChatGPT answers come from Temporary Chats.
+- **Untracked companies**: Competitors → "Also named by the engines" suggests companies the answers name that you don't track yet.
+- **Answers tailored to the wrong market** are flagged when an engine localises to where PrismGEO runs instead of the market you measure.
+- **Reports** compare the sites AI Overviews cite with Google's organic top 10 from the same search.
+- Paid routes run in parallel; browsers stay one page at a time.
 - **DataForSEO as a capture provider** (Settings → Engines & access → Data provider): one `login:password` credential answers ChatGPT and Gemini with what their interfaces showed, Google AI Overviews from the results page (asynchronous Overviews included), and Perplexity through the Sonar API, in the market and language you choose. Answers are stored as `provider` (Perplexity: `api`) with their cost and model; provider errors map to the usual failure reasons.
 - **PrismGEO Capture browser extension** (`apps/extension`): save the answer you are looking at in your own ChatGPT, Gemini, Perplexity, Copilot or Google account, matched to a tracked question or added as a new one. Read only on click, previewed before sending, sent only to your server with its own token (Settings → Engines & access → Capture by hand). Stored as `manual` and excluded from engine health.
 - **Download report** on Overview: a shareable Markdown summary with results by engine and by buyer stage, failures, brand-confusion warnings, the biggest gaps and the method.
@@ -13,6 +21,9 @@ All notable changes to PrismGEO are listed here. Versions follow [Semantic Versi
 
 ### Fixed
 
+- Engine blocks are remembered across audits: the browser route rests for 1, 3, 6, 12, then 24 hours after repeated blocks instead of searching straight into an active block, and a key or provider answers meanwhile.
+- A signed-in account's usage-limit dialog counts as a block, not a missing answer. A signed-in session counts only when the service's own sign-in check confirms it.
+- Failures are grouped with the fix that works for each engine.
 - Gemini's "I encountered an error" reply is recorded as an engine error instead of stored; a domain written inside a sentence stays in the answer text; stance no longer credits the product being replaced ("Best X alternatives") and recognises more recommendation phrasings.
 
 ## 1.0.0-beta.1
