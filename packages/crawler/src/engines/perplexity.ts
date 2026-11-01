@@ -30,7 +30,7 @@ export class PerplexityEngineCrawler {
       await page.keyboard.type(query, { delay: 15 });
       await page.keyboard.press("Enter");
       await page.waitForSelector(ANSWER_SELECTOR, { timeout: 45000 }).catch(() => null);
-      await assertNotBlocked(page, "PerplexityCrawler");
+      await assertNotBlocked(page, "PerplexityCrawler", ANSWER_SELECTOR);
       // Perplexity can pause mid-answer while it runs another search step
       await waitForStableAnswer(page, ANSWER_SELECTOR, { timeoutMs: 90000, stableMs: 5000 });
       const extracted = await extractAnswer(page, ANSWER_SELECTOR, ["perplexity.ai"]);

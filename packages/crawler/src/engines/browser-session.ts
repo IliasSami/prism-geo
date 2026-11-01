@@ -1,10 +1,11 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import fs from "node:fs";
 import path from "node:path";
-import { getDbPath, getSettings, ensurePrivateDir, PRIVATE_FILE_MODE } from "@prismgeo/db";
+import { getDbPath, ensurePrivateDir, PRIVATE_FILE_MODE } from "@prismgeo/db";
 import { canonicalUrl } from "@prismgeo/core";
 import { generateStealthProfile, STEALTH_INJECTION_SCRIPT, getChromiumExecutablePath } from "../stealth/fingerprint";
-import { readProfile, isProfileConnected, activeAccount, profileDir, usableVisitorProfile, visitorProfileDir, PROFILE_ARGS, type ProfileEngine } from "./profiles";
+import { readProfile, isProfileConnected, activeAccount, profileDir, usableVisitorProfile, visitorProfileDir, withProfileLock, PROFILE_ARGS, type ProfileEngine } from "./profiles";
+import { getProxyConfig } from "./proxy";
 
 export interface ExtractedAnswer {
   text: string;
@@ -21,26 +22,7 @@ export interface ExtractedAnswer {
  */
 export type CaptureMethod = "browser" | "browser_signed_in" | "api" | "provider" | "manual";
 
-/**
- * Optional outbound proxy from Settings → Crawler (e.g. http://user:pass@host:port). Routing
- * browser engines through a residential or office IP is the self-hosted answer to IP-level
- * rate limits such as Google's "unusual traffic" page.
- */
-export function getProxyConfig(): { server: string; username?: string; password?: string } | undefined {
-  const raw = (getSettings<{ proxyUrl?: string }>("crawler_settings", {}).proxyUrl || process.env.PRISMGEO_PROXY_URL || "").trim();
-  if (!raw) return undefined;
-  try {
-    const u = new URL(raw);
-    return {
-      server: `${u.protocol}//${u.host}`,
-      username: u.username ? decodeURIComponent(u.username) : undefined,
-      password: u.password ? decodeURIComponent(u.password) : undefined,
-    };
-  } catch {
-    console.warn("[Crawler] Ignoring invalid proxy URL in settings");
-    return undefined;
-  }
-}
+export { getProxyConfig } from "./proxy";
 
 /** Shape every engine (browser or API) returns to the orchestrator. */
 export interface EngineAnswer {
@@ -100,58 +82,67 @@ export async function withStealthPage<T>(
   // Logged out: the visitor profile where a person completed a human check, so the check is kept
   const visitor = !signedIn && options.profile ? usableVisitorProfile(options.profile) : null;
   const marker = signedIn || visitor;
-  let context: BrowserContext;
-  let browser: Browser | null = null;
-  let ownBrowser = false;
+  const dir = marker && options.profile ? (signedIn ? profileDir(options.profile, account ?? undefined) : visitorProfileDir(options.profile)) : null;
 
-  if (marker && options.profile) {
-    // A persistent profile has its own browser process; one engine uses it at a time
-    context = await chromium.launchPersistentContext(signedIn ? profileDir(options.profile, account ?? undefined) : visitorProfileDir(options.profile), {
-      headless: true,
-      executablePath: getChromiumExecutablePath(),
-      args: PROFILE_ARGS,
-      ignoreDefaultArgs: ["--enable-automation"],
-      proxy: getProxyConfig(),
-      userAgent: marker.userAgent.replace("HeadlessChrome", "Chrome") || undefined,
-      viewport: { width: 1440, height: 900 },
-      locale: "en-US",
-    });
-  } else {
-    browser = existingBrowser || null;
-    if (!browser) {
-      browser = await chromium.launch({
-        headless: true,
-        executablePath: getChromiumExecutablePath(),
-        proxy: getProxyConfig(),
-        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled", "--disable-infobars"],
-      });
-      ownBrowser = true;
+  const run = async (): Promise<T> => {
+    let context: BrowserContext | null = null;
+    let browser: Browser | null = null;
+    let ownBrowser = false;
+    let page: Page | null = null;
+    // Everything after a launch is inside the try, so a failed newContext never leaks a browser
+    try {
+      if (dir && marker) {
+        // A persistent profile has its own browser process
+        context = await chromium.launchPersistentContext(dir, {
+          headless: true,
+          executablePath: getChromiumExecutablePath(),
+          args: PROFILE_ARGS,
+          ignoreDefaultArgs: ["--enable-automation"],
+          proxy: getProxyConfig(),
+          userAgent: marker.userAgent.replace("HeadlessChrome", "Chrome") || undefined,
+          viewport: { width: 1440, height: 900 },
+          locale: "en-US",
+        });
+      } else {
+        browser = existingBrowser || null;
+        if (!browser) {
+          browser = await chromium.launch({
+            headless: true,
+            executablePath: getChromiumExecutablePath(),
+            proxy: getProxyConfig(),
+            args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled", "--disable-infobars"],
+          });
+          ownBrowser = true;
+        }
+        const stealth = generateStealthProfile(browser.version());
+        context = await browser.newContext({
+          userAgent: stealth.userAgent,
+          viewport: stealth.viewport,
+          deviceScaleFactor: stealth.deviceScaleFactor,
+          locale: stealth.locale,
+          timezoneId: stealth.timezoneId,
+        });
+      }
+      await context.addInitScript(STEALTH_INJECTION_SCRIPT);
+      page = dir ? context.pages()[0] || (await context.newPage()) : await context.newPage();
+      return await fn(page);
+    } catch (err) {
+      if (page) await saveFailureSnapshot(page, tag);
+      throw err;
+    } finally {
+      await context?.close().catch((err) => console.warn(`[${tag}] Context close error:`, (err as Error).message));
+      if (ownBrowser && browser) {
+        await browser.close().catch((err) => console.warn(`[${tag}] Browser close error:`, (err as Error).message));
+      }
     }
-    const stealth = generateStealthProfile(browser.version());
-    context = await browser.newContext({
-      userAgent: stealth.userAgent,
-      viewport: stealth.viewport,
-      deviceScaleFactor: stealth.deviceScaleFactor,
-      locale: stealth.locale,
-      timezoneId: stealth.timezoneId,
-    });
-  }
-
-  let page: Page | null = null;
-  try {
-    await context.addInitScript(STEALTH_INJECTION_SCRIPT);
-    page = marker ? context.pages()[0] || (await context.newPage()) : await context.newPage();
-    return await fn(page);
-  } catch (err) {
-    if (page) await saveFailureSnapshot(page, tag);
-    throw err;
-  } finally {
-    await context.close().catch((err) => console.warn(`[${tag}] Context close error:`, (err as Error).message));
-    if (ownBrowser && browser) {
-      await browser.close().catch((err) => console.warn(`[${tag}] Browser close error:`, (err as Error).message));
-    }
-  }
+  };
+  // A saved profile can be opened by one thing at a time (this audit, another brand's audit, a
+  // sign-in or check window, a session check): wait for it rather than fail on Chromium's lock
+  return dir ? withProfileLock(dir, run, { waitMs: PROFILE_WAIT_MS }) : run();
 }
+
+/** How long a crawl waits for a saved profile that another audit or an open window is using. */
+const PROFILE_WAIT_MS = 3 * 60_000;
 
 /**
  * Saves a screenshot and the HTML of a page whose crawl failed into `<data dir>/crawl-debug/`,
@@ -235,11 +226,35 @@ export function assertRealAnswer(text: string, tag: string, query: string): void
   }
 }
 
-/** Throws EngineBlockedError when the visible page is a bot check or login wall. */
-export async function assertNotBlocked(page: Page, tag: string): Promise<void> {
-  const head = ((await page.evaluate(() => document.body?.innerText || "")) as string).slice(0, 3000).toLowerCase();
-  const hit = BLOCK_SIGNALS.find((s) => head.includes(s));
-  if (hit) throw new EngineBlockedError(`[${tag}] Blocked by engine ("${hit}")`);
+/** Text an answer element needs before the page counts as answered (block pages have no such element). */
+const ANSWER_SHOWN_MIN_CHARS = 200;
+
+/**
+ * Throws EngineBlockedError when the visible page is a bot check or login wall. `answerSelector`
+ * is the engine's answer element: when it is visible with real text, the block phrases are not
+ * searched, since an answer about captchas or "unusual activity" is still an answer. The check's
+ * own markup and the usage-limit dialog are still looked for.
+ */
+export async function assertNotBlocked(page: Page, tag: string, answerSelector?: string): Promise<void> {
+  const answered = answerSelector
+    ? ((await page
+        .evaluate(
+          ({ answerSel, min }) => {
+            const els = document.querySelectorAll(answerSel);
+            const el = els[els.length - 1] as HTMLElement | undefined;
+            if (!el) return false;
+            const box = el.getBoundingClientRect();
+            return box.width > 0 && box.height > 0 && (el.innerText || "").trim().length >= min;
+          },
+          { answerSel: answerSelector, min: ANSWER_SHOWN_MIN_CHARS }
+        )
+        .catch(() => false)) as boolean)
+    : false;
+  if (!answered) {
+    const head = ((await page.evaluate(() => document.body?.innerText || "")) as string).slice(0, 3000).toLowerCase();
+    const hit = BLOCK_SIGNALS.find((s) => head.includes(s));
+    if (hit) throw new EngineBlockedError(`[${tag}] Blocked by engine ("${hit}")`);
+  }
   // A Cloudflare check draws "Verify you are human" inside its own frame, so the page text above
   // misses it; its markup still shows it. It is reported as a block, never answered.
   const challenge = (await page

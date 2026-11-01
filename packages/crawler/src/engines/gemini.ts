@@ -24,7 +24,7 @@ export class GeminiEngineCrawler {
 
     const answer = await withStealthPage("GeminiCrawler", existingBrowser, async (page) => {
       await page.goto("https://gemini.google.com/app?hl=en", { waitUntil: "domcontentloaded", timeout: 30000 });
-      await assertNotBlocked(page, "GeminiCrawler");
+      await assertNotBlocked(page, "GeminiCrawler", ANSWER_SELECTOR);
       const input = page.locator("rich-textarea .ql-editor, div[contenteditable='true']").first();
       await input.waitFor({ timeout: 15000 });
       await input.click();

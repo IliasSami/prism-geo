@@ -94,22 +94,33 @@ export function summarizeCalibration(questions: CalibrationQuestion[]): Pick<Cal
     : { agreement, trusted: true, reason: "Google answers asked from this computer with the location signal agree with answers asked from inside the country as closely as two searches there agree with each other." };
 }
 
-let running = false;
+/** Whether this process is calibrating; on globalThis so dev hot-reloads see the same flag. */
+const calibration: { running: boolean } = ((globalThis as typeof globalThis & { __prismCalibration?: { running: boolean } }).__prismCalibration ??= { running: false });
 
 export function getCalibration(): CalibrationResult | null {
   const c = getSettings<CalibrationResult | Record<string, never>>(KEY, {});
   if (!("status" in c)) return null;
   const r = c as CalibrationResult;
   // A run this process is not doing was interrupted (PrismGEO restarted)
-  return r.status === "running" && !running ? { ...r, status: "failed", trusted: false, reason: "Interrupted: PrismGEO stopped during the calibration. Run it again." } : r;
+  return r.status === "running" && !calibration.running ? { ...r, status: "failed", trusted: false, reason: "Interrupted: PrismGEO stopped during the calibration. Run it again." } : r;
 }
 
 /**
  * Runs the calibration for the active search location (Settings) on `sample` questions of a
  * brand. Resolves when done; progress is readable through getCalibration().
  */
-export async function calibrateLocation(brandId: string, { sample = 10, pauseMs = [15000, 30000] as [number, number] } = {}): Promise<CalibrationResult> {
-  if (running) throw new Error("A calibration is already running");
+export async function calibrateLocation(brandId: string, opts: { sample?: number; pauseMs?: [number, number] } = {}): Promise<CalibrationResult> {
+  if (calibration.running) throw new Error("A calibration is already running");
+  // Taken before the first await, so two requests at once cannot both start one
+  calibration.running = true;
+  try {
+    return await runCalibration(brandId, opts);
+  } finally {
+    calibration.running = false;
+  }
+}
+
+async function runCalibration(brandId: string, { sample = 10, pauseMs = [15000, 30000] as [number, number] } = {}): Promise<CalibrationResult> {
   const rest = browserCoolingDown("google_aio");
   if (rest) throw new Error(`Google's browser route is resting after a block until ${untilText(rest.until)}; the calibration waits for it.`);
   const s = getSettings<{ providerLocation?: string; providerLanguage?: string; searchPlace?: string }>("engine_settings", {});
@@ -139,7 +150,6 @@ export async function calibrateLocation(brandId: string, { sample = 10, pauseMs 
     reason: "Running",
   };
   setSettings(KEY, result);
-  running = true;
 
   const named = (a: EngineAnswer | null, q: string) => new Set(a ? detectMentions(a.responseText, entities, q).mentions.map((m) => m.entity.key) : []);
   const sites = (a: EngineAnswer | null) => new Set((a?.citations || []).map((c) => hostKey(c.url)).filter(Boolean));
@@ -187,7 +197,6 @@ export async function calibrateLocation(brandId: string, { sample = 10, pauseMs 
     // Blocked: queued again, resumed by the scheduler when the rest period is over
     Object.assign(result, { status: result.retryAfter ? "waiting" : "failed", trusted: false, reason: (err as Error).message, finishedAt: nowIso() });
   } finally {
-    running = false;
     setSettings(KEY, result);
   }
   return result;
@@ -241,7 +250,7 @@ export function requestCalibration(brandId: string): CalibrationResult {
  * calibrated (so the free Google route is checked without anyone having to ask).
  */
 export async function runPendingCalibration(activeBrandId: string | null): Promise<void> {
-  if (running) return;
+  if (calibration.running) return;
   const crawling = (getRawDb().prepare("SELECT COUNT(*) AS n FROM crawl_batches WHERE status = 'running'").get() as { n: number }).n > 0;
   if (crawling) return;
   let current = getCalibration();

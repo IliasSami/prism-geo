@@ -106,7 +106,8 @@ export class GoogleAioCrawler {
         await consent.click();
         await page.waitForTimeout(1000);
       }
-      await assertNotBlocked(page, "GoogleAioCrawler");
+      // A page with an Overview or organic results is a results page, even for a search about captchas
+      await assertNotBlocked(page, "GoogleAioCrawler", `${AIO_SELECTOR}, #rso`);
 
       // The Overview is streamed in after the page loads; slow ones show a "Thinking a little
       // longer" / "Generating" placeholder first, which is still pending, not "no Overview".

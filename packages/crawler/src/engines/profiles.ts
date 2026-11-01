@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getDbPath, ensurePrivateDir, PRIVATE_FILE_MODE } from "@prismgeo/db";
 import { getChromiumExecutablePath } from "../stealth/fingerprint";
+import { getProxyConfig } from "./proxy";
 
 /**
  * Persistent, user-signed-in browser profiles, one per engine.
@@ -136,6 +137,67 @@ const cookieNames = (g.__prismProfileCookieNames ??= new Map<string, string[]>()
 export function accountIdFrom(label: string): string {
   const id = (label || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
   return id || DEFAULT_ACCOUNT;
+}
+
+/*
+ * Profile folder locks. Chromium refuses to open a profile folder a second browser holds, and two
+ * writers can corrupt it, so everything that opens a saved profile (audits of any brand, the
+ * sign-in and check windows, session checks) takes the folder's lock first. Kept on globalThis so
+ * dev hot-reloads share it. Waiters are served in order.
+ */
+interface FolderLock {
+  waiters: Array<() => void>;
+}
+const folderLocks = ((globalThis as typeof globalThis & { __prismProfileLocks?: Map<string, FolderLock> }).__prismProfileLocks ??= new Map<string, FolderLock>());
+
+/** Thrown when a profile stays in use longer than the caller can wait; classified as a retryable error. */
+export class ProfileInUseError extends Error {}
+
+/** Whether something holds the profile folder right now. */
+export function profileLocked(dir: string): boolean {
+  return folderLocks.has(path.resolve(dir));
+}
+
+function releaseFolder(key: string): void {
+  const lock = folderLocks.get(key);
+  const next = lock?.waiters.shift();
+  if (next) next();
+  else folderLocks.delete(key);
+}
+
+/** Runs `fn` while holding the folder's lock, waiting for it first (at most `waitMs`, if given). */
+export async function withProfileLock<T>(dir: string, fn: () => Promise<T>, opts: { waitMs?: number } = {}): Promise<T> {
+  const key = path.resolve(dir);
+  const lock = folderLocks.get(key);
+  if (!lock) {
+    folderLocks.set(key, { waiters: [] });
+  } else {
+    await new Promise<void>((resolve, reject) => {
+      const waiter = () => {
+        if (timer) clearTimeout(timer);
+        resolve();
+      };
+      const timer =
+        opts.waitMs === undefined
+          ? null
+          : setTimeout(() => {
+              lock.waiters.splice(lock.waiters.indexOf(waiter), 1);
+              reject(new ProfileInUseError(`The saved browser profile ${path.basename(key)} is already in use (another audit or an open window); try again later`));
+            }, opts.waitMs);
+      lock.waiters.push(waiter);
+    });
+  }
+  try {
+    return await fn();
+  } finally {
+    releaseFolder(key);
+  }
+}
+
+/** Runs `fn` only if nothing holds the folder; `{ ran: false }` without waiting otherwise. */
+export async function tryProfileLock<T>(dir: string, fn: () => Promise<T>): Promise<{ ran: true; value: T } | { ran: false }> {
+  if (profileLocked(dir)) return { ran: false };
+  return { ran: true, value: await withProfileLock(dir, fn) };
 }
 
 /** The last sign-in window failure for an account, or null. */
@@ -295,6 +357,13 @@ export async function verifyProfile(engine: ProfileEngine, account = DEFAULT_ACC
   const key = keyOf(engine, account);
   const marker = readProfile(engine, account);
   if (!marker || connecting.has(key) || checking.has(key)) return null;
+  // Never waits for a window a person holds or an audit's page: "cannot be checked right now"
+  const outcome = await tryProfileLock(profileDir(engine, account), () => checkProfile(engine, account, marker));
+  return outcome.ran ? outcome.value : null;
+}
+
+async function checkProfile(engine: ProfileEngine, account: string, marker: ProfileMarker): Promise<{ signedIn: boolean; expiresAt: string | null } | null> {
+  const key = keyOf(engine, account);
   checking.add(key);
   let context: BrowserContext | null = null;
   try {
@@ -303,6 +372,8 @@ export async function verifyProfile(engine: ProfileEngine, account = DEFAULT_ACC
       executablePath: getChromiumExecutablePath(),
       args: PROFILE_ARGS,
       ignoreDefaultArgs: ["--enable-automation"],
+      // The same route the crawler uses on this profile, so the site sees one visitor
+      proxy: getProxyConfig(),
       userAgent: marker.userAgent?.replace("HeadlessChrome", "Chrome") || undefined,
     });
     let session = await readSession(context, engine, { key });
@@ -349,32 +420,44 @@ export async function openSignInWindow(engine: ProfileEngine, account = DEFAULT_
     // Profiles hold session cookies: owner-only access
     ensurePrivateDir(path.dirname(dir));
     ensurePrivateDir(dir);
-    const context = await chromium.launchPersistentContext(dir, {
-      headless: false,
-      executablePath: getChromiumExecutablePath(),
-      viewport: null,
-      args: PROFILE_ARGS,
-      // Without this flag Google refuses sign-in ("This browser or app may not be secure")
-      ignoreDefaultArgs: ["--enable-automation"],
-    });
-    const page = context.pages()[0] || (await context.newPage());
-    await page.goto(SIGN_IN_URLS[engine], { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => null);
-    const userAgent = (await page.evaluate(() => navigator.userAgent).catch(() => "")) as string;
     let lastSeen = { signedIn: false, expiresAt: null as string | null };
-    const check = async () => {
+    // The window holds the profile until it closes; an audit page using it is waited for first
+    const userAgent = await withProfileLock(dir, async () => {
+      const context = await chromium.launchPersistentContext(dir, {
+        headless: false,
+        executablePath: getChromiumExecutablePath(),
+        viewport: null,
+        args: PROFILE_ARGS,
+        // Without this flag Google refuses sign-in ("This browser or app may not be secure")
+        ignoreDefaultArgs: ["--enable-automation"],
+        // The same route the crawler uses on this profile, so the site sees one visitor
+        proxy: getProxyConfig(),
+      });
       try {
-        lastSeen = await readSession(context, engine, { askEndpoint: true, key });
-        if (lastSeen.signedIn) detected.add(key);
-        else detected.delete(key);
-      } catch {
-        // the window is closing
+        const closed = new Promise<void>((resolve) => context.on("close", () => resolve()));
+        const page = context.pages()[0] || (await context.newPage());
+        await page.goto(SIGN_IN_URLS[engine], { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => null);
+        const ua = (await page.evaluate(() => navigator.userAgent).catch(() => "")) as string;
+        const check = async () => {
+          try {
+            lastSeen = await readSession(context, engine, { askEndpoint: true, key });
+            if (lastSeen.signedIn) detected.add(key);
+            else detected.delete(key);
+          } catch {
+            // the window is closing
+          }
+        };
+        await check();
+        poll = setInterval(check, 2000);
+        await closed;
+        return ua;
+      } finally {
+        if (poll) clearInterval(poll);
+        poll = null;
+        // No window is left open after an error; closing a closed window does nothing
+        await context.close().catch(() => undefined);
       }
-    };
-    await check();
-    poll = setInterval(check, 2000);
-    await new Promise<void>((resolve) => context.on("close", () => resolve()));
-    clearInterval(poll);
-    poll = null;
+    });
 
     const previous = readProfile(engine, account);
     writeMarker({
