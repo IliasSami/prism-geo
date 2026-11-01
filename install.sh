@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PrismGEO one-line install for macOS and Linux:
 #   curl -fsSL https://raw.githubusercontent.com/IliasSami/prism-geo/main/install.sh | bash
-# Clones (or updates) PrismGEO into ./prism-geo (or $PRISMGEO_DIR) and runs `pnpm setup`.
+# Clones (or updates) PrismGEO into ./prism-geo (or $PRISMGEO_DIR) and runs `pnpm bootstrap`.
 set -euo pipefail
 
 REPO="${PRISMGEO_REPO:-https://github.com/IliasSami/prism-geo.git}"

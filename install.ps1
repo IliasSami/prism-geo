@@ -1,6 +1,6 @@
 # PrismGEO one-line install for Windows (PowerShell):
 #   irm https://raw.githubusercontent.com/IliasSami/prism-geo/main/install.ps1 | iex
-# Clones (or updates) PrismGEO into .\prism-geo (or $env:PRISMGEO_DIR) and runs `pnpm setup`.
+# Clones (or updates) PrismGEO into .\prism-geo (or $env:PRISMGEO_DIR) and runs `pnpm bootstrap`.
 $ErrorActionPreference = "Stop"
 $repo = if ($env:PRISMGEO_REPO) { $env:PRISMGEO_REPO } else { "https://github.com/IliasSami/prism-geo.git" }
 $dir = if ($env:PRISMGEO_DIR) { $env:PRISMGEO_DIR } else { "prism-geo" }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// One-command setup: `pnpm setup` (or `node scripts/setup.mjs`). Safe to run again at any time.
+// One-command setup: `pnpm bootstrap` (or `node scripts/setup.mjs`). Safe to run again at any time.
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT, checkNode, step, say, fail, pnpm, pnpmCommand, installBrowser, browserInstalled, loadEnv } from "./lib.mjs";
@@ -15,8 +15,8 @@ if (browserInstalled()) say("Already installed.");
 else if (installBrowser() !== 0) {
   fail(
     process.platform === "linux"
-      ? "Chromium could not be installed. On Linux it needs system libraries: run `sudo pnpm --filter @prismgeo/crawler exec playwright install --with-deps chromium`, then `pnpm setup` again."
-      : "Chromium could not be installed (see the messages above). Check your connection and run `pnpm setup` again."
+      ? "Chromium could not be installed. On Linux it needs system libraries: run `sudo pnpm --filter @prismgeo/crawler exec playwright install --with-deps chromium`, then `pnpm bootstrap` again."
+      : "Chromium could not be installed (see the messages above). Check your connection and run `pnpm bootstrap` again."
   );
 }
 

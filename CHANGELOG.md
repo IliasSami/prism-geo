@@ -2,13 +2,26 @@
 
 All notable changes to PrismGEO are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.0.0-beta.3 (2026-11-02)
 
 ### New
 
-- **Notification bell for steps only a person can take.** When an engine shows a "verify you are human" check or needs a sign-in, that engine waits (15 minutes by default, `PRISMGEO_PERSON_WAIT_MIN`) while the others keep running, and the bell shows the request. **Open window** opens the crawler's own saved profile so you complete the step yourself; the waiting question is then asked again and the audit finishes without errors. Questions not asked in time stay on the request and **Resume** asks exactly those. PrismGEO still never answers a check itself; rate and usage limits rest the engine as before. Optional desktop alerts.
-- Logged-out engines keep a check you completed in a "visitor" profile, so later logged-out runs do not hit the same check again at once.
-- New failure reason `waiting_for_person` ("waiting for you to complete a human check or sign-in") in reports and on the Engines page.
+- **One-command install.** `install.sh` / `install.ps1` (or `pnpm bootstrap` in a clone) checks Node.js, installs dependencies and the crawler's browser (with system libraries on Linux), creates `.env`, builds, and prints the dashboard URL and the Claude (MCP) configuration. `pnpm start` loads `.env`, builds or installs the browser when missing and moves to the next free port. Docker images are published for amd64 and arm64 (`ghcr.io/iliassami/prism-geo`), and compose uses a named volume (no permission changes on any OS).
+- **Notification bell for steps only a person can take.** When an engine shows a "verify you are human" check or needs a sign-in, that engine waits (15 minutes by default, `PRISMGEO_PERSON_WAIT_MIN`) while the others keep running, and the bell shows the request. **Open window** opens the crawler's own saved profile so you complete the step yourself; the waiting question is then asked again and the audit finishes without errors. Questions not asked in time stay on the request and **Resume** asks exactly those. PrismGEO never answers a check itself. Optional desktop alerts. A completed check is kept in a logged-out "visitor" profile for later logged-out runs.
+- **Free engines are never exhausted.** Researched per-engine limits for free browser use: pauses of 1–5 minutes, hourly and daily caps per engine (e.g. Google 8 an hour and 30 a day) counting every question sent from this computer, and longer rests after blocks where blocks last longer (Google 6 → 48 h). Over the hourly cap an engine waits inside the audit; at the daily cap the rest is asked later. **Settings → Schedule → Pacing → Fast** keeps the old pace for your own proxy or paid accounts.
+- **"Unanswered" audits** ask each engine only the questions it has never answered (also `scope: "gaps"` on `/api/crawl/start`), so coverage gaps between engines close.
+- New failure reasons: `waiting_for_person`, `not_accepted` (the engine's page ignored the question), `budget_reached` (paused to protect free access).
+- `/api/health` reports the version, Node.js and database schema.
+
+### Fixed
+
+- **ChatGPT signed in** ignored questions from the automated browser (and a first-use "Temporary chat" dialog covered the composer): the dialog is closed and, when the session still does not take the question, it is asked logged out and stored as a logged-out capture.
+- **Copilot** moved to copilot.com with a new composer; the landing page's own Sign in resumes the saved session. Runs where its page keeps the question unsent are reported as `not_accepted` (stopping after two in a row) instead of "no readable answer".
+- **Measurement:** a tracked name inside another tracked name ("Acme" in "Big Acme") no longer counts for both; "Acme-powered", "Acme/Shopify" and "@Acme" are counted; short or everyday-word names ("Front", "Loop") must match their capitalisation; look-alike domains are matched at label boundaries and the brand's own country domains are not flagged; marketplace listings no longer mark every page of the marketplace as a competitor; percentages say whether they are per-question averages; engine averages skip engines without answers; passage reuse no longer drops short product paragraphs that mention "sign up".
+- **Reliability:** saved browser profiles are never opened by two things at once; one engine's error no longer ends the whole audit; a rejected key stops that engine instead of failing every question; check windows count as cleared only after a real page load and a few clean seconds; calibration cannot start twice; sign-in windows use the proxy.
+- **Dashboard:** Calibrate works again (it was refused by the JSON check); Settings never saves empty keys after a failed load; API requests from other sites are refused for every method; the proxy password is kept only for the same proxy host; one shared poll for the bell; local times without hydration errors; clearer error states on Settings, Engines, Competitors and the client switcher.
+- **Claude connector:** slow SQL queries are really stopped; report filters (engine, batch) apply to every number; audits of more than 50 runs need confirmation; answer text is marked as untrusted content; ids from another client are refused.
+- Test fixtures and examples use fictional companies only.
 
 ## 1.0.0-beta.2 (2026-10-31)
 

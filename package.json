@@ -1,10 +1,10 @@
 {
   "name": "prism-geo-monorepo",
-  "version": "1.0.0-beta.2",
+  "version": "1.0.0-beta.3",
   "private": true,
   "description": "PrismGEO: track how AI assistants name your brand (self-hosted, open source)",
   "scripts": {
-    "setup": "node scripts/setup.mjs",
+    "bootstrap": "node scripts/setup.mjs",
     "start": "node scripts/run.mjs start",
     "dev": "node scripts/run.mjs dev",
     "build": "pnpm --filter @prismgeo/web build",

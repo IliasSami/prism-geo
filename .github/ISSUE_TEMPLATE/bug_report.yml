@@ -20,7 +20,7 @@ body:
     id: install
     attributes:
       label: How do you run PrismGEO?
-      options: [install script / pnpm setup, pnpm from a git clone, Docker]
+      options: [install script / pnpm bootstrap, pnpm from a git clone, Docker]
     validations: { required: true }
   - type: input
     id: os
