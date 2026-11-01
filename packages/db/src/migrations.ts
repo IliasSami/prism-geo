@@ -305,6 +305,32 @@ export const MIGRATIONS: Migration[] = [
       addColumnIfMissing(db, "brands", "category", "TEXT");
     },
   },
+  {
+    version: 7,
+    name: "action requests (steps only a person can do, such as a human check or a sign-in), shown under the bell",
+    changesData: false,
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS action_requests (
+          id TEXT PRIMARY KEY,
+          brand_id TEXT REFERENCES brands(id) ON DELETE CASCADE,
+          batch_id TEXT,
+          engine TEXT NOT NULL,
+          account TEXT NOT NULL DEFAULT 'default',
+          kind TEXT NOT NULL,
+          message TEXT NOT NULL,
+          page_url TEXT,
+          status TEXT NOT NULL DEFAULT 'open',
+          pending_prompts_json TEXT NOT NULL DEFAULT '[]',
+          note TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          resolved_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_actions_status ON action_requests(status, created_at);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

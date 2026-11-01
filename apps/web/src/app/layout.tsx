@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Navigation } from "@/components/Navigation";
 import { AuditProvider, AuditTrigger } from "@/components/CrawlModal";
 import { HideOn } from "@/components/HideOn";
+import { ActionBell } from "@/components/ActionBell";
 import { getRawDb } from "@prismgeo/db";
 import { activeBrandFromCookies } from "@/app/api/_lib/brand";
 import { engineSummary, getEngineViews, getLatestAudit } from "@/components/insights/engine-state";
@@ -69,11 +70,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             brandName={brand?.name}
             brandDomain={brand?.domain}
             mobileActions={
-              brand ? (
-                <HideOn prefix="/setup">
-                  <AuditTrigger compact />
-                </HideOn>
-              ) : null
+              <div className="flex items-center gap-1">
+                <ActionBell compact />
+                {brand && (
+                  <HideOn prefix="/setup">
+                    <AuditTrigger compact />
+                  </HideOn>
+                )}
+              </div>
             }
           />
 
@@ -89,22 +93,25 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                   "No client yet"
                 )}
               </div>
-              {brand && (
-                <HideOn prefix="/setup">
-                  <div className="flex items-center gap-2">
-                    <Link
-                      href="/engines"
-                      className="inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-700 shadow-sm transition hover:border-zinc-400"
-                      title={summary.title}
-                      aria-label={`Engines: ${summary.text}. Open the Engines page`}
-                    >
-                      <span className={`h-2 w-2 rounded-full ${DOT[summary.tone] || DOT.neutral}`} aria-hidden />
-                      <span className="tabular">{summary.text}</span>
-                    </Link>
-                    <AuditTrigger />
-                  </div>
-                </HideOn>
-              )}
+              <div className="flex items-center gap-2">
+                <ActionBell />
+                {brand && (
+                  <HideOn prefix="/setup">
+                    <div className="flex items-center gap-2">
+                      <Link
+                        href="/engines"
+                        className="inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-700 shadow-sm transition hover:border-zinc-400"
+                        title={summary.title}
+                        aria-label={`Engines: ${summary.text}. Open the Engines page`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${DOT[summary.tone] || DOT.neutral}`} aria-hidden />
+                        <span className="tabular">{summary.text}</span>
+                      </Link>
+                      <AuditTrigger />
+                    </div>
+                  </HideOn>
+                )}
+              </div>
             </header>
 
             <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-8 md:py-8">

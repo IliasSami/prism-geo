@@ -410,3 +410,43 @@ export function removeProfile(engine: ProfileEngine, account = DEFAULT_ACCOUNT):
   fs.rmSync(profileDir(engine, account), { recursive: true, force: true });
   lastErrors.delete(key);
 }
+
+/*
+ * Visitor profiles: a saved, logged-out browser for an engine with no signed-in account. A logged-out
+ * audit otherwise opens a fresh browser for every question, so a "verify you are human" check a
+ * person completed would be forgotten at once. Once a person has completed a check in the visitor
+ * profile's window (see check-window.ts), the crawler reuses that profile, as it does a signed-in
+ * one. It is named "visitor-<engine>", so it is never listed as an account.
+ */
+
+/** A completed check stops counting after this long; the next check is raised again. */
+const VISITOR_MAX_AGE_MS = 30 * 24 * 3_600_000;
+
+export interface VisitorMarker {
+  engine: ProfileEngine;
+  userAgent: string;
+  /** When a person last completed a check in this profile. */
+  checkedAt: string;
+}
+
+export function visitorProfileDir(engine: ProfileEngine): string {
+  return path.join(profilesRoot(), `visitor-${engine}`);
+}
+
+export function writeVisitorMarker(engine: ProfileEngine, userAgent: string, now = Date.now()): void {
+  const dir = visitorProfileDir(engine);
+  ensurePrivateDir(path.dirname(dir));
+  ensurePrivateDir(dir);
+  const marker: VisitorMarker = { engine, userAgent, checkedAt: new Date(now).toISOString() };
+  fs.writeFileSync(path.join(dir, MARKER_FILE), JSON.stringify(marker, null, 2), { mode: PRIVATE_FILE_MODE });
+}
+
+/** The visitor profile of an engine when a person completed a check in it recently, else null. */
+export function usableVisitorProfile(engine: ProfileEngine, now = Date.now()): VisitorMarker | null {
+  try {
+    const marker = JSON.parse(fs.readFileSync(path.join(visitorProfileDir(engine), MARKER_FILE), "utf8")) as VisitorMarker;
+    return marker.userAgent && now - Date.parse(marker.checkedAt) < VISITOR_MAX_AGE_MS ? marker : null;
+  } catch {
+    return null;
+  }
+}

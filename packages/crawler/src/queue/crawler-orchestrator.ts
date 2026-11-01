@@ -22,9 +22,23 @@ import { ChatGptEngineCrawler } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
 import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteLocation, countryCodeFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { connectionCountry, countryName, planRoutes } from "../engines/location";
-import { blockGroup, browserCoolingDown, recordBrowserBlock, recordBrowserSuccess, untilText } from "../engines/block-memory";
+import { blockGroup, browserCoolingDown, clearBrowserCooldown, recordBrowserBlock, recordBrowserSuccess, untilText } from "../engines/block-memory";
+import { canShowWindow, checkWindowState } from "../engines/check-window";
+import {
+  addPendingPrompts,
+  setPendingPrompts,
+  getActionRequest,
+  needsPerson,
+  openActionFor,
+  pageForAction,
+  personWaitMs,
+  raiseActionRequest,
+  setActionStatus,
+  waitForPerson,
+  type ActionKind,
+} from "./action-requests";
 import { fetchPublicPage } from "../net/safe-fetch";
-import { readProfile, verifyProfile, listAccounts, isProfileConnected, activeAccountLabel, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
+import { readProfile, verifyProfile, listAccounts, isProfileConnected, activeAccount, activeAccountLabel, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
 const isProfileEngine = (e: string): e is ProfileEngine => (PROFILE_ENGINES as string[]).includes(e);
 import { storeManualCapture, trackedEntitiesFor, type ManualCaptureInput, type ManualCaptureResult } from "./manual-capture";
 import { chromium, type Browser } from "playwright";
@@ -50,6 +64,8 @@ export interface CrawlBatchOptions {
   onStarted?: (batchId: string) => void;
   /** Multiplies the pause between queries (1 = normal human pacing). Only for tests and offline harnesses. */
   pacingScale?: number;
+  /** How long an engine waits for a person to complete a check or sign-in (default: personWaitMs()). */
+  personWaitMs?: number;
 }
 
 /** Why a run produced no stored answer. Persisted in crawl_batches.errors_json. */
@@ -64,6 +80,7 @@ export interface RunFailure {
     | "session_expired"
     | "wrong_location"
     | "cooling_down"
+    | "waiting_for_person"
     | "skipped_after_blocks"
     | "skipped_after_network"
     | "skipped_setup"
@@ -92,6 +109,8 @@ const SETUP_ERROR = /browserType\.launch(PersistentContext)?: Executable doesn't
 const MAX_CONSECUTIVE_BLOCKS = 2;
 /** Consecutive network failures after which an engine stops for this batch. */
 const MAX_CONSECUTIVE_NETWORK = 2;
+/** Times one engine waits for a person in one audit; a check that keeps coming back stops it after that. */
+const MAX_PERSON_HOLDS = 3;
 /** Successes after which a block-raised pacing factor is halved again. */
 const PACING_DECAY_AFTER = 3;
 /**
@@ -365,6 +384,8 @@ export class CrawlerOrchestrator {
     const brandId = options.brandId;
     const sampleSize = options.sampleSize || 5;
     const pacingScale = Math.max(0, options.pacingScale ?? 1);
+    // Without a screen nobody can open the window, so the request is raised but nothing waits for it
+    const waitForPersonMs = Math.max(0, options.personWaitMs ?? (canShowWindow() ? personWaitMs() : 0));
     const requestedEngines: EngineName[] = options.engines || [...ENGINE_IDS];
 
     // 1. Fetch brand and competitor configurations
@@ -424,11 +445,14 @@ export class CrawlerOrchestrator {
           kind: "session_expired",
           message: `The signed-in ${engine} session has expired or was signed out, so this audit ran logged out. Reconnect it on the Engines page.`,
         });
+        // Shown under the bell too; the engine is not held for it, since it can still answer logged out
+        raiseActionRequest({ brandId, batchId: options.batchId ?? null, engine, account: signedInBefore[0], kind: "sign_in", detail: "The saved session expired or was signed out" });
       }
     }
     // Which routes may answer each engine from the search location
-    // An engine whose browser blocked this computer recently rests until the block has passed
-    const resting = new Map(requestedEngines.map((engine) => [engine, browserCoolingDown(engine)] as const));
+    // An engine whose browser blocked this computer recently rests until the block has passed,
+    // unless a person is asked to clear it (see the bell): then the engine waits for them instead
+    const resting = new Map(requestedEngines.map((engine) => [engine, openActionFor(engine)?.kind === "human_check" ? null : browserCoolingDown(engine)] as const));
     const plans = new Map(
       requestedEngines.map((engine) => [
         engine,
@@ -587,6 +611,45 @@ export class CrawlerOrchestrator {
           };
           let firstQuery = true;
           let cooling: Promise<void> | null = null;
+          /** The request this engine is held on; questions it cannot ask are added to it. */
+          let heldOn: string | null = null;
+          let holdsUsed = 0;
+          let holding: Promise<boolean> | null = null;
+          /**
+           * Holds this engine until a person completes the request (true) or the wait ends (false).
+           * Parallel workers share one wait. The other engines keep running meanwhile.
+           */
+          const holdForPerson = (requestId: string, kind: ActionKind): Promise<boolean> =>
+            (holding ??= (async () => {
+              holdsUsed++;
+              heldOn = requestId;
+              const label = ENGINES[engine].label;
+              const step = kind === "sign_in" ? "sign in" : "complete a \"verify you are human\" check";
+              updateBatch(batchId, { currentEngine: engine, currentPrompt: `Waiting for you: ${label} asks you to ${step} (see the bell)` });
+              console.warn(`[CrawlerOrchestrator] ${engine} waits up to ${Math.round(waitForPersonMs / 60_000)} min for a person (${kind}, request ${requestId})`);
+              if (await waitForPerson(requestId, waitForPersonMs, { windowOpen: () => checkWindowState(engine).open })) {
+                // Done: this audit asks the held questions it has; any others wait for a resume
+                const asked = new Set(items.map((i) => i.prompt.id));
+                const left = (getActionRequest(requestId)?.pendingPromptIds || []).filter((id) => !asked.has(id));
+                setPendingPrompts(requestId, left);
+                setActionStatus(requestId, left.length ? "ready" : "resolved", "Completed during the audit");
+                clearBrowserCooldown(engine);
+                heldOn = null;
+                consecutiveBlocks = 0;
+                firstQuery = true;
+                return true;
+              }
+              const dismissed = getActionRequest(requestId)?.status === "dismissed";
+              if (dismissed) heldOn = null;
+              stopped = dismissed
+                ? { kind: "skipped_after_blocks", message: `Not run: ${label} asked for a person and the request was dismissed` }
+                : { kind: "waiting_for_person", message: `Not run yet: ${label} is waiting for you to ${step}. The question stays under the bell and is asked once you resume.` };
+              // Nobody cleared it: the next audits leave the browser route alone until someone does
+              if (!viaApi && !browserCoolingDown(engine)) recordBrowserBlock(engine, `${label} asked for a person (${kind})`);
+              return false;
+            })().finally(() => {
+              holding = null;
+            }));
           const items = (promptsFor.get(engine) || []).flatMap((prompt) => Array.from({ length: sampleSize }, (_, runIdx) => ({ prompt, runIdx })));
           // Paid routes take parallel requests; a browser engine stays one page at a time, human-paced
           const workers = viaApi ? apiConcurrency(engine, apiKeys) : 1;
@@ -595,6 +658,7 @@ export class CrawlerOrchestrator {
             if (!stopped && setupFailure && !viaApi) stopped = { kind: "skipped_setup", message: `Not run: ${setupFailure}` };
             if (stopped) {
               skipped++;
+              if (stopped.kind === "waiting_for_person" && heldOn) addPendingPrompts(heldOn, [prompt.id]);
               await recordFailure({ engine, promptId: prompt.id, kind: stopped.kind, message: stopped.message }, { quiet: true });
               return;
             }
@@ -653,9 +717,11 @@ export class CrawlerOrchestrator {
                 engineResult = await runEngine();
               } catch (firstErr) {
                 const kind = classifyFailure(engine, prompt.id, firstErr).kind;
+                // A check a person can clear is raised under the bell (below) instead of resting the route
+                const forPerson = kind === "blocked" && needsPerson((firstErr as Error).message) !== null && !(mode === "hybrid" && apiAllowed(engine));
                 // Google's blocks and an account's usage limit last hours: rest the browser route at once
                 // (other engines get the in-audit cool-downs first, see below)
-                if (!viaApi && kind === "blocked" && (blockGroup(engine) === "google_search" || /usage limit/i.test((firstErr as Error).message))) {
+                if (!viaApi && !forPerson && kind === "blocked" && (blockGroup(engine) === "google_search" || /usage limit/i.test((firstErr as Error).message))) {
                   const rest = recordBrowserBlock(engine, (firstErr as Error).message);
                   if (!(mode === "hybrid" && apiAllowed(engine)))
                     stopped = { kind: "cooling_down", message: `Not run: ${ENGINES[engine].label} blocked this computer's browser; PrismGEO waits until ${untilText(rest.until)} so the block is not extended` };
@@ -676,6 +742,27 @@ export class CrawlerOrchestrator {
               }
             } catch (runErr) {
               const failure = classifyFailure(engine, prompt.id, runErr);
+              // A human check or sign-in: hold this engine for a person, then ask the question again
+              const personKind = failure.kind === "blocked" && !viaApi ? needsPerson(failure.message) : null;
+              if (personKind && holdsUsed < MAX_PERSON_HOLDS) {
+                const request = raiseActionRequest({
+                  brandId,
+                  batchId,
+                  engine,
+                  account: activeAccount(engine) ?? "visitor",
+                  kind: personKind,
+                  detail: failure.message,
+                  pageUrl: pageForAction(engine, prompt.queryText),
+                  promptIds: [prompt.id],
+                });
+                if (await holdForPerson(request.id, personKind)) {
+                  items.push({ prompt, runIdx });
+                  return;
+                }
+                const reason = (stopped as { kind: RunFailure["kind"]; message: string } | null) ?? { kind: "waiting_for_person" as const, message: failure.message };
+                await recordFailure({ engine, promptId: prompt.id, kind: reason.kind, message: `${reason.message} (${failure.message})` });
+                return;
+              }
               await recordFailure(failure);
               consecutiveBlocks = failure.kind === "blocked" ? consecutiveBlocks + 1 : 0;
               consecutiveNetwork = failure.kind === "network" ? consecutiveNetwork + 1 : 0;
@@ -731,6 +818,14 @@ export class CrawlerOrchestrator {
               await recordFailure({ engine, promptId: prompt.id, kind: "error", message: `Persist failed: ${(persistErr as Error).message}` });
             }
           };
+
+          // A request still open from an earlier audit holds the browser route from the start, so the
+          // engine does not search into the same check again (a sign-in notice alone holds nothing)
+          const waiting = viaApi ? null : openActionFor(engine);
+          if (waiting && (waiting.kind === "human_check" || waiting.pendingPromptIds.length > 0)) {
+            raiseActionRequest({ brandId, batchId, engine, account: waiting.account, kind: waiting.kind });
+            await holdForPerson(waiting.id, waiting.kind);
+          }
 
           let next = 0;
           await Promise.all(

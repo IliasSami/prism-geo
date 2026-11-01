@@ -4,7 +4,7 @@ import path from "node:path";
 import { getDbPath, getSettings, ensurePrivateDir, PRIVATE_FILE_MODE } from "@prismgeo/db";
 import { canonicalUrl } from "@prismgeo/core";
 import { generateStealthProfile, STEALTH_INJECTION_SCRIPT, getChromiumExecutablePath } from "../stealth/fingerprint";
-import { readProfile, isProfileConnected, activeAccount, profileDir, PROFILE_ARGS, type ProfileEngine } from "./profiles";
+import { readProfile, isProfileConnected, activeAccount, profileDir, usableVisitorProfile, visitorProfileDir, PROFILE_ARGS, type ProfileEngine } from "./profiles";
 
 export interface ExtractedAnswer {
   text: string;
@@ -96,14 +96,17 @@ export async function withStealthPage<T>(
 ): Promise<T> {
   // The account audits use: the first one with a verified session (none → a logged-out page)
   const account = options.profile ? activeAccount(options.profile) : null;
-  const marker = options.profile && account ? readProfile(options.profile, account) : null;
+  const signedIn = options.profile && account ? readProfile(options.profile, account) : null;
+  // Logged out: the visitor profile where a person completed a human check, so the check is kept
+  const visitor = !signedIn && options.profile ? usableVisitorProfile(options.profile) : null;
+  const marker = signedIn || visitor;
   let context: BrowserContext;
   let browser: Browser | null = null;
   let ownBrowser = false;
 
   if (marker && options.profile) {
     // A persistent profile has its own browser process; one engine uses it at a time
-    context = await chromium.launchPersistentContext(profileDir(options.profile, account ?? undefined), {
+    context = await chromium.launchPersistentContext(signedIn ? profileDir(options.profile, account ?? undefined) : visitorProfileDir(options.profile), {
       headless: true,
       executablePath: getChromiumExecutablePath(),
       args: PROFILE_ARGS,

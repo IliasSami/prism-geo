@@ -229,14 +229,21 @@ test("a Google block rests the browser route across audits instead of searching 
     searches++;
     throw new EngineBlockedError('[GoogleAioCrawler] Blocked by engine ("unusual traffic")');
   };
-  const b1 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["google_aio"], sampleSize: 1, promptIds: ids, pacingScale: 0 });
+  // Google's "unusual traffic" page is a check a person can clear: it is raised under the bell,
+  // and with nobody there to clear it (no wait) the route rests as before
+  const b1 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["google_aio"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 0 });
   const e1 = JSON.parse((sqlite.prepare("SELECT errors_json FROM crawl_batches WHERE id = ?").get(b1) as any).errors_json) as any[];
   assert.equal(searches, 1, "one blocked search, not one per question");
-  assert.deepEqual(e1.map((e) => e.kind), ["blocked", "cooling_down", "cooling_down", "cooling_down", "cooling_down"]);
+  assert.deepEqual(e1.map((e) => e.kind), ["waiting_for_person", "waiting_for_person", "waiting_for_person", "waiting_for_person", "waiting_for_person"]);
   const rest = browserCoolingDown("google_ai_mode");
   assert.ok(rest, "AI Mode shares Google Search's rest period");
   assert.ok(Date.parse(rest!.until) - Date.now() > 55 * 60_000, "about an hour after the first block");
-
+  const { listActionRequests, setActionStatus } = await import("../src/queue/action-requests");
+  const [request] = listActionRequests();
+  assert.equal(request.engine, "google_aio");
+  assert.match(request.pageUrl!, /^https:\/\/www\.google\.com\/search\?q=/, "the window opens on the blocked search");
+  // Dismissed: nobody will clear it, so the engine is back to resting
+  setActionStatus(request.id, "dismissed");
   // The next audit leaves Google alone and says until when
   const b2 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["google_aio"], sampleSize: 1, promptIds: ids, pacingScale: 0 });
   const e2 = JSON.parse((sqlite.prepare("SELECT errors_json FROM crawl_batches WHERE id = ?").get(b2) as any).errors_json) as any[];

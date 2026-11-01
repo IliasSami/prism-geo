@@ -39,7 +39,12 @@ const COPILOT_REASON = "Copilot needs a signed-in session (Settings → Engines 
  * Starts a crawl batch for a brand in this process: checks the per-brand lock, picks the engines,
  * writes the batch row and runs the orchestrator in the background. Returns the response body.
  */
-export function startCrawl(brand: BrandRecord, input: CrawlStartInput): CrawlStartResult {
+export function startCrawl(
+  brand: BrandRecord,
+  input: CrawlStartInput,
+  /** Ask exactly these questions per engine (resuming the ones a request held), not all of them. */
+  only?: { promptIdsByEngine: Partial<Record<EngineId, string[]>> }
+): CrawlStartResult {
   const sqlite = getRawDb();
 
   // Unknown engine ids are an input error, not something to drop silently
@@ -91,7 +96,9 @@ export function startCrawl(brand: BrandRecord, input: CrawlStartInput): CrawlSta
   const sampleSize = input.sampleSize ?? (Number.isInteger(savedSample) ? Math.min(20, Math.max(1, savedSample)) : 1);
   const promptLimit = input.promptLimit ?? undefined;
   const promptCount = promptLimit ? Math.min(activePrompts, promptLimit) : activePrompts;
-  const totalRuns = promptCount * engines.length * sampleSize;
+  const totalRuns = only
+    ? engines.reduce((n, e) => n + (only.promptIdsByEngine[e]?.length || 0), 0) * sampleSize
+    : promptCount * engines.length * sampleSize;
 
   const batchId = `batch-${crypto.randomUUID()}`;
   sqlite
@@ -102,7 +109,7 @@ export function startCrawl(brand: BrandRecord, input: CrawlStartInput): CrawlSta
     .run(batchId, brand.id, sampleSize, totalRuns, new Date().toISOString());
 
   // Runs in the background; progress is read through /api/crawl/status
-  CrawlerOrchestrator.executeBatch({ batchId, brandId: brand.id, sampleSize, engines, promptLimit }).catch((err) => {
+  CrawlerOrchestrator.executeBatch({ batchId, brandId: brand.id, sampleSize, engines, promptLimit, promptIdsByEngine: only?.promptIdsByEngine }).catch((err) => {
     // Another start (scheduler, CLI, a second tab) took the brand's lock between the check above
     // and the orchestrator claiming this row: close the row instead of leaving it "running"
     if (err instanceof BatchRunningError) {

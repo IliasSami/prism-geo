@@ -2,6 +2,14 @@
 
 All notable changes to PrismGEO are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### New
+
+- **Notification bell for steps only a person can take.** When an engine shows a "verify you are human" check or needs a sign-in, that engine waits (15 minutes by default, `PRISMGEO_PERSON_WAIT_MIN`) while the others keep running, and the bell shows the request. **Open window** opens the crawler's own saved profile so you complete the step yourself; the waiting question is then asked again and the audit finishes without errors. Questions not asked in time stay on the request and **Resume** asks exactly those. PrismGEO still never answers a check itself; rate and usage limits rest the engine as before. Optional desktop alerts.
+- Logged-out engines keep a check you completed in a "visitor" profile, so later logged-out runs do not hit the same check again at once.
+- New failure reason `waiting_for_person` ("waiting for you to complete a human check or sign-in") in reports and on the Engines page.
+
 ## 1.0.0-beta.2 (2026-10-31)
 
 ### New

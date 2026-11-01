@@ -1,0 +1,102 @@
+import fs from "node:fs";
+import path from "node:path";
+import { chromium, type BrowserContext } from "playwright";
+import { ensurePrivateDir } from "@prismgeo/db";
+import { getChromiumExecutablePath } from "../stealth/fingerprint";
+import { assertNotBlocked, getProxyConfig, EngineBlockedError } from "./browser-session";
+import { activeAccount, profileDir, visitorProfileDir, writeVisitorMarker, PROFILE_ARGS, type ProfileEngine } from "./profiles";
+
+/**
+ * A visible browser window where a person completes a human check themselves.
+ *
+ * It opens the same saved profile the crawler uses for the engine (the signed-in account, or the
+ * visitor profile when there is none) and the same proxy, so what the person completes is what the
+ * crawler sees next. PrismGEO only watches whether the page still shows a check; it never clicks,
+ * types or answers anything in it.
+ */
+
+/**
+ * Whether this machine can show a browser window to the person using it. Linux needs an X11 or
+ * Wayland display; a Docker container never has one (macOS and Windows always do).
+ */
+export function canShowWindow(): boolean {
+  if (fs.existsSync("/.dockerenv") || process.env.PRISMGEO_IN_DOCKER === "1") return false;
+  if (process.platform !== "linux") return true;
+  return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+}
+
+interface WindowState {
+  /** The page in front no longer shows a check. */
+  cleared: boolean;
+  close: () => Promise<void>;
+}
+
+const g = globalThis as typeof globalThis & { __prismCheckWindows?: Map<string, WindowState> };
+const windows = (g.__prismCheckWindows ??= new Map<string, WindowState>());
+
+/** Whether a check window is open for the engine, and whether the check is gone from it. */
+export function checkWindowState(engine: string): { open: boolean; cleared: boolean } {
+  const w = windows.get(engine);
+  return { open: Boolean(w), cleared: w?.cleared === true };
+}
+
+/** Closes the engine's check window (the person said they are done). */
+export async function closeCheckWindow(engine: string): Promise<void> {
+  await windows.get(engine)?.close();
+}
+
+/** Whether the page shows a check or wall: assertNotBlocked's signals, without its usage-limit case. */
+async function showsCheck(context: BrowserContext): Promise<boolean | null> {
+  const page = context.pages().at(-1);
+  if (!page) return null;
+  try {
+    await assertNotBlocked(page, "CheckWindow");
+    return false;
+  } catch (err) {
+    // A closing page throws other errors: keep the last reading
+    return err instanceof EngineBlockedError ? !/usage limit/i.test(err.message) : null;
+  }
+}
+
+/**
+ * Opens the window on `url` and resolves when the person closes it. `cleared` tells whether the
+ * last page they saw was free of checks. A check completed in the visitor profile is remembered,
+ * so logged-out audits reuse that profile from then on.
+ */
+export async function openCheckWindow(engine: ProfileEngine, url: string): Promise<{ cleared: boolean }> {
+  if (windows.has(engine)) throw new Error(`A window for ${engine} is already open`);
+  const account = activeAccount(engine);
+  const dir = account ? profileDir(engine, account) : visitorProfileDir(engine);
+  const state: WindowState = { cleared: false, close: async () => {} };
+  windows.set(engine, state);
+  let poll: ReturnType<typeof setInterval> | null = null;
+  try {
+    ensurePrivateDir(path.dirname(dir));
+    ensurePrivateDir(dir);
+    const context = await chromium.launchPersistentContext(dir, {
+      headless: false,
+      executablePath: getChromiumExecutablePath(),
+      viewport: null,
+      args: PROFILE_ARGS,
+      ignoreDefaultArgs: ["--enable-automation"],
+      proxy: getProxyConfig(),
+    });
+    state.close = () => context.close().catch(() => undefined);
+    const closed = new Promise<void>((resolve) => context.on("close", () => resolve()));
+    const page = context.pages()[0] || (await context.newPage());
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => null);
+    const userAgent = ((await page.evaluate(() => navigator.userAgent).catch(() => "")) as string) || "";
+    const check = async () => {
+      const shown = await showsCheck(context);
+      if (shown !== null) state.cleared = !shown;
+    };
+    await check();
+    poll = setInterval(check, 2000);
+    await closed;
+    if (state.cleared && !account && userAgent) writeVisitorMarker(engine, userAgent);
+    return { cleared: state.cleared };
+  } finally {
+    if (poll) clearInterval(poll);
+    windows.delete(engine);
+  }
+}

@@ -42,6 +42,7 @@ export const KIND_PHRASE: Record<string, string> = {
   session_expired: "signed-in session expired; ran logged out",
   wrong_location: "not run: would have searched from outside the search location",
   cooling_down: "not run: resting after the engine blocked this computer",
+  waiting_for_person: "waiting for you to complete a human check or sign-in (see the bell)",
   error: "unexpected error",
 };
 
@@ -121,6 +122,13 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
         next: "The engine blocked this computer's browser, so PrismGEO leaves it alone for a while (longer after each block in a row) instead of extending the block. A key or the data provider still answers in the meantime.",
         href: "/settings?tab=engines",
         cta: "Add a key",
+      };
+    case "waiting_for_person":
+      return {
+        title: `${list} waiting for you`,
+        next: "The engine asked for a “verify you are human” check or a sign-in, which PrismGEO never answers itself. Open the bell at the top of the page, open the window, complete it yourself, then resume: the waiting questions are asked again.",
+        href: onEngines ? "#sessions" : "/engines#sessions",
+        cta: "Connect a session",
       };
     case "wrong_location":
       return {

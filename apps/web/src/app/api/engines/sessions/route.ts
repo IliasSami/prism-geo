@@ -1,6 +1,5 @@
-import fs from "node:fs";
 import { NextResponse } from "next/server";
-import { accountIdFrom, getProfileStatuses, openSignInWindow, removeProfile, verifyProfile, DEFAULT_ACCOUNT, PROFILE_ENGINES, type ProfileEngine } from "@prismgeo/crawler";
+import { accountIdFrom, canShowWindow, getProfileStatuses, openSignInWindow, removeProfile, verifyProfile, DEFAULT_ACCOUNT, PROFILE_ENGINES, type ProfileEngine } from "@prismgeo/crawler";
 import { jsonError, readJsonObject, route } from "../../_lib/http";
 
 export const dynamic = "force-dynamic";
@@ -18,19 +17,9 @@ function parseAccount(body: Record<string, unknown> | null): string | null {
 const labelOf = (body: Record<string, unknown> | null) => (typeof body?.label === "string" ? body.label.trim().slice(0, 60) : undefined);
 const isOpen = (engine: string, account: string) => getProfileStatuses().some((s) => s.engine === engine && s.account === account && s.connecting);
 
-/**
- * Whether this server can show a browser window to the person using it. Linux needs an X11 or
- * Wayland display; a Docker container never has one (macOS and Windows always do).
- */
-function hasDisplay(): boolean {
-  if (fs.existsSync("/.dockerenv") || process.env.PRISMGEO_IN_DOCKER === "1") return false;
-  if (process.platform !== "linux") return true;
-  return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
-}
-
 /** Signed-in browser session status per engine. */
 export const GET = route("engines/sessions GET", async () => {
-  return NextResponse.json({ sessions: getProfileStatuses(), canOpenWindow: hasDisplay() });
+  return NextResponse.json({ sessions: getProfileStatuses(), canOpenWindow: canShowWindow() });
 });
 
 /**
@@ -52,7 +41,7 @@ export const POST = route("engines/sessions POST", async (request: Request) => {
     if (!result) return jsonError("That session cannot be checked right now (nothing saved, or the browser profile is in use by an audit).", 409);
     return NextResponse.json({ success: true, engine, account, ...result });
   }
-  if (!hasDisplay()) {
+  if (!canShowWindow()) {
     return jsonError(
       "This server has no screen to open a sign-in window on (a headless server or Docker). Signed-in sessions need PrismGEO running on a desktop; here, engines run logged out and Copilot stays off.",
       501,

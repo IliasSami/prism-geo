@@ -305,6 +305,7 @@ const FAILURE_BUCKET: Record<string, keyof FailureCounts | null> = {
   session_expired: null,
   wrong_location: null,
   cooling_down: "skipped",
+  waiting_for_person: "skipped",
 };
 
 export function buildVisibilityReport(input: ReportInput): Report {

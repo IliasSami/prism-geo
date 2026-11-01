@@ -93,6 +93,17 @@ The **PrismGEO Capture** browser extension (`apps/extension`) saves the answer y
 
 The crawler paces queries per engine, slows down after a block, cools down for 10/20/30 minutes and retries, and only then gives up on that engine for the batch. In browser mode it presents a consistent desktop Chrome profile and hides the `navigator.webdriver` automation flag; it does not solve CAPTCHAs, rotate IPs or retry past a block. Check each engine's terms before automating it, and prefer the API routes above where you can.
 
+### When an engine asks for a person (the bell)
+
+Some blocks are steps only a person can take: a "verify you are human" check (Cloudflare, Google's "unusual traffic" page) or a sign-in (an expired session, a logged-out wall). PrismGEO never answers these itself. Instead:
+
+1. The engine that asked **waits** (15 minutes by default, `PRISMGEO_PERSON_WAIT_MIN` to change it, `0` to never wait); the other engines keep running.
+2. The **bell** at the top of the dashboard shows the request, with the questions waiting on it. Turn on "Alert me on this computer" to get a desktop notification.
+3. **Open window** opens a visible browser on the same saved profile and proxy the crawler uses. Complete the check or sign in yourself, then close the window. PrismGEO only watches whether the check is still shown.
+4. The waiting engine asks the question again and carries on, so the audit finishes with nothing missing. If nobody came in time, the questions stay on the request: **Resume** asks exactly those once you have completed it. Rate limits and usage limits are not raised: they end by themselves, so the engine rests instead.
+
+Without a signed-in account, a completed check is kept in a separate logged-out "visitor" profile that later logged-out runs reuse (a fresh browser per question would forget it). On a server without a screen (Docker, headless Linux) the request is still shown, but nothing waits for it; use a key or provider route there.
+
 ## Quick start
 
 Works on macOS, Windows and Linux. Requirements: [Node.js](https://nodejs.org) 22.13 or later (PrismGEO uses the built-in `node:sqlite`) and pnpm 10. If you don't have pnpm, run `corepack enable` once (it ships with Node).
