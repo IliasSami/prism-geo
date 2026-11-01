@@ -243,6 +243,17 @@ export const engineSettingsSchema = z.strictObject({
     .optional(),
 });
 
+/**
+ * The message for a key that cannot work, or null. DataForSEO authenticates with the API login
+ * and password from app.dataforseo.com/api-access, sent as login:password.
+ */
+export function byokKeyError(provider: string, key: string): string | null {
+  if (provider === "dataforseo" && key && !/^[^:\s]+:\S+$/.test(key)) {
+    return "DataForSEO: enter your API login and password as login:password (from app.dataforseo.com/api-access)";
+  }
+  return null;
+}
+
 /** Saved API keys: "" or null clears one; a masked value ("sk-…••••1234") means unchanged. */
 export const byokSchema = z.strictObject(
   Object.fromEntries(

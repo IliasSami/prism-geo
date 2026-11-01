@@ -93,6 +93,14 @@ function browserTimeZone(): string {
   }
 }
 
+/** GETs JSON; a non-ok answer rejects with the server's message. */
+async function readJson(url: string): Promise<any> {
+  const res = await fetch(url, { cache: "no-store" });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data || typeof data !== "object") throw new Error(data?.error || `Could not load settings (${res.status}).`);
+  return data;
+}
+
 export default function SettingsPage() {
   return (
     <Suspense fallback={null}>
@@ -133,8 +141,13 @@ function Settings() {
   const set = <K extends keyof Snapshot>(key: K, patch: Partial<Snapshot[K]>) =>
     setDraft((d) => ({ ...d, [key]: { ...d[key], ...patch } }));
 
-  useEffect(() => {
-    Promise.all([fetch("/api/brands").then((r) => r.json()), fetch("/api/settings").then((r) => r.json())])
+  // A failed load must never show the form: it would start from EMPTY, and saving it would clear
+  // every API key, the proxy and the schedule
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    Promise.all([readJson("/api/brands"), readJson("/api/settings")])
       .then(([brandData, s]) => {
         const active = brandData.activeBrand || brandData.brands?.find((b: any) => b.id === brandData.activeBrandId);
         setBrands(brandData.brands || []);
@@ -159,9 +172,10 @@ function Settings() {
         setInitial(snap);
         setDraft(snap);
       })
-      .catch(() => setToast({ type: "error", message: "Could not load settings" }))
+      .catch((e: Error) => setLoadError(e.message || "Could not load settings"))
       .finally(() => setLoading(false));
   }, []);
+  useEffect(() => load(), [load]);
 
   // Leaving the page with unsaved edits asks first
   useEffect(() => {
@@ -194,6 +208,7 @@ function Settings() {
   }
 
   async function save() {
+    if (loading || loadError) return;
     setSaving(true);
     try {
       const res = await fetch("/api/settings", {
@@ -222,7 +237,9 @@ function Settings() {
       }
 
       // Re-read so masked keys and saved-key badges reflect what is stored
-      const fresh = await fetch("/api/settings", { cache: "no-store" }).then((r) => r.json());
+      const fresh = await readJson("/api/settings").catch(() => {
+        throw new Error("Settings were saved, but could not be read back. Reload the page before editing again.");
+      });
       setSavedKeys(fresh.hasRawByok || {});
       const next = { ...draft, byok: { ...EMPTY.byok, ...(fresh.byok || {}) }, crawler: { ...EMPTY.crawler, ...(fresh.crawler || {}) } };
       setInitial(next);
@@ -253,6 +270,20 @@ function Settings() {
         <div className="space-y-4 pt-6" aria-busy="true" aria-label="Loading settings">
           <div className="skeleton h-40 w-full" />
           <div className="skeleton h-56 w-full" />
+        </div>
+      ) : loadError ? (
+        <div className="pt-6">
+          <Notice
+            tone="danger"
+            title="Settings could not be loaded"
+            action={
+              <Button size="sm" onClick={load}>
+                Retry
+              </Button>
+            }
+          >
+            {loadError} Nothing can be saved until they load, so your saved keys and schedule stay as they are.
+          </Notice>
         </div>
       ) : (
         <>

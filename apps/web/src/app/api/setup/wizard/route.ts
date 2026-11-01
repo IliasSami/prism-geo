@@ -7,6 +7,7 @@ import { jsonError, parseBody, route } from "../../_lib/http";
 import { setActiveBrandCookie } from "../../_lib/brand";
 import {
   LIMITS,
+  byokKeyError,
   byokSchema,
   categorySchema,
   competitorSchema,
@@ -61,6 +62,12 @@ export const POST = route("setup/wizard", async (request: Request) => {
   if (!parsed.ok) return parsed.response;
   const { brand, competitors = [], prompts, promptLimit, byok, engines, crawler } = parsed.data;
   const sqlite = getRawDb();
+
+  // Checked before anything is written, like in Settings
+  for (const [provider, value] of Object.entries(byok ?? {})) {
+    const keyError = typeof value === "string" && !value.includes("••••") ? byokKeyError(provider, value.trim()) : null;
+    if (keyError) return jsonError(keyError, 400);
+  }
 
   if (sqlite.prepare("SELECT 1 FROM brands WHERE domain = ?").get(brand.domain)) {
     return jsonError(`A client with the domain ${brand.domain} already exists. Switch to it in the client menu.`, 409);
@@ -124,20 +131,20 @@ export const POST = route("setup/wizard", async (request: Request) => {
       insertPrompt.run(`prm-${crypto.randomBytes(6).toString("hex")}`, brandId, p.queryText, p.intentType ?? "category", p.personaDimension ?? "buyer", now);
     }
 
-    const save = sqlite.prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)");
+    const save = sqlite.prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES (?, ?, ?)");
     if (byok) {
       const keys = { ...getSettings<Record<string, string>>("byok_api_keys", {}) };
       for (const [provider, value] of Object.entries(byok)) {
         // Only new keys are saved here; clearing keys is done in Settings
         if (typeof value === "string" && value.trim() && !value.includes("••••")) keys[provider] = value.trim();
       }
-      save.run("byok_api_keys", JSON.stringify(keys));
+      save.run("byok_api_keys", JSON.stringify(keys), now);
     }
     if (engines) {
-      save.run("engine_settings", JSON.stringify({ ...getSettings<Record<string, unknown>>("engine_settings", {}), ...engines }));
+      save.run("engine_settings", JSON.stringify({ ...getSettings<Record<string, unknown>>("engine_settings", {}), ...engines }), now);
     }
     if (crawler?.sampleSize !== undefined) {
-      save.run("crawler_settings", JSON.stringify({ ...getSettings<Record<string, unknown>>("crawler_settings", {}), sampleSize: crawler.sampleSize }));
+      save.run("crawler_settings", JSON.stringify({ ...getSettings<Record<string, unknown>>("crawler_settings", {}), sampleSize: crawler.sampleSize }), now);
     }
     setActiveBrand(brandId);
     sqlite.exec("COMMIT");

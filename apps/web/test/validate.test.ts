@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  byokKeyError,
   byokSchema,
   categorySchema,
   dedupePrompts,
@@ -77,8 +78,20 @@ test("secrets are masked to at most the last 4 characters", () => {
   assert.equal(masked, "http://user:••••@proxy.example.com:8080/");
   assert.ok(!masked.includes("hunter2"));
   assert.equal(unmaskProxyUrl(masked, "http://user:hunter2@proxy.example.com:8080"), "http://user:hunter2@proxy.example.com:8080/");
-  assert.equal(unmaskProxyUrl("http://user:••••@other.example.com:9090", "http://user:hunter2@proxy.example.com:8080"), "http://user:hunter2@other.example.com:9090/");
+  // The saved password is kept for a new port, never for another host or user
+  assert.equal(unmaskProxyUrl("http://user:••••@proxy.example.com:9090", "http://user:hunter2@proxy.example.com:8080"), "http://user:hunter2@proxy.example.com:9090/");
+  assert.equal(unmaskProxyUrl("http://user:••••@other.example.com:9090", "http://user:hunter2@proxy.example.com:8080"), null);
+  assert.equal(unmaskProxyUrl("http://admin:••••@proxy.example.com:8080", "http://user:hunter2@proxy.example.com:8080"), null);
+  assert.equal(unmaskProxyUrl("http://user:••••@proxy.example.com:8080", ""), null);
+  assert.equal(unmaskProxyUrl("••••", "not a url"), "not a url");
   assert.equal(unmaskProxyUrl("http://new:pass@proxy.example.com:1", "http://user:hunter2@proxy.example.com:8080"), "http://new:pass@proxy.example.com:1");
+});
+
+test("a DataForSEO key must be login:password", () => {
+  assert.match(byokKeyError("dataforseo", "just-a-key") || "", /login:password/);
+  assert.equal(byokKeyError("dataforseo", "me@example.com:s3cret"), null);
+  assert.equal(byokKeyError("dataforseo", ""), null);
+  assert.equal(byokKeyError("openai", "sk-anything"), null);
 });
 
 test("CSV cells neutralise formulas, also after spaces and in full-width form", () => {

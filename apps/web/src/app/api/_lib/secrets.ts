@@ -28,16 +28,21 @@ export function maskProxyUrl(value: string): string {
 
 /**
  * The proxy URL to save when the browser sends `value`. A masked password is replaced by the
- * saved one, so the user can change the host or port without retyping the password.
+ * saved one only while the host name and user name stay the same (the port may change), so the
+ * saved password is never sent to a different proxy. null: the password must be entered again.
  */
-export function unmaskProxyUrl(value: string, saved: string): string {
+export function unmaskProxyUrl(value: string, saved: string): string | null {
   if (!isMasked(value)) return value;
+  // The unreadable saved URL comes back as the bare mask: unchanged
+  if (value.trim() === MASK) return saved;
   try {
     const url = new URL(value.replace(`:${MASK}@`, ":MASKED@"));
+    if (url.password !== "MASKED") return null;
     const previous = new URL(saved);
-    if (url.password === "MASKED") url.password = previous.password;
+    if (url.hostname !== previous.hostname || url.username !== previous.username) return null;
+    url.password = previous.password;
     return url.toString();
   } catch {
-    return saved;
+    return null;
   }
 }

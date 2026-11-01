@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCalibration, requestCalibration } from "@prismgeo/crawler";
-import { brandFromRequest } from "../../../_lib/brand";
+import { brandFromRequest, findBrand } from "../../../_lib/brand";
 import { jsonError, readJsonObject, route } from "../../../_lib/http";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +15,9 @@ export const GET = route("engines/location/calibrate GET", async () => NextRespo
 export const POST = route("engines/location/calibrate POST", async (request: Request) => {
   // { brandId } (from the MCP connector), else the client selected in the app
   const body = await readJsonObject(request);
-  const brandId = typeof body?.brandId === "string" && /^[\w-]{1,80}$/.test(body.brandId) ? body.brandId : brandFromRequest(request)?.id;
+  const asked = typeof body?.brandId === "string" && /^[\w-]{1,80}$/.test(body.brandId) ? body.brandId : undefined;
+  const brandId = asked ? findBrand(asked)?.id : brandFromRequest(request)?.id;
+  if (asked && !brandId) return jsonError("No such client", 404);
   if (!brandId) return jsonError("Add a client with questions first", 400);
   // Runs now when it can; otherwise it waits (no reference route yet, or Google resting) and starts by itself
   const calibration = requestCalibration(brandId);

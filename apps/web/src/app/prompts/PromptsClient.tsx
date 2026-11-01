@@ -88,11 +88,12 @@ export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: 
     try {
       const msg = await fn();
       if (msg) setNotice({ ok: true, text: msg });
-      router.refresh();
     } catch (err) {
       setNotice({ ok: false, text: (err as Error).message });
     } finally {
       setBusy(null);
+      // Also after a failure: part of a bulk change may have been saved
+      router.refresh();
     }
   };
 
@@ -134,18 +135,20 @@ export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: 
     const label = kind === "delete" ? "Deleting" : kind === "pause" ? "Pausing" : "Resuming";
     run("bulk", async () => {
       let failed = 0;
+      let firstError = "";
       for (let i = 0; i < ids.length; i++) {
         setProgress({ done: i, total: ids.length, label });
         try {
           await (kind === "delete" ? call("DELETE", { id: ids[i] }) : call("PATCH", { id: ids[i], active: kind === "resume" }));
-        } catch {
+        } catch (err) {
           failed++;
+          firstError ||= err instanceof Error ? err.message : String(err);
         }
       }
       setProgress(null);
       setSelected(new Set());
       const verb = kind === "delete" ? "Deleted" : kind === "pause" ? "Paused" : "Resumed";
-      if (failed) throw new Error(`${verb} ${ids.length - failed} of ${ids.length}; ${failed} failed`);
+      if (failed) throw new Error(`${verb} ${ids.length - failed} of ${ids.length}; ${failed} failed: ${firstError}`);
       return `${verb} ${ids.length} prompt${ids.length === 1 ? "" : "s"}`;
     });
   };

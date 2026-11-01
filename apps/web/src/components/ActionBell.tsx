@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { Bell } from "lucide-react";
-import { Badge, Button, cn, formatWhen, plural } from "./ui";
+import { Badge, Button, cn, plural } from "./ui";
+import { LocalTime } from "./LocalTime";
 
 /** One step only a person can take, as GET /api/actions returns it. */
 interface Action {
@@ -26,52 +27,106 @@ const KIND_LABEL = { human_check: "Human check", sign_in: "Sign-in" } as const;
 const POLL_MS = 4000;
 
 /**
+ * One store for every bell on the page (the mobile bar and the desktop header both mount one), so
+ * the list is polled once and each new request raises at most one desktop alert.
+ */
+interface Snapshot {
+  actions: Action[];
+  canOpenWindow: boolean;
+  /** False until the first answer: the bell does not claim "nothing needs you" before it knows. */
+  loaded: boolean;
+}
+
+const INITIAL: Snapshot = { actions: [], canOpenWindow: true, loaded: false };
+let snapshot: Snapshot = INITIAL;
+const listeners = new Set<() => void>();
+/** Ids seen in the last answer; null before the first, so existing requests do not alert. */
+let seen: Set<string> | null = null;
+/** Each load gets a number; an answer older than one already applied is dropped. */
+let requested = 0;
+let applied = 0;
+let timer: ReturnType<typeof setInterval> | null = null;
+
+const alertsGranted = () => typeof Notification !== "undefined" && Notification.permission === "granted";
+
+async function loadActions(): Promise<void> {
+  const seq = ++requested;
+  let data: { actions: Action[]; canOpenWindow: boolean } | null = null;
+  try {
+    const res = await fetch("/api/actions", { cache: "no-store" });
+    if (res.ok) data = (await res.json()) as { actions: Action[]; canOpenWindow: boolean };
+  } catch {
+    // Offline or the server is restarting: the next poll tries again
+  }
+  if (!data || !Array.isArray(data.actions) || seq < applied) return;
+  applied = seq;
+  snapshot = { actions: data.actions, canOpenWindow: data.canOpenWindow !== false, loaded: true };
+  listeners.forEach((l) => l());
+  // A new request while the dashboard is in the background: a desktop alert, when allowed
+  if (seen) {
+    const fresh = data.actions.filter((a) => a.status === "open" && !seen!.has(a.id));
+    if (fresh.length && alertsGranted() && document.visibilityState !== "visible") {
+      new Notification("PrismGEO needs you", { body: `${fresh[0].engineLabel}: ${KIND_LABEL[fresh[0].kind].toLowerCase()}. The engine waits until you complete it.`, tag: "prismgeo-actions" });
+    }
+  }
+  seen = new Set(data.actions.map((a) => a.id));
+}
+
+// In the background only when desktop alerts are on; otherwise the next look refreshes it
+const tick = () => {
+  if (document.visibilityState === "visible" || alertsGranted()) void loadActions();
+};
+const onVisible = () => {
+  if (document.visibilityState === "visible") void loadActions();
+};
+
+/** Polls while at least one bell is mounted. */
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  if (listeners.size === 1) {
+    void loadActions();
+    timer = setInterval(tick, POLL_MS);
+    document.addEventListener("visibilitychange", onVisible);
+  }
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      if (timer) clearInterval(timer);
+      timer = null;
+      document.removeEventListener("visibilitychange", onVisible);
+    }
+  };
+}
+
+const getSnapshot = () => snapshot;
+const getServerSnapshot = () => INITIAL;
+
+/**
  * The bell in the header: steps only a person can take (a "verify you are human" check, an expired
  * sign-in). The engine that asked waits for them while the other engines keep running; the person
  * opens a window, completes the step themselves, and the audit carries on.
  */
 export function ActionBell({ compact = false }: { compact?: boolean }) {
-  const [actions, setActions] = useState<Action[]>([]);
-  const [canOpenWindow, setCanOpenWindow] = useState(true);
+  const { actions, canOpenWindow, loaded } = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<NotificationPermission | "unsupported">("unsupported");
-  const seen = useRef<Set<string> | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
-
-  const load = useCallback(async () => {
-    const res = await fetch("/api/actions", { cache: "no-store" }).catch(() => null);
-    if (!res?.ok) return;
-    const data = (await res.json()) as { actions: Action[]; canOpenWindow: boolean };
-    setActions(data.actions);
-    setCanOpenWindow(data.canOpenWindow);
-    // A new request while the dashboard is in the background: a desktop alert, when allowed
-    const ids = new Set(data.actions.map((a) => a.id));
-    if (seen.current) {
-      const fresh = data.actions.filter((a) => a.status === "open" && !seen.current!.has(a.id));
-      if (fresh.length && typeof Notification !== "undefined" && Notification.permission === "granted" && document.visibilityState !== "visible") {
-        new Notification("PrismGEO needs you", { body: `${fresh[0].engineLabel}: ${KIND_LABEL[fresh[0].kind].toLowerCase()}. The engine waits until you complete it.`, tag: "prismgeo-actions" });
-      }
-    }
-    seen.current = ids;
-  }, []);
+  const panel = useRef<HTMLDivElement>(null);
+  const panelId = useId();
 
   useEffect(() => {
     setAlerts(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
-    load();
-    // In the background only when desktop alerts are on; otherwise the next look refreshes it
-    const t = setInterval(() => {
-      if (document.visibilityState === "visible" || (typeof Notification !== "undefined" && Notification.permission === "granted")) load();
-    }, POLL_MS);
-    const onVisible = () => document.visibilityState === "visible" && load();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearInterval(t);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [load]);
+  }, []);
+
+  // Moves focus into the panel when it opens: its first control, or the panel itself
+  useEffect(() => {
+    if (!open) return;
+    const first = panel.current?.querySelector<HTMLElement>("button:not([disabled]), summary, a[href]");
+    (first || panel.current)?.focus();
+  }, [open]);
 
   // Closes on Escape and on a click outside, returning focus to the bell
   useEffect(() => {
@@ -99,7 +154,9 @@ export function ActionBell({ compact = false }: { compact?: boolean }) {
     try {
       const res = await fetch("/api/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, action }) });
       if (!res.ok) setError(((await res.json().catch(() => null)) as { error?: string } | null)?.error || "That did not work. Try again.");
-      await load();
+      await loadActions();
+    } catch {
+      setError("Could not reach PrismGEO. Check that it is still running, then try again.");
     } finally {
       setBusy(null);
     }
@@ -116,8 +173,9 @@ export function ActionBell({ compact = false }: { compact?: boolean }) {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label={count ? `${plural(count, "step")} need${count === 1 ? "s" : ""} you` : "Notifications: nothing needs you"}
-        title={count ? `${plural(count, "step")} need${count === 1 ? "s" : ""} you` : "Nothing needs you"}
+        aria-controls={open ? panelId : undefined}
+        aria-label={count ? `${plural(count, "step")} need${count === 1 ? "s" : ""} you` : loaded ? "Notifications: nothing needs you" : "Notifications"}
+        title={count ? `${plural(count, "step")} need${count === 1 ? "s" : ""} you` : loaded ? "Nothing needs you" : "Notifications"}
         className={cn(
           "relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-white shadow-sm transition tap-target",
           waiting ? "border-amber-300 text-amber-700 hover:border-amber-400" : "border-zinc-300 text-zinc-600 hover:border-zinc-400",
@@ -140,9 +198,12 @@ export function ActionBell({ compact = false }: { compact?: boolean }) {
 
       {open && (
         <div
+          ref={panel}
+          id={panelId}
+          tabIndex={-1}
           role="dialog"
           aria-label="Steps that need you"
-          className="fixed inset-x-4 top-16 z-50 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-pop animate-fade-in md:absolute md:inset-x-auto md:right-0 md:top-11 md:w-[400px]"
+          className="fixed inset-x-4 top-16 z-50 overflow-hidden rounded-xl outline-none border border-zinc-200 bg-white shadow-pop animate-fade-in md:absolute md:inset-x-auto md:right-0 md:top-11 md:w-[400px]"
         >
           <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3">
             <div className="text-sm font-medium text-zinc-900">Needs you</div>
@@ -159,7 +220,11 @@ export function ActionBell({ compact = false }: { compact?: boolean }) {
 
           {error && <div className="border-b border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700" role="alert">{error}</div>}
 
-          {count === 0 ? (
+          {!loaded ? (
+            <p className="px-4 py-6 text-sm text-zinc-500" role="status">
+              Loading…
+            </p>
+          ) : count === 0 ? (
             <p className="px-4 py-6 text-sm leading-relaxed text-zinc-500">
               Nothing needs you. When an engine asks for a “verify you are human” check or a sign-in, it shows up here and that engine waits for you; the other
               engines keep running.
@@ -175,7 +240,7 @@ export function ActionBell({ compact = false }: { compact?: boolean }) {
                       <span className="text-sm font-medium text-zinc-900">{a.engineLabel}</span>
                       <Badge tone={a.status === "open" ? "warning" : "success"}>{a.status === "open" ? KIND_LABEL[a.kind] : "Done"}</Badge>
                       {a.brandName && <span className="text-xs text-zinc-500">{a.brandName}</span>}
-                      <span className="ml-auto text-xs text-zinc-400 tabular">{formatWhen(a.createdAt)}</span>
+                      <LocalTime iso={a.createdAt} className="ml-auto text-xs text-zinc-400 tabular" />
                     </div>
 
                     {a.status === "open" ? (

@@ -47,10 +47,21 @@ export default function EngineSessionsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [adding, setAdding] = useState<{ engine: string; label: string } | null>(null);
+  /** True once a load has answered; until then the skeleton shows. */
+  const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/engines/sessions", { cache: "no-store" }).catch(() => null);
-    if (res?.ok) setSessions((await res.json()).sessions);
+    try {
+      const res = await fetch("/api/engines/sessions", { cache: "no-store" });
+      const data = res.ok ? ((await res.json()) as { sessions?: SessionStatus[] }) : null;
+      if (!Array.isArray(data?.sessions)) throw new Error();
+      setSessions(data.sessions);
+      setLoaded(true);
+      setLoadFailed(false);
+    } catch {
+      setLoadFailed(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -68,10 +79,15 @@ export default function EngineSessionsPanel() {
     const key = `${body.engine}@${body.account ?? body.label ?? "default"}`;
     setError(null);
     setPending(key);
-    const res = await fetch("/api/engines/sessions", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Request failed");
-    setPending(null);
-    setTimeout(load, 600);
+    try {
+      const res = await fetch("/api/engines/sessions", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Request failed");
+    } catch {
+      setError("Could not reach PrismGEO. Check that it is still running, then try again.");
+    } finally {
+      setPending(null);
+      setTimeout(load, 600);
+    }
   };
 
   const engines = ORDER.filter((e) => sessions.some((s) => s.engine === e));
@@ -87,8 +103,22 @@ export default function EngineSessionsPanel() {
           <Notice tone="danger">{error}</Notice>
         </div>
       )}
+      {loadFailed && (
+        <div className="px-5 pt-4">
+          <Notice
+            tone="danger"
+            action={
+              <Button size="sm" onClick={load}>
+                Retry
+              </Button>
+            }
+          >
+            {loaded ? "Could not refresh the sessions; what is shown may be out of date." : "Could not load the signed-in sessions."}
+          </Notice>
+        </div>
+      )}
       <ul className="grid gap-3 p-5 lg:grid-cols-2">
-        {sessions.length === 0 && [0, 1, 2, 3].map((i) => <li key={i} className="skeleton h-[96px] rounded-xl" aria-hidden="true" />)}
+        {!loaded && !loadFailed && [0, 1, 2, 3].map((i) => <li key={i} className="skeleton h-[96px] rounded-xl" aria-hidden="true" />)}
         {engines.map((engine) => {
           const info = ENGINE_INFO[engine] || { name: engine, benefit: "" };
           const accounts = sessions.filter((s) => s.engine === engine);

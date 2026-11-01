@@ -24,6 +24,7 @@ const label = "mb-1 block text-xs font-medium text-zinc-600 md:sr-only";
  */
 export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
   const [items, setItems] = useState<Competitor[] | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [form, setForm] = useState<Draft>({ name: "", domain: "", aliases: "" });
   const [busy, setBusy] = useState<string | null>(null);
@@ -40,8 +41,10 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
     // The client is named explicitly so another tab switching clients can't redirect these edits
     const qs = brandId ? `?brandId=${encodeURIComponent(brandId)}` : "";
     const res = await fetch(`/api/competitors${qs}`, { cache: "no-store" }).catch(() => null);
-    if (!res?.ok) return setItems([]);
-    const list: Competitor[] = (await res.json()).competitors;
+    const list = res?.ok ? ((await res.json().catch(() => null)) as { competitors?: Competitor[] } | null)?.competitors : undefined;
+    // A failed load is not "no competitors": keep what is shown and say so
+    if (!Array.isArray(list)) return setLoadError(true);
+    setLoadError(false);
     setItems(list);
     setDrafts(Object.fromEntries(list.map((c) => [c.id, { name: c.name, domain: c.domain, aliases: c.aliases.join(", ") }])));
   }, [brandId]);
@@ -62,6 +65,8 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
       if (method === "POST") setForm({ name: "", domain: "", aliases: "" });
       await load();
       if (method !== "PATCH") loadSuggestions();
+    } catch {
+      setMessage({ ok: false, text: "Could not reach PrismGEO. Try again.", at: key });
     } finally {
       setBusy(null);
     }
@@ -80,6 +85,8 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
         text: `Re-checked ${data.runs} stored answers: ${data.runsChanged} changed (${data.mentionsBefore} → ${data.mentionsAfter} company mentions). Reload a page to see updated numbers.`,
         at: "recheck",
       });
+    } catch {
+      setMessage({ ok: false, text: "Could not reach PrismGEO. Try again.", at: "recheck" });
     } finally {
       setBusy(null);
     }
@@ -110,7 +117,19 @@ export default function CompetitorsPanel({ brandId }: { brandId?: string }) {
         </div>
       )}
       <div className="space-y-3 p-5">
-        {items === null && <div className="skeleton h-24 w-full" />}
+        {loadError && (
+          <Notice
+            tone="danger"
+            action={
+              <Button size="sm" onClick={load}>
+                Retry
+              </Button>
+            }
+          >
+            {items === null ? "Could not load the competitors." : "Could not refresh the competitors; what is shown may be out of date."}
+          </Notice>
+        )}
+        {items === null && !loadError && <div className="skeleton h-24 w-full" />}
         {items?.length === 0 && <EmptyState title="No competitors yet" description="Add the companies buyers compare you with." />}
 
         {items && items.length > 0 && (
