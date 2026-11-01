@@ -122,12 +122,21 @@ function toRequest(r: Row): ActionRequest {
 
 const now = () => new Date().toISOString();
 
-const openRow = (engine: string) =>
-  getRawDb().prepare("SELECT * FROM action_requests WHERE engine = ? AND status = 'open' ORDER BY created_at DESC LIMIT 1").get(engine) as Row | undefined;
+/**
+ * The open request of an engine for one brand (`IS` so a null brand matches a request with none). Keyed
+ * by brand too, so one client's audit never takes over, or loses, another client's held questions.
+ * With `brandId` undefined, any brand's.
+ */
+const openRow = (engine: string, brandId?: string | null) =>
+  (brandId === undefined
+    ? getRawDb().prepare("SELECT * FROM action_requests WHERE engine = ? AND status = 'open' ORDER BY created_at DESC LIMIT 1").get(engine)
+    : getRawDb().prepare("SELECT * FROM action_requests WHERE engine = ? AND brand_id IS ? AND status = 'open' ORDER BY created_at DESC LIMIT 1").get(engine, brandId)) as
+    | Row
+    | undefined;
 
 /**
- * Raises a request, or adds to the one already open for this engine (one bell entry per thing to
- * do, however many questions are waiting on it). Returns the request.
+ * Raises a request, or adds to the one already open for this engine and brand (one bell entry per
+ * thing to do, however many questions are waiting on it). Returns the request.
  */
 export function raiseActionRequest(input: {
   brandId: string | null;
@@ -142,15 +151,18 @@ export function raiseActionRequest(input: {
 }): ActionRequest {
   const db = getRawDb();
   const account = input.account || "visitor";
-  const existing = openRow(input.engine);
-  const message = KIND_TEXT[input.kind](input.engine);
+  const existing = openRow(input.engine, input.brandId);
   if (existing) {
+    // A check still on screen stays the step to take: a sign-in notice never replaces it
+    const kind: ActionKind = existing.kind === "human_check" ? "human_check" : input.kind;
+    const message = KIND_TEXT[kind](input.engine);
     const pending = [...new Set([...toRequest(existing).pendingPromptIds, ...(input.promptIds || [])])];
     db.prepare(
-      "UPDATE action_requests SET kind = ?, message = ?, account = ?, page_url = COALESCE(?, page_url), batch_id = COALESCE(?, batch_id), brand_id = COALESCE(?, brand_id), pending_prompts_json = ?, note = COALESCE(?, note), updated_at = ? WHERE id = ?"
-    ).run(input.kind, message, account, input.pageUrl ?? null, input.batchId, input.brandId, JSON.stringify(pending), input.detail?.slice(0, 300) ?? null, now(), existing.id);
+      "UPDATE action_requests SET kind = ?, message = ?, account = ?, page_url = COALESCE(?, page_url), batch_id = COALESCE(?, batch_id), pending_prompts_json = ?, note = COALESCE(?, note), updated_at = ? WHERE id = ?"
+    ).run(kind, message, account, input.pageUrl ?? null, input.batchId, JSON.stringify(pending), input.detail?.slice(0, 300) ?? null, now(), existing.id);
     return getActionRequest(existing.id)!;
   }
+  const message = KIND_TEXT[input.kind](input.engine);
   const id = `act-${crypto.randomBytes(6).toString("hex")}`;
   db.prepare(
     "INSERT INTO action_requests (id, brand_id, batch_id, engine, account, kind, message, page_url, status, pending_prompts_json, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)"
@@ -195,9 +207,12 @@ export function listActionRequests(opts: { includeClosed?: boolean; limit?: numb
   return (getRawDb().prepare(`SELECT * FROM action_requests ${where} ORDER BY created_at DESC LIMIT ?`).all(opts.limit ?? 50) as unknown as Row[]).map(toRequest);
 }
 
-/** The open request of an engine: its browser route waits for the person until it is done. */
-export function openActionFor(engine: string): ActionRequest | null {
-  const row = openRow(engine);
+/**
+ * The open request of an engine for a brand (any brand when `brandId` is omitted): its browser
+ * route waits for the person until it is done.
+ */
+export function openActionFor(engine: string, brandId?: string | null): ActionRequest | null {
+  const row = openRow(engine, brandId);
   return row ? toRequest(row) : null;
 }
 

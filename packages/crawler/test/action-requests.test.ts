@@ -112,7 +112,7 @@ test("when nobody comes in time the questions stay on the request; the next audi
     searches++;
     throw human();
   };
-  const b1 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["chatgpt"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 0 });
+  const b1 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["chatgpt"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 30 });
   assert.equal(searches, 1, "one search hit the check; the rest were not sent into it");
   const e1 = errorsOf(b1);
   assert.deepEqual(e1.map((e) => e.kind), ids.map(() => "waiting_for_person"));
@@ -121,7 +121,7 @@ test("when nobody comes in time the questions stay on the request; the next audi
   assert.equal(request.batchId, b1);
 
   // The next audit finds the request still open: it holds the engine from the start, no search
-  const b2 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["chatgpt"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 0 });
+  const b2 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["chatgpt"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 30 });
   assert.equal(searches, 1);
   assert.deepEqual(errorsOf(b2).map((e) => e.kind), ids.map(() => "waiting_for_person"));
   assert.equal(actions.listActionRequests().length, 1, "still one bell entry, not one per audit");
@@ -170,4 +170,87 @@ test("a check completed in the visitor profile is reused for 30 days, then asked
   assert.equal(usableVisitorProfile("chatgpt"), null);
   writeVisitorMarker("chatgpt", "Mozilla/5.0 Chrome/141");
   assert.equal(usableVisitorProfile("chatgpt")?.userAgent, "Mozilla/5.0 Chrome/141");
+});
+
+test("with no screen, an open check is still shown under the bell but never stops the rest period from applying", async () => {
+  reset();
+  let searches = 0;
+  (ChatGptEngineCrawler as any).execute = async () => {
+    searches++;
+    throw human();
+  };
+  await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["chatgpt"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 0 });
+  assert.equal(searches, 1);
+  assert.equal(actions.listActionRequests().length, 1, "the request is raised for the bell");
+  // The next audit rests instead of being let through by the open request (which nobody can complete here)
+  const b2 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["chatgpt"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 0 });
+  assert.deepEqual(errorsOf(b2).map((e) => e.kind), ["cooling_down"]);
+  assert.equal(searches, 1);
+  // Once the rest period is over the engine searches again rather than being held forever
+  setSettings("browser_blocks", {});
+  (ChatGptEngineCrawler as any).execute = async (q: string) => (searches++, answer(q, "chatgpt"));
+  const b3 = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["chatgpt"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 0 });
+  assert.equal(stored(b3, "chatgpt"), PROMPTS.length);
+  assert.equal(actions.listActionRequests().length, 1, "still shown under the bell");
+});
+
+test("open requests are kept per client: another brand's audit neither takes over nor rewrites them", () => {
+  reset();
+  sqlite.prepare("INSERT OR IGNORE INTO brands (id, slug, name, domain, aliases_json) VALUES ('b2', 'other', 'Other', 'other.example', '[]')").run();
+  const a = actions.raiseActionRequest({ brandId: "b1", batchId: "x1", engine: "chatgpt", kind: "human_check", promptIds: ["p-0"] });
+  const b = actions.raiseActionRequest({ brandId: "b2", batchId: "x2", engine: "chatgpt", kind: "human_check", promptIds: ["q-0"] });
+  assert.notEqual(a.id, b.id);
+  assert.deepEqual(actions.getActionRequest(a.id)!.pendingPromptIds, ["p-0"]);
+  assert.equal(actions.getActionRequest(a.id)!.brandId, "b1");
+  assert.equal(actions.openActionFor("chatgpt", "b1")!.id, a.id);
+  assert.equal(actions.openActionFor("chatgpt", "b2")!.id, b.id);
+  assert.equal(actions.listActionRequests().length, 2, "the bell lists every client's requests");
+});
+
+test("a sign-in notice never downgrades an open human check", () => {
+  reset();
+  const a = actions.raiseActionRequest({ brandId: "b1", batchId: "x1", engine: "chatgpt", kind: "human_check", promptIds: ["p-0"] });
+  const b = actions.raiseActionRequest({ brandId: "b1", batchId: "x2", engine: "chatgpt", kind: "sign_in", detail: "The saved session expired" });
+  assert.equal(b.id, a.id);
+  assert.equal(b.kind, "human_check");
+  assert.match(b.message, /verify you are human/);
+});
+
+test("an unexpected throw in one engine fails that engine only; the batch closes after the others finish", async () => {
+  reset();
+  // A malformed result throws outside the engine's own error handling
+  (ChatGptEngineCrawler as any).execute = async () => null;
+  (GeminiEngineCrawler as any).execute = async (q: string) => {
+    await new Promise((r) => setTimeout(r, 20));
+    return answer(q, "gemini");
+  };
+  const b = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["chatgpt", "gemini"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 0 });
+  assert.equal(stored(b, "gemini"), PROMPTS.length, "gemini finished inside the batch");
+  const errs = errorsOf(b);
+  assert.ok(errs.length > 0 && errs.every((e) => e.kind === "error"));
+  const batch = sqlite.prepare("SELECT status, finished_at FROM crawl_batches WHERE id = ?").get(b) as any;
+  assert.equal(batch.status, "completed");
+  assert.ok(batch.finished_at);
+});
+
+test("a step completed in the window that the engine still shows is not asked for again (seen live on Copilot)", async () => {
+  reset();
+  (ChatGptEngineCrawler as any).execute = async () => {
+    throw new EngineBlockedError("[ChatGptCrawler] No chat box: the session expired, reconnect it in Settings");
+  };
+  let marked = 0;
+  const person = (async () => {
+    for (let i = 0; i < 300 && !actions.listActionRequests().length; i++) await new Promise((r) => setTimeout(r, 10));
+    const [request] = actions.listActionRequests();
+    assert.equal(request.kind, "sign_in");
+    actions.setActionStatus(request.id, "ready");
+    marked++;
+  })();
+  const b = await CrawlerOrchestrator.executeBatch({ brandId: "b1", engines: ["chatgpt"], sampleSize: 1, promptIds: ids, pacingScale: 0, personWaitMs: 5_000 });
+  await person;
+  assert.equal(marked, 1);
+  assert.equal(actions.listActionRequests({ includeClosed: true }).length, 1, "no second request right after the person completed the first");
+  const errs = errorsOf(b);
+  assert.ok(errs.some((e) => /completed in the window, but ChatGPT still shows it to the automated browser; use a key or capture by hand/.test(e.message)), JSON.stringify(errs));
+  assert.ok(!errs.some((e) => e.kind === "waiting_for_person"));
 });

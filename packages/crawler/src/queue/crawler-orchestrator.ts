@@ -19,7 +19,8 @@ import { GoogleAioCrawler, NoAiOverviewError } from "../engines/google-aio";
 import { CopilotEngineCrawler } from "../engines/copilot";
 import { GeminiEngineCrawler } from "../engines/gemini";
 import { ChatGptEngineCrawler } from "../engines/chatgpt";
-import { AnswerNotFinishedError, EngineBlockedError, getProxyConfig, type EngineAnswer } from "../engines/browser-session";
+import { AnswerNotFinishedError, EngineBlockedError, type EngineAnswer } from "../engines/browser-session";
+import { getProxyConfig } from "../engines/proxy";
 import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteLocation, countryCodeFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { connectionCountry, countryName, planRoutes } from "../engines/location";
 import { blockGroup, browserCoolingDown, clearBrowserCooldown, recordBrowserBlock, recordBrowserSuccess, untilText } from "../engines/block-memory";
@@ -38,7 +39,7 @@ import {
   type ActionKind,
 } from "./action-requests";
 import { fetchPublicPage } from "../net/safe-fetch";
-import { readProfile, verifyProfile, listAccounts, isProfileConnected, activeAccount, activeAccountLabel, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
+import { readProfile, verifyProfile, listAccounts, isProfileConnected, activeAccount, activeAccountLabel, ProfileInUseError, PROFILE_ENGINES, type ProfileEngine } from "../engines/profiles";
 const isProfileEngine = (e: string): e is ProfileEngine => (PROFILE_ENGINES as string[]).includes(e);
 import { storeManualCapture, trackedEntitiesFor, type ManualCaptureInput, type ManualCaptureResult } from "./manual-capture";
 import { chromium, type Browser } from "playwright";
@@ -103,6 +104,8 @@ export class BatchRunningError extends Error {
 /** Errors meaning the host was never reached: this machine's connection or proxy, not the engine. */
 const NETWORK_ERROR =
   /net::ERR_(TUNNEL_CONNECTION_FAILED|PROXY_[A-Z_]+|NAME_NOT_RESOLVED|INTERNET_DISCONNECTED|CONNECTION_REFUSED|ADDRESS_UNREACHABLE|NETWORK_CHANGED|CONNECTION_RESET|CONNECTION_TIMED_OUT)|\bfetch failed\b|\b(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH)\b|getaddrinfo|socket hang up/;
+/** Chromium refusing a profile folder another browser has open (Chromium's own wording, and ours). */
+const PROFILE_IN_USE = /ProcessSingleton|existing browser session|already in use|SingletonLock/i;
 const SETUP_ERROR = /browserType\.launch(PersistentContext)?: Executable doesn't exist|Failed to launch|chromium.*not found/i;
 
 /** Consecutive blocks after which an engine cools down before trying again. */
@@ -190,7 +193,8 @@ function cachedPageText(cache: PageCache, url: string): Promise<string> {
 
 export function classifyFailure(engine: EngineName, promptId: string | null, err: unknown): RunFailure {
   // Playwright appends a colour-coded "Call log:" or a boxed install hint; keep only the error itself
-  const message = ((err as Error)?.message || String(err)).replace(/\u001b\[[0-9;]*m/g, "").split(/\nCall log:|\n╔/)[0].trim();
+  const rawMessage = ((err as Error)?.message || String(err)).replace(/\u001b\[[0-9;]*m/g, "");
+  const message = rawMessage.split(/\nCall log:|\n╔/)[0].trim();
   const cause = (err as { cause?: { code?: string; message?: string } })?.cause;
   const causeText = cause ? `${cause.code || ""} ${cause.message || ""}` : "";
   let kind: RunFailure["kind"] = "error";
@@ -198,6 +202,8 @@ export function classifyFailure(engine: EngineName, promptId: string | null, err
   else if (err instanceof NoAiOverviewError) kind = "no_ai_overview";
   else if (err instanceof ApiKeyRejectedError) kind = "api_key_rejected";
   else if (err instanceof AnswerNotFinishedError || /No extractable response|present but empty|did not finish/.test(message)) kind = "no_answer";
+  // A profile another browser holds fails to launch too, but it is not a missing browser: it passes
+  else if (err instanceof ProfileInUseError || PROFILE_IN_USE.test(rawMessage)) kind = "error";
   else if (SETUP_ERROR.test(message)) kind = "setup";
   else if (NETWORK_ERROR.test(message) || NETWORK_ERROR.test(causeText)) kind = "network";
   return { engine, promptId, kind, message: causeText && kind === "network" ? `${message} (${causeText.trim()})` : message };
@@ -451,8 +457,11 @@ export class CrawlerOrchestrator {
     }
     // Which routes may answer each engine from the search location
     // An engine whose browser blocked this computer recently rests until the block has passed,
-    // unless a person is asked to clear it (see the bell): then the engine waits for them instead
-    const resting = new Map(requestedEngines.map((engine) => [engine, openActionFor(engine)?.kind === "human_check" ? null : browserCoolingDown(engine)] as const));
+    // unless a person is asked to clear it (see the bell): then the engine waits for them instead.
+    // With nobody to wait for (no screen), the rest period always applies: otherwise an open
+    // request would send every audit straight into the same check, and the engine never recovers.
+    const awaitsPerson = (engine: EngineName) => waitForPersonMs > 0 && openActionFor(engine, brandId)?.kind === "human_check";
+    const resting = new Map(requestedEngines.map((engine) => [engine, awaitsPerson(engine) ? null : browserCoolingDown(engine)] as const));
     const plans = new Map(
       requestedEngines.map((engine) => [
         engine,
@@ -521,43 +530,52 @@ export class CrawlerOrchestrator {
     // 3. The per-brand lock: refuses when another batch is crawling this brand (any process)
     acquireBatch(batchId, brandId, { sampleSize, totalRuns, currentEngine: engines[0] || "system", errorsJson: JSON.stringify(failures) });
     activeBatches.add(batchId);
-    try {
-      options.onStarted?.(batchId);
-    } catch (err) {
-      console.warn("[CrawlerOrchestrator] onStarted callback failed:", (err as Error).message);
-    }
-
-    console.log(`[CrawlerOrchestrator] Started batch ${batchId} for ${brand.name} (${activePrompts.length} prompts across ${engines.length} engines, N=${sampleSize})`);
-    for (const f of failures) console.warn(`[CrawlerOrchestrator] Skipping ${f.engine}: ${f.message}`);
 
     let completedRuns = 0;
     let failedRuns = 0;
     let sharedBrowser: Browser | null = null;
     const pageCache: PageCache = new Map();
-    const beat = () => {
-      try {
-        getRawDb().prepare("UPDATE crawl_batches SET heartbeat_at = ? WHERE id = ?").run(nowIso(), batchId);
-      } catch (err) {
-        console.warn("[CrawlerOrchestrator] Heartbeat failed:", (err as Error).message);
-      }
-    };
-    const heartbeat = setInterval(beat, HEARTBEAT_MS);
-    (heartbeat as { unref?: () => void }).unref?.();
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
 
-    const recordFailure = async (failure: RunFailure, { quiet = false } = {}) => {
-      failedRuns++;
-      failures.push(failure);
-      if (!quiet) console.warn(`[CrawlerOrchestrator] ${failure.engine} ${failure.kind}: ${failure.message}`);
-      updateBatch(batchId, { failedRuns, errorsJson: JSON.stringify(failures) });
-    };
-    const promptState = getRawDb().prepare("SELECT active FROM prompts WHERE id = ?");
-    /** "ok", or why the prompt must not be queried / stored any more (paused or deleted mid-batch). */
-    const promptStatus = (id: string): "ok" | "prompt_removed" | "prompt_paused" => {
-      const row = promptState.get(id) as { active: number } | undefined;
-      return !row ? "prompt_removed" : row.active === 0 ? "prompt_paused" : "ok";
-    };
-
+    // Everything after the lock is taken is inside the try, so a throw here still releases the brand
     try {
+      try {
+        options.onStarted?.(batchId);
+      } catch (err) {
+        console.warn("[CrawlerOrchestrator] onStarted callback failed:", (err as Error).message);
+      }
+
+      console.log(`[CrawlerOrchestrator] Started batch ${batchId} for ${brand.name} (${activePrompts.length} prompts across ${engines.length} engines, N=${sampleSize})`);
+      for (const f of failures) console.warn(`[CrawlerOrchestrator] Skipping ${f.engine}: ${f.message}`);
+
+      const beat = () => {
+        try {
+          getRawDb().prepare("UPDATE crawl_batches SET heartbeat_at = ? WHERE id = ?").run(nowIso(), batchId);
+        } catch (err) {
+          console.warn("[CrawlerOrchestrator] Heartbeat failed:", (err as Error).message);
+        }
+      };
+      heartbeat = setInterval(beat, HEARTBEAT_MS);
+      (heartbeat as { unref?: () => void }).unref?.();
+
+      const recordFailure = async (failure: RunFailure, { quiet = false } = {}) => {
+        failedRuns++;
+        failures.push(failure);
+        if (!quiet) console.warn(`[CrawlerOrchestrator] ${failure.engine} ${failure.kind}: ${failure.message}`);
+        // A busy database must not end an engine: the failure is kept in memory and written with the next update
+        try {
+          updateBatch(batchId, { failedRuns, errorsJson: JSON.stringify(failures) });
+        } catch (err) {
+          console.warn("[CrawlerOrchestrator] Could not save a failure yet:", (err as Error).message);
+        }
+      };
+      const promptState = getRawDb().prepare("SELECT active FROM prompts WHERE id = ?");
+      /** "ok", or why the prompt must not be queried / stored any more (paused or deleted mid-batch). */
+      const promptStatus = (id: string): "ok" | "prompt_removed" | "prompt_paused" => {
+        const row = promptState.get(id) as { active: number } | undefined;
+        return !row ? "prompt_removed" : row.active === 0 ? "prompt_paused" : "ok";
+      };
+
       try {
         sharedBrowser = await chromium.launch({
           headless: true,
@@ -576,273 +594,334 @@ export class CrawlerOrchestrator {
       /** Set when the browser is not installed: every engine without an API route stops. */
       let setupFailure: string | null = null;
 
-      await Promise.all(
-        engines.map(async (engine) => {
-          let consecutiveBlocks = 0;
-          let consecutiveNetwork = 0;
-          let successesSinceBlock = 0;
-          let paused = false;
-          let cooldownsUsed = 0;
-          /** Why this engine stopped for the rest of the batch. */
-          let stopped: { kind: RunFailure["kind"]; message: string } | null = null;
-          // Each block doubles the pause between queries (max 4x); successes halve it again
-          let pacingFactor = 1;
-          // byok: API whenever a key exists. hybrid: browser first, API when the browser fails.
-          // A browser outside the search location is never used when only that location counts
-          let viaApi = (mode === "byok" || engine === "google_ai_mode" || !plans.get(engine)!.browser || plans.get(engine)!.preferApi === true) && apiAllowed(engine);
-          const pause = () => {
-            const [min, max] = pacingFor(engine, viaApi);
-            return new Promise((r) => setTimeout(r, (min + Math.random() * (max - min)) * pacingFactor * pacingScale));
-          };
-          let skipped = 0;
-          /** Waits out a cool-down; gives up as soon as no engine is still working (only cooling ones remain). */
-          const coolDown = async (ms: number): Promise<boolean> => {
-            const until = Date.now() + ms;
-            enginesCooling++;
-            try {
-              while (Date.now() < until) {
-                if (enginesWorking - enginesCooling <= 0) return false;
-                await new Promise((r) => setTimeout(r, 15_000));
-              }
-              return true;
-            } finally {
-              enginesCooling--;
+      const crawlEngine = async (engine: EngineName): Promise<void> => {
+        let consecutiveBlocks = 0;
+        let consecutiveNetwork = 0;
+        let successesSinceBlock = 0;
+        let paused = false;
+        let cooldownsUsed = 0;
+        /** Why this engine stopped for the rest of the batch. */
+        let stopped: { kind: RunFailure["kind"]; message: string } | null = null;
+        // Each block doubles the pause between queries (max 4x); successes halve it again
+        let pacingFactor = 1;
+        // byok: API whenever a key exists. hybrid: browser first, API when the browser fails.
+        // A browser outside the search location is never used when only that location counts
+        let viaApi = (mode === "byok" || engine === "google_ai_mode" || !plans.get(engine)!.browser || plans.get(engine)!.preferApi === true) && apiAllowed(engine);
+        const pause = () => {
+          const [min, max] = pacingFor(engine, viaApi);
+          return new Promise((r) => setTimeout(r, (min + Math.random() * (max - min)) * pacingFactor * pacingScale));
+        };
+        let skipped = 0;
+        /** Waits out a cool-down; gives up as soon as no engine is still working (only cooling ones remain). */
+        const coolDown = async (ms: number): Promise<boolean> => {
+          const until = Date.now() + ms;
+          enginesCooling++;
+          try {
+            while (Date.now() < until) {
+              if (enginesWorking - enginesCooling <= 0) return false;
+              await new Promise((r) => setTimeout(r, 15_000));
             }
-          };
-          let firstQuery = true;
-          let cooling: Promise<void> | null = null;
-          /** The request this engine is held on; questions it cannot ask are added to it. */
-          let heldOn: string | null = null;
-          let holdsUsed = 0;
-          let holding: Promise<boolean> | null = null;
-          /**
-           * Holds this engine until a person completes the request (true) or the wait ends (false).
-           * Parallel workers share one wait. The other engines keep running meanwhile.
-           */
-          const holdForPerson = (requestId: string, kind: ActionKind): Promise<boolean> =>
-            (holding ??= (async () => {
-              holdsUsed++;
-              heldOn = requestId;
-              const label = ENGINES[engine].label;
-              const step = kind === "sign_in" ? "sign in" : "complete a \"verify you are human\" check";
-              updateBatch(batchId, { currentEngine: engine, currentPrompt: `Waiting for you: ${label} asks you to ${step} (see the bell)` });
-              console.warn(`[CrawlerOrchestrator] ${engine} waits up to ${Math.round(waitForPersonMs / 60_000)} min for a person (${kind}, request ${requestId})`);
-              if (await waitForPerson(requestId, waitForPersonMs, { windowOpen: () => checkWindowState(engine).open })) {
-                // Done: this audit asks the held questions it has; any others wait for a resume
-                const asked = new Set(items.map((i) => i.prompt.id));
-                const left = (getActionRequest(requestId)?.pendingPromptIds || []).filter((id) => !asked.has(id));
-                setPendingPrompts(requestId, left);
-                setActionStatus(requestId, left.length ? "ready" : "resolved", "Completed during the audit");
-                clearBrowserCooldown(engine);
-                heldOn = null;
-                consecutiveBlocks = 0;
-                firstQuery = true;
-                return true;
-              }
-              const dismissed = getActionRequest(requestId)?.status === "dismissed";
-              if (dismissed) heldOn = null;
-              stopped = dismissed
-                ? { kind: "skipped_after_blocks", message: `Not run: ${label} asked for a person and the request was dismissed` }
-                : { kind: "waiting_for_person", message: `Not run yet: ${label} is waiting for you to ${step}. The question stays under the bell and is asked once you resume.` };
-              // Nobody cleared it: the next audits leave the browser route alone until someone does
-              if (!viaApi && !browserCoolingDown(engine)) recordBrowserBlock(engine, `${label} asked for a person (${kind})`);
-              return false;
-            })().finally(() => {
-              holding = null;
-            }));
-          const items = (promptsFor.get(engine) || []).flatMap((prompt) => Array.from({ length: sampleSize }, (_, runIdx) => ({ prompt, runIdx })));
-          // Paid routes take parallel requests; a browser engine stays one page at a time, human-paced
-          const workers = viaApi ? apiConcurrency(engine, apiKeys) : 1;
-
-          const processItem = async (prompt: (typeof items)[number]["prompt"], runIdx: number): Promise<void> => {
-            if (!stopped && setupFailure && !viaApi) stopped = { kind: "skipped_setup", message: `Not run: ${setupFailure}` };
-            if (stopped) {
-              skipped++;
-              if (stopped.kind === "waiting_for_person" && heldOn) addPendingPrompts(heldOn, [prompt.id]);
-              await recordFailure({ engine, promptId: prompt.id, kind: stopped.kind, message: stopped.message }, { quiet: true });
-              return;
-            }
-            const state = promptStatus(prompt.id);
-            if (state !== "ok") {
-              await recordFailure(
-                { engine, promptId: prompt.id, kind: state, message: state === "prompt_removed" ? "Prompt deleted during the batch; not queried" : "Prompt paused during the batch; not queried" },
-                { quiet: true }
-              );
-              return;
-            }
-            if (paused && cooldownsUsed < COOLDOWNS_MS.length) {
-              // Parallel workers share one cool-down: the first one starts it, the others wait for it
-              cooling ??= (async () => {
-                const wait = COOLDOWNS_MS[cooldownsUsed++];
-                console.warn(`[CrawlerOrchestrator] ${engine} blocked repeatedly; cooling down ${wait / 60_000} min before retrying`);
-                if (await coolDown(wait)) {
-                  paused = false;
-                  consecutiveBlocks = MAX_CONSECUTIVE_BLOCKS - 1; // one more block re-pauses at once
-                  firstQuery = true;
-                } else {
-                  cooldownsUsed = COOLDOWNS_MS.length; // only cooling engines remain: nothing to wait for
-                }
-              })().finally(() => {
-                cooling = null;
-              });
-              await cooling;
-            }
-            if (paused) {
-              skipped++;
-              await recordFailure(
-                { engine, promptId: prompt.id, kind: "skipped_after_blocks", message: `${engine} still blocked after ${cooldownsUsed} cool-down(s)` },
-                { quiet: true }
-              );
-              return;
-            }
-            if (!firstQuery) await pause();
-            firstQuery = false;
-
-            const runId = `run-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
-            updateBatch(batchId, { currentPrompt: prompt.queryText.slice(0, 80), currentEngine: engine });
-
-            let engineResult: EngineAnswer;
-            const runBrowser = (): Promise<EngineAnswer> => {
-              const browser = sharedBrowser || undefined;
-              if (engine === "perplexity") return PerplexityEngineCrawler.execute(prompt.queryText, browser);
-              if (engine === "copilot") return CopilotEngineCrawler.execute(prompt.queryText, browser);
-              if (engine === "gemini") return GeminiEngineCrawler.execute(prompt.queryText, browser);
-              if (engine === "chatgpt") return ChatGptEngineCrawler.execute(prompt.queryText, browser);
-              if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser, { country: targetCountry, language: providerOptions.language, place: place || searchLocation });
-              throw new Error(`Unknown engine: ${engine}`);
+            return true;
+          } finally {
+            enginesCooling--;
+          }
+        };
+        let firstQuery = true;
+        let cooling: Promise<void> | null = null;
+        /** The request this engine is held on; questions it cannot ask are added to it. */
+        let heldOn: string | null = null;
+        let holdsUsed = 0;
+        let holding: Promise<boolean> | null = null;
+        /** The kind of step a person just completed, until the next question is answered or fails. */
+        let justCleared: ActionKind | null = null;
+        /** Steps a person completed that the engine still showed afterwards: not asked for again this audit. */
+        const noHoldKinds = new Set<ActionKind>();
+        /** The API key was refused: no more paid calls for this engine in this audit. */
+        let keyRejected = false;
+        /** Hybrid mode with a usable key: a failing browser falls back to the API instead of waiting. */
+        const keyUsable = () => mode === "hybrid" && apiAllowed(engine) && !keyRejected;
+        /**
+         * Holds this engine until a person completes the request (true) or the wait ends (false).
+         * Parallel workers share one wait. The other engines keep running meanwhile.
+         */
+        const holdForPerson = (requestId: string, kind: ActionKind): Promise<boolean> =>
+          (holding ??= (async () => {
+            holdsUsed++;
+            heldOn = requestId;
+            const label = ENGINES[engine].label;
+            const step = kind === "sign_in" ? "sign in" : "complete a \"verify you are human\" check";
+            updateBatch(batchId, { currentEngine: engine, currentPrompt: `Waiting for you: ${label} asks you to ${step} (see the bell)` });
+            console.warn(`[CrawlerOrchestrator] ${engine} waits up to ${Math.round(waitForPersonMs / 60_000)} min for a person (${kind}, request ${requestId})`);
+            // This audit asks the held questions it has; any others wait for a resume
+            const keepOthers = () => {
+              const asked = new Set(items.map((i) => i.prompt.id));
+              const left = (getActionRequest(requestId)?.pendingPromptIds || []).filter((id) => !asked.has(id));
+              setPendingPrompts(requestId, left);
+              return left;
             };
-            const runEngine = (): Promise<EngineAnswer> => (viaApi ? runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions) : runBrowser());
-            try {
-              try {
-                engineResult = await runEngine();
-              } catch (firstErr) {
-                const kind = classifyFailure(engine, prompt.id, firstErr).kind;
-                // A check a person can clear is raised under the bell (below) instead of resting the route
-                const forPerson = kind === "blocked" && needsPerson((firstErr as Error).message) !== null && !(mode === "hybrid" && apiAllowed(engine));
-                // Google's blocks and an account's usage limit last hours: rest the browser route at once
-                // (other engines get the in-audit cool-downs first, see below)
-                if (!viaApi && !forPerson && kind === "blocked" && (blockGroup(engine) === "google_search" || /usage limit/i.test((firstErr as Error).message))) {
-                  const rest = recordBrowserBlock(engine, (firstErr as Error).message);
-                  if (!(mode === "hybrid" && apiAllowed(engine)))
-                    stopped = { kind: "cooling_down", message: `Not run: ${ENGINES[engine].label} blocked this computer's browser; PrismGEO waits until ${untilText(rest.until)} so the block is not extended` };
-                }
-                // The API cannot help when this machine has no connection, and "no AI Overview" is a real outcome
-                if (!viaApi && mode === "hybrid" && apiAllowed(engine) && kind !== "no_ai_overview" && kind !== "network") {
-                  console.warn(`[CrawlerOrchestrator] ${engine} browser ${kind}; falling back to API: ${(firstErr as Error).message}`);
-                  if (kind === "blocked" || kind === "setup") viaApi = true; // stop using a browser that cannot work
-                  engineResult = await runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions);
-                } else {
-                  // One retry for transient failures (timeouts, half-rendered or unfinished answers).
-                  // Blocks, rejected keys, network/setup failures and "no AI Overview" are never retried.
-                  if (kind !== "no_answer" && kind !== "error") throw firstErr;
-                  console.warn(`[CrawlerOrchestrator] Retrying ${engine} once after ${kind}: ${(firstErr as Error).message}`);
-                  await pause();
-                  engineResult = await runEngine();
-                }
-              }
-            } catch (runErr) {
-              const failure = classifyFailure(engine, prompt.id, runErr);
-              // A human check or sign-in: hold this engine for a person, then ask the question again
-              const personKind = failure.kind === "blocked" && !viaApi ? needsPerson(failure.message) : null;
-              if (personKind && holdsUsed < MAX_PERSON_HOLDS) {
-                const request = raiseActionRequest({
-                  brandId,
-                  batchId,
-                  engine,
-                  account: activeAccount(engine) ?? "visitor",
-                  kind: personKind,
-                  detail: failure.message,
-                  pageUrl: pageForAction(engine, prompt.queryText),
-                  promptIds: [prompt.id],
-                });
-                if (await holdForPerson(request.id, personKind)) {
-                  items.push({ prompt, runIdx });
-                  return;
-                }
-                const reason = (stopped as { kind: RunFailure["kind"]; message: string } | null) ?? { kind: "waiting_for_person" as const, message: failure.message };
-                await recordFailure({ engine, promptId: prompt.id, kind: reason.kind, message: `${reason.message} (${failure.message})` });
-                return;
-              }
-              await recordFailure(failure);
-              consecutiveBlocks = failure.kind === "blocked" ? consecutiveBlocks + 1 : 0;
-              consecutiveNetwork = failure.kind === "network" ? consecutiveNetwork + 1 : 0;
-              if (failure.kind === "blocked") {
-                pacingFactor = Math.min(4, pacingFactor * 2);
-                successesSinceBlock = 0;
-              }
-              if (consecutiveBlocks >= MAX_CONSECUTIVE_BLOCKS) paused = true;
-              if (consecutiveNetwork >= MAX_CONSECUTIVE_NETWORK) {
-                stopped = { kind: "skipped_after_network", message: `Not run: ${engine} could not connect ${consecutiveNetwork} times in a row (${failure.message})` };
-              }
-              if (failure.kind === "setup") {
-                if (!viaApi) setupFailure = failure.message;
-                stopped = { kind: "skipped_setup", message: `Not run: ${failure.message}` };
-              }
-              return;
+            if (await waitForPerson(requestId, waitForPersonMs, { windowOpen: () => checkWindowState(engine).open })) {
+              const left = keepOthers();
+              setActionStatus(requestId, left.length ? "ready" : "resolved", "Completed during the audit");
+              clearBrowserCooldown(engine);
+              heldOn = null;
+              consecutiveBlocks = 0;
+              firstQuery = true;
+              justCleared = kind;
+              return true;
             }
-            if (engineResult.captureMethod === "browser" || engineResult.captureMethod === "browser_signed_in") recordBrowserSuccess(engine);
-            // A browser answer is asked from this computer's connection country
-            if (!engineResult.searchedFrom && engineResult.captureMethod !== "manual" && connection) engineResult = { ...engineResult, searchedFrom: connection };
-            consecutiveBlocks = 0;
-            consecutiveNetwork = 0;
-            if (pacingFactor > 1 && ++successesSinceBlock >= PACING_DECAY_AFTER) {
-              pacingFactor = Math.max(1, pacingFactor / 2);
-              successesSinceBlock = 0;
+            // Nobody came, but a key can answer (hybrid): the questions go through the API instead
+            if (keyUsable()) {
+              if (!viaApi && !browserCoolingDown(engine)) recordBrowserBlock(engine, `${label} asked for a person (${kind})`);
+              keepOthers();
+              heldOn = null;
+              viaApi = true;
+              firstQuery = true;
+              return true;
             }
+            const dismissed = getActionRequest(requestId)?.status === "dismissed";
+            if (dismissed) heldOn = null;
+            stopped = dismissed
+              ? { kind: "skipped_after_blocks", message: `Not run: ${label} asked for a person and the request was dismissed` }
+              : { kind: "waiting_for_person", message: `Not run yet: ${label} is waiting for you to ${step}. The question stays under the bell and is asked once you resume.` };
+            // Nobody cleared it: the next audits leave the browser route alone until someone does
+            if (!viaApi && !browserCoolingDown(engine)) recordBrowserBlock(engine, `${label} asked for a person (${kind})`);
+            return false;
+          })().finally(() => {
+            holding = null;
+          }));
+        const items = (promptsFor.get(engine) || []).flatMap((prompt) => Array.from({ length: sampleSize }, (_, runIdx) => ({ prompt, runIdx })));
+        // Paid routes take parallel requests; a browser engine stays one page at a time, human-paced
+        const workers = viaApi ? apiConcurrency(engine, apiKeys) : 1;
 
-            // The prompt may have been deleted or paused while the engine was answering
-            const after = promptStatus(prompt.id);
-            if (after === "prompt_removed") {
-              await recordFailure({ engine, promptId: prompt.id, kind: "prompt_removed", message: "Prompt deleted during the batch; its answer was not stored" }, { quiet: true });
-              return;
-            }
+        const processItem = async (prompt: (typeof items)[number]["prompt"], runIdx: number): Promise<void> => {
+          if (!stopped && setupFailure && !viaApi) stopped = { kind: "skipped_setup", message: `Not run: ${setupFailure}` };
+          if (stopped) {
+            skipped++;
+            if (stopped.kind === "waiting_for_person" && heldOn) addPendingPrompts(heldOn, [prompt.id]);
+            await recordFailure({ engine, promptId: prompt.id, kind: stopped.kind, message: stopped.message }, { quiet: true });
+            return;
+          }
+          const state = promptStatus(prompt.id);
+          if (state !== "ok") {
+            await recordFailure(
+              { engine, promptId: prompt.id, kind: state, message: state === "prompt_removed" ? "Prompt deleted during the batch; not queried" : "Prompt paused during the batch; not queried" },
+              { quiet: true }
+            );
+            return;
+          }
+          if (paused && cooldownsUsed < COOLDOWNS_MS.length) {
+            // Parallel workers share one cool-down: the first one starts it, the others wait for it
+            cooling ??= (async () => {
+              const wait = COOLDOWNS_MS[cooldownsUsed++];
+              console.warn(`[CrawlerOrchestrator] ${engine} blocked repeatedly; cooling down ${wait / 60_000} min before retrying`);
+              if (await coolDown(wait)) {
+                paused = false;
+                consecutiveBlocks = MAX_CONSECUTIVE_BLOCKS - 1; // one more block re-pauses at once
+                firstQuery = true;
+              } else {
+                cooldownsUsed = COOLDOWNS_MS.length; // only cooling engines remain: nothing to wait for
+              }
+            })().finally(() => {
+              cooling = null;
+            });
+            await cooling;
+          }
+          if (paused) {
+            skipped++;
+            await recordFailure(
+              { engine, promptId: prompt.id, kind: "skipped_after_blocks", message: `${engine} still blocked after ${cooldownsUsed} cool-down(s)` },
+              { quiet: true }
+            );
+            return;
+          }
+          if (!firstQuery) await pause();
+          firstQuery = false;
+
+          const runId = `run-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+          updateBatch(batchId, { currentPrompt: prompt.queryText.slice(0, 80), currentEngine: engine });
+
+          let engineResult: EngineAnswer;
+          const runBrowser = (): Promise<EngineAnswer> => {
+            const browser = sharedBrowser || undefined;
+            if (engine === "perplexity") return PerplexityEngineCrawler.execute(prompt.queryText, browser);
+            if (engine === "copilot") return CopilotEngineCrawler.execute(prompt.queryText, browser);
+            if (engine === "gemini") return GeminiEngineCrawler.execute(prompt.queryText, browser);
+            if (engine === "chatgpt") return ChatGptEngineCrawler.execute(prompt.queryText, browser);
+            if (engine === "google_aio") return GoogleAioCrawler.execute(prompt.queryText, browser, { country: targetCountry, language: providerOptions.language, place: place || searchLocation });
+            throw new Error(`Unknown engine: ${engine}`);
+          };
+          const runEngine = (): Promise<EngineAnswer> => (viaApi ? runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions) : runBrowser());
+          // The first question after a person completed a step tells whether it worked
+          const afterPerson = justCleared;
+          justCleared = null;
+          let stillShown = false;
+          try {
             try {
-              await CrawlerOrchestrator.persistRun({
-                runId,
+              engineResult = await runEngine();
+            } catch (firstErr) {
+              const kind = classifyFailure(engine, prompt.id, firstErr).kind;
+              const asks = kind === "blocked" && !viaApi ? needsPerson((firstErr as Error).message) : null;
+              // Seen live: Copilot kept showing its sign-in page to the automated browser after the
+              // person signed in, so asking again would loop. That step is not asked for again this audit.
+              if (asks && asks === afterPerson) {
+                stillShown = true;
+                noHoldKinds.add(asks);
+              }
+              // A check a person can clear is raised under the bell (below) instead of resting the route
+              const forPerson = asks !== null && !noHoldKinds.has(asks) && holdsUsed < MAX_PERSON_HOLDS && !keyUsable();
+              // Google's blocks and an account's usage limit last hours: rest the browser route at once
+              // (other engines get the in-audit cool-downs first, see below)
+              if (!viaApi && !forPerson && kind === "blocked" && (blockGroup(engine) === "google_search" || /usage limit/i.test((firstErr as Error).message))) {
+                const rest = recordBrowserBlock(engine, (firstErr as Error).message);
+                if (!keyUsable())
+                  stopped = { kind: "cooling_down", message: `Not run: ${ENGINES[engine].label} blocked this computer's browser; PrismGEO waits until ${untilText(rest.until)} so the block is not extended` };
+              }
+              // The API cannot help when this machine has no connection, and "no AI Overview" is a real outcome
+              if (!viaApi && keyUsable() && kind !== "no_ai_overview" && kind !== "network") {
+                console.warn(`[CrawlerOrchestrator] ${engine} browser ${kind}; falling back to API: ${(firstErr as Error).message}`);
+                if (kind === "blocked" || kind === "setup") viaApi = true; // stop using a browser that cannot work
+                engineResult = await runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions);
+              } else {
+                // One retry for transient failures (timeouts, half-rendered or unfinished answers).
+                // Blocks, rejected keys, network/setup failures and "no AI Overview" are never retried.
+                if (kind !== "no_answer" && kind !== "error") throw firstErr;
+                console.warn(`[CrawlerOrchestrator] Retrying ${engine} once after ${kind}: ${(firstErr as Error).message}`);
+                await pause();
+                engineResult = await runEngine();
+              }
+            }
+          } catch (runErr) {
+            const failure = classifyFailure(engine, prompt.id, runErr);
+            if (stillShown) {
+              const label = ENGINES[engine].label;
+              failure.message = `The ${afterPerson === "sign_in" ? "sign-in" : "human check"} was completed in the window, but ${label} still shows it to the automated browser; use a key or capture by hand (${failure.message})`;
+            }
+            // A rejected key stays rejected: no more paid calls for this engine in this audit
+            if (failure.kind === "api_key_rejected") {
+              keyRejected = true;
+              if (viaApi) stopped = { kind: "api_key_rejected", message: `Not run: ${failure.message}` };
+            }
+            // A human check or sign-in: hold this engine for a person, then ask the question again
+            const personKind = failure.kind === "blocked" && !viaApi ? needsPerson(failure.message) : null;
+            if (personKind && !noHoldKinds.has(personKind) && holdsUsed < MAX_PERSON_HOLDS) {
+              const request = raiseActionRequest({
                 brandId,
                 batchId,
-                promptId: prompt.id,
-                promptText: prompt.queryText,
                 engine,
-                runIdx,
-                engineResult,
-                brandDomain: brand.domain,
-                competitorDomains,
-                trackedEntities,
-                pageCache,
-                locale,
+                account: activeAccount(engine) ?? "visitor",
+                kind: personKind,
+                detail: failure.message,
+                pageUrl: pageForAction(engine, prompt.queryText),
+                promptIds: [prompt.id],
               });
-              completedRuns++;
-              updateBatch(batchId, { completedRuns });
-            } catch (persistErr) {
-              await recordFailure({ engine, promptId: prompt.id, kind: "error", message: `Persist failed: ${(persistErr as Error).message}` });
+              if (await holdForPerson(request.id, personKind)) {
+                items.push({ prompt, runIdx });
+                return;
+              }
+              const reason = (stopped as { kind: RunFailure["kind"]; message: string } | null) ?? { kind: "waiting_for_person" as const, message: failure.message };
+              await recordFailure({ engine, promptId: prompt.id, kind: reason.kind, message: `${reason.message} (${failure.message})` });
+              return;
             }
-          };
-
-          // A request still open from an earlier audit holds the browser route from the start, so the
-          // engine does not search into the same check again (a sign-in notice alone holds nothing)
-          const waiting = viaApi ? null : openActionFor(engine);
-          if (waiting && (waiting.kind === "human_check" || waiting.pendingPromptIds.length > 0)) {
-            raiseActionRequest({ brandId, batchId, engine, account: waiting.account, kind: waiting.kind });
-            await holdForPerson(waiting.id, waiting.kind);
+            await recordFailure(failure);
+            consecutiveBlocks = failure.kind === "blocked" ? consecutiveBlocks + 1 : 0;
+            consecutiveNetwork = failure.kind === "network" ? consecutiveNetwork + 1 : 0;
+            if (failure.kind === "blocked") {
+              pacingFactor = Math.min(4, pacingFactor * 2);
+              successesSinceBlock = 0;
+            }
+            if (consecutiveBlocks >= MAX_CONSECUTIVE_BLOCKS) paused = true;
+            if (consecutiveNetwork >= MAX_CONSECUTIVE_NETWORK) {
+              stopped = { kind: "skipped_after_network", message: `Not run: ${engine} could not connect ${consecutiveNetwork} times in a row (${failure.message})` };
+            }
+            if (failure.kind === "setup") {
+              if (!viaApi) setupFailure = failure.message;
+              stopped = { kind: "skipped_setup", message: `Not run: ${failure.message}` };
+            }
+            return;
+          }
+          if (engineResult.captureMethod === "browser" || engineResult.captureMethod === "browser_signed_in") recordBrowserSuccess(engine);
+          // A browser answer is asked from this computer's connection country
+          if (!engineResult.searchedFrom && engineResult.captureMethod !== "manual" && connection) engineResult = { ...engineResult, searchedFrom: connection };
+          consecutiveBlocks = 0;
+          consecutiveNetwork = 0;
+          if (pacingFactor > 1 && ++successesSinceBlock >= PACING_DECAY_AFTER) {
+            pacingFactor = Math.max(1, pacingFactor / 2);
+            successesSinceBlock = 0;
           }
 
-          let next = 0;
-          await Promise.all(
-            Array.from({ length: Math.max(1, Math.min(workers, items.length)) }, async () => {
-              while (next < items.length) {
-                const { prompt, runIdx } = items[next++];
-                await processItem(prompt, runIdx);
-              }
+          // The prompt may have been deleted or paused while the engine was answering
+          const after = promptStatus(prompt.id);
+          if (after === "prompt_removed") {
+            await recordFailure({ engine, promptId: prompt.id, kind: "prompt_removed", message: "Prompt deleted during the batch; its answer was not stored" }, { quiet: true });
+            return;
+          }
+          try {
+            await CrawlerOrchestrator.persistRun({
+              runId,
+              brandId,
+              batchId,
+              promptId: prompt.id,
+              promptText: prompt.queryText,
+              engine,
+              runIdx,
+              engineResult,
+              brandDomain: brand.domain,
+              competitorDomains,
+              trackedEntities,
+              pageCache,
+              locale,
+            });
+            completedRuns++;
+            updateBatch(batchId, { completedRuns });
+          } catch (persistErr) {
+            await recordFailure({ engine, promptId: prompt.id, kind: "error", message: `Persist failed: ${(persistErr as Error).message}` });
+          }
+        };
+
+        // A request still open from an earlier audit holds the browser route from the start, so the
+        // engine does not search into the same check again (a sign-in notice alone holds nothing).
+        // Hybrid mode with a key never waits: a blocked browser falls back to the API, as in a run.
+        const waiting = viaApi || keyUsable() ? null : openActionFor(engine, brandId);
+        if (waiting && (waiting.kind === "human_check" || waiting.pendingPromptIds.length > 0)) {
+          raiseActionRequest({ brandId, batchId, engine, account: waiting.account, kind: waiting.kind });
+          // With no screen nobody can complete it: it stays under the bell, and the engine's rest
+          // period (applied above) decides when it searches again
+          if (waitForPersonMs > 0) await holdForPerson(waiting.id, waiting.kind);
+        }
+
+        let next = 0;
+        await Promise.all(
+          Array.from({ length: Math.max(1, Math.min(workers, items.length)) }, async () => {
+            while (next < items.length) {
+              const { prompt, runIdx } = items[next++];
+              // An unexpected throw (e.g. a busy database) fails this question and stops this engine only
+              await processItem(prompt, runIdx).catch(async (err) => {
+                stopped ??= { kind: "error", message: `Not run: ${ENGINES[engine].label} stopped after an unexpected error (${(err as Error)?.message || err})` };
+                await recordFailure({ engine, promptId: prompt.id, kind: "error", message: (err as Error)?.message || String(err) });
+              });
+            }
+          })
+        );
+        // Assigned inside the workers, which control-flow analysis does not follow
+        const stopReason = stopped as { kind: RunFailure["kind"] } | null;
+        if (skipped > 0) console.warn(`[CrawlerOrchestrator] ${engine}: ${skipped} runs not attempted (${stopReason?.kind || "still blocked after cool-downs"})`);
+        // Still blocked after the in-audit cool-downs: the next audits leave the browser route alone for a while
+        if (paused && !viaApi && !browserCoolingDown(engine)) recordBrowserBlock(engine, `${ENGINES[engine].label} still blocked after ${cooldownsUsed} cool-down(s)`);
+      };
+
+      // Each engine catches its own errors, so the batch always closes after every engine has finished
+      // (one engine's throw must not end the batch and free the brand while the others still crawl)
+      await Promise.all(
+        engines.map((engine) =>
+          crawlEngine(engine)
+            .catch(async (err) => {
+              console.error(`[CrawlerOrchestrator] ${engine} stopped after an unexpected error:`, err);
+              await recordFailure({ engine, promptId: null, kind: "error", message: `${ENGINES[engine].label} stopped after an unexpected error: ${(err as Error)?.message || err}` });
             })
-          );
-          // Assigned inside the workers, which control-flow analysis does not follow
-          const stopReason = stopped as { kind: RunFailure["kind"] } | null;
-          if (skipped > 0) console.warn(`[CrawlerOrchestrator] ${engine}: ${skipped} runs not attempted (${stopReason?.kind || "still blocked after cool-downs"})`);
-          // Still blocked after the in-audit cool-downs: the next audits leave the browser route alone for a while
-          if (paused && !viaApi && !browserCoolingDown(engine)) recordBrowserBlock(engine, `${ENGINES[engine].label} still blocked after ${cooldownsUsed} cool-down(s)`);
-          enginesWorking--;
-        })
+            .finally(() => {
+              enginesWorking--;
+            })
+        )
       );
 
       // Mark batch finished
@@ -866,7 +945,7 @@ export class CrawlerOrchestrator {
       updateBatch(batchId, { status: "failed", currentPrompt: (batchFatalErr as Error).message, finishedAt: nowIso() });
       throw batchFatalErr;
     } finally {
-      clearInterval(heartbeat);
+      if (heartbeat) clearInterval(heartbeat);
       activeBatches.delete(batchId);
       pageCache.clear();
       if (sharedBrowser) {

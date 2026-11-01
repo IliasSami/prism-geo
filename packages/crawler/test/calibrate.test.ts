@@ -43,3 +43,13 @@ test("too few compared questions are never trusted", () => {
   assert.equal(few.trusted, false);
   assert.match(few.reason, /at least 8/);
 });
+
+test("two calibrations requested at once never both start", async () => {
+  const { calibrateLocation } = await import("../src/queue/calibrate");
+  // The first one fails its own checks later (no reference route here); the second is refused at once
+  const first = calibrateLocation("no-brand").catch((err: Error) => err.message);
+  const second = calibrateLocation("no-brand").catch((err: Error) => err.message);
+  assert.match(await second, /already running/);
+  assert.doesNotMatch(await first, /already running/);
+  assert.match(await calibrateLocation("no-brand").catch((err: Error) => err.message), /route asked from inside the country/, "free again afterwards");
+});

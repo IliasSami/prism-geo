@@ -44,7 +44,7 @@ export class ChatGptEngineCrawler {
         .waitForFunction(() => document.body.innerText.includes("ChatGPT said") || !!document.querySelector("[data-message-author-role='assistant']"), null, { timeout: 45000 })
         .catch(() => null);
       await page.evaluate(MARK_ANSWER);
-      await assertNotBlocked(page, "ChatGptCrawler");
+      await assertNotBlocked(page, "ChatGptCrawler", ANSWER_SELECTOR);
       await waitForStableAnswer(page, ANSWER_SELECTOR, { timeoutMs: 120000, stableMs: 4000, busyText: /^(Searching|Thinking)/i });
       const extracted = await extractAnswer(page, ANSWER_SELECTOR, ["chatgpt.com", "openai.com"]);
       // Checked inside the session so a failure snapshot of the page is saved

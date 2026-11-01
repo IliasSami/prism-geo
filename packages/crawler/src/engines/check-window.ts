@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { chromium, type BrowserContext } from "playwright";
+import { chromium, type BrowserContext, type Page } from "playwright";
 import { ensurePrivateDir } from "@prismgeo/db";
 import { getChromiumExecutablePath } from "../stealth/fingerprint";
-import { assertNotBlocked, getProxyConfig, EngineBlockedError } from "./browser-session";
-import { activeAccount, profileDir, visitorProfileDir, writeVisitorMarker, PROFILE_ARGS, type ProfileEngine } from "./profiles";
+import { assertNotBlocked, EngineBlockedError } from "./browser-session";
+import { getProxyConfig } from "./proxy";
+import { activeAccount, profileDir, visitorProfileDir, withProfileLock, writeVisitorMarker, PROFILE_ARGS, type ProfileEngine } from "./profiles";
 
 /**
  * A visible browser window where a person completes a human check themselves.
@@ -59,9 +60,38 @@ async function showsCheck(context: BrowserContext): Promise<boolean | null> {
 }
 
 /**
+ * Readings in a row (one every 2 s) that must show no check before the window counts as cleared.
+ * Cloudflare's widget takes a few seconds to draw, so one clean reading right after a load is
+ * not enough (seen live: "cleared" flickered on while the check was still loading).
+ */
+export const CLEAN_READINGS_NEEDED = 3;
+
+export interface ClearState {
+  /** Clean readings in a row since the last check or failed load. */
+  cleanStreak: number;
+  /** A check was seen in the window at some point. */
+  sawCheck: boolean;
+  cleared: boolean;
+}
+
+/**
+ * The window's state after one reading. `loaded`: the page in front came from a successful load
+ * (an error page is never "cleared"). `shown`: it shows a check (null: unreadable, e.g. closing).
+ */
+export function nextClearState(s: ClearState, reading: { loaded: boolean; shown: boolean | null }): ClearState {
+  if (reading.shown === null) return s;
+  if (reading.shown) return { cleanStreak: 0, sawCheck: true, cleared: false };
+  if (!reading.loaded) return { ...s, cleanStreak: 0, cleared: false };
+  const cleanStreak = s.cleanStreak + 1;
+  return { ...s, cleanStreak, cleared: cleanStreak >= CLEAN_READINGS_NEEDED };
+}
+
+const isWebPage = (url: string) => /^https?:/i.test(url);
+
+/**
  * Opens the window on `url` and resolves when the person closes it. `cleared` tells whether the
- * last page they saw was free of checks. A check completed in the visitor profile is remembered,
- * so logged-out audits reuse that profile from then on.
+ * last pages they saw were free of checks. A check seen and then completed in the visitor profile
+ * is remembered, so logged-out audits reuse that profile from then on.
  */
 export async function openCheckWindow(engine: ProfileEngine, url: string): Promise<{ cleared: boolean }> {
   if (windows.has(engine)) throw new Error(`A window for ${engine} is already open`);
@@ -73,28 +103,51 @@ export async function openCheckWindow(engine: ProfileEngine, url: string): Promi
   try {
     ensurePrivateDir(path.dirname(dir));
     ensurePrivateDir(dir);
-    const context = await chromium.launchPersistentContext(dir, {
-      headless: false,
-      executablePath: getChromiumExecutablePath(),
-      viewport: null,
-      args: PROFILE_ARGS,
-      ignoreDefaultArgs: ["--enable-automation"],
-      proxy: getProxyConfig(),
+    // The window holds the profile until it closes; an audit page using it is waited for first
+    return await withProfileLock(dir, async () => {
+      const context = await chromium.launchPersistentContext(dir, {
+        headless: false,
+        executablePath: getChromiumExecutablePath(),
+        viewport: null,
+        args: PROFILE_ARGS,
+        ignoreDefaultArgs: ["--enable-automation"],
+        proxy: getProxyConfig(),
+      });
+      try {
+        state.close = () => context.close().catch(() => undefined);
+        const closed = new Promise<void>((resolve) => context.on("close", () => resolve()));
+        // A page counts as loaded once a web page finished loading in it (the person may reload a failed one)
+        const loadedPages = new WeakSet<Page>();
+        const watch = (p: Page) => p.on("load", () => isWebPage(p.url()) && loadedPages.add(p));
+        context.pages().forEach(watch);
+        context.on("page", watch);
+        const page = context.pages()[0] || (await context.newPage());
+        const loaded = await page
+          .goto(url, { waitUntil: "domcontentloaded", timeout: 60000 })
+          .then(() => isWebPage(page.url()))
+          .catch(() => false);
+        if (loaded) loadedPages.add(page);
+        const userAgent = ((await page.evaluate(() => navigator.userAgent).catch(() => "")) as string) || "";
+        let clear: ClearState = { cleanStreak: 0, sawCheck: false, cleared: false };
+        const check = async () => {
+          const front = context.pages().at(-1);
+          const shown = await showsCheck(context);
+          clear = nextClearState(clear, { loaded: Boolean(front && loadedPages.has(front) && isWebPage(front.url())), shown });
+          state.cleared = clear.cleared;
+        };
+        await check();
+        poll = setInterval(check, 2000);
+        await closed;
+        // Remembered only when a check was really there and the person got past it
+        if (clear.cleared && clear.sawCheck && !account && userAgent) writeVisitorMarker(engine, userAgent);
+        return { cleared: clear.cleared };
+      } finally {
+        if (poll) clearInterval(poll);
+        poll = null;
+        // No visible window is left behind after an error
+        await context.close().catch(() => undefined);
+      }
     });
-    state.close = () => context.close().catch(() => undefined);
-    const closed = new Promise<void>((resolve) => context.on("close", () => resolve()));
-    const page = context.pages()[0] || (await context.newPage());
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => null);
-    const userAgent = ((await page.evaluate(() => navigator.userAgent).catch(() => "")) as string) || "";
-    const check = async () => {
-      const shown = await showsCheck(context);
-      if (shown !== null) state.cleared = !shown;
-    };
-    await check();
-    poll = setInterval(check, 2000);
-    await closed;
-    if (state.cleared && !account && userAgent) writeVisitorMarker(engine, userAgent);
-    return { cleared: state.cleared };
   } finally {
     if (poll) clearInterval(poll);
     windows.delete(engine);
