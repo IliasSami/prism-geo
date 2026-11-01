@@ -66,6 +66,7 @@ interface Crawler {
   schedulePromptsPerDay: number;
   scheduleHour: number;
   scheduleTimeZone?: string;
+  pacing?: "safe" | "fast";
 }
 type Keys = { openai: string; gemini: string; perplexity: string; serpapi: string; dataforseo: string; apify: string };
 interface Snapshot {
@@ -779,6 +780,37 @@ function Settings() {
                   />
                 </Field>
               </div>
+            </Card>
+
+            <Card>
+              <CardHeader
+                title="Pacing for free engines"
+                description="How hard PrismGEO may use engines through the browser (logged out or with your free accounts). Keys and the data provider are not affected."
+              />
+              <fieldset className="space-y-2 p-5">
+                <legend className="sr-only">Pacing for free engines</legend>
+                {(
+                  [
+                    ["safe", "Safe (recommended)", "Pauses of 1–5 minutes and safe hourly and daily caps per engine (for example Google: 8 an hour, 30 a day), so free accounts and this computer's address are not limited or blocked. Questions over the cap wait for the next audit."],
+                    ["fast", "Fast", "Short pauses and no caps. Only with your own proxy or paid accounts: free engines block quickly at this pace."],
+                  ] as const
+                ).map(([value, label, hint]) => (
+                  <label key={value} className="flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 p-3 hover:border-zinc-300">
+                    <input
+                      type="radio"
+                      name="pacing"
+                      value={value}
+                      checked={(crawler.pacing ?? "safe") === value}
+                      onChange={() => set("crawler", { pacing: value })}
+                      className="mt-1 accent-accent-600"
+                    />
+                    <span>
+                      <span className="block text-sm font-medium text-zinc-900">{label}</span>
+                      <span className="block text-xs text-zinc-500">{hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
             </Card>
 
             <Card>

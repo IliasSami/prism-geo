@@ -12,16 +12,19 @@ const { setSettings } = await import("@prismgeo/db");
 
 const H = 3_600_000;
 
-test("each block in a row rests the browser longer: 1, 3, 6, 12, then 24 hours", () => {
+test("each block in a row rests the browser longer: Google 6, 12, 24, then 48 hours; others from 1 hour", () => {
   const t0 = Date.parse("2026-10-30T00:00:00Z");
   const hours = [0, 1, 2, 3, 4, 5].map((i) => {
     const b = recordBrowserBlock("google_aio", "unusual traffic", t0 + i * H);
     return (Date.parse(b.until) - (t0 + i * H)) / H;
   });
-  assert.deepEqual(hours, [1, 3, 6, 12, 24, 24]);
+  assert.deepEqual(hours, [6, 12, 24, 48, 48, 48]);
+  const g = recordBrowserBlock("gemini", "x", t0);
+  assert.equal((Date.parse(g.until) - t0) / H, 1, "other engines start at one hour");
+  recordBrowserSuccess("gemini");
   assert.ok(browserCoolingDown("google_ai_mode", t0 + 5 * H), "AI Mode shares Google Search's block");
-  assert.equal(browserCoolingDown("gemini", t0 + 5 * H), null, "Gemini is a different service");
-  assert.equal(browserCoolingDown("google_aio", t0 + 30 * H), null, "the rest ends");
+  assert.equal(browserCoolingDown("gemini", t0 + 5 * H), null, "Gemini is a different service"); // its one-hour rest ended
+  assert.equal(browserCoolingDown("google_aio", t0 + 60 * H), null, "the rest ends");
   // Blocks two days apart do not count as in a row
   assert.equal(recordBrowserBlock("google_aio", "x", t0 + 80 * H).blocks, 1);
 });

@@ -44,6 +44,7 @@ export const KIND_PHRASE: Record<string, string> = {
   cooling_down: "not run: resting after the engine blocked this computer",
   waiting_for_person: "waiting for you to complete a human check or sign-in (see the bell)",
   not_accepted: "the engine's page did not accept the question from the automated browser",
+  budget_reached: "not run yet: the engine's safe hourly or daily limit for free use was reached",
   skipped_after_not_accepted: "skipped after the engine's page kept ignoring questions",
   error: "unexpected error",
 };
@@ -132,6 +133,13 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
         next: "The page loaded and the account is signed in, but the engine ignored the question sent by the automated browser (its page is changing or failing to load). PrismGEO asks ChatGPT logged out instead when this happens. For the others, capture answers by hand with the PrismGEO Capture extension, add a key or the data provider, and run the audit again later.",
         href: "/settings?tab=engines",
         cta: "Capture by hand",
+      };
+    case "budget_reached":
+      return {
+        title: `${list} paused to protect your free access`,
+        next: "PrismGEO asks free engines only a safe number of questions per hour and per day, so your accounts and this computer's address are not limited or blocked. The remaining questions are asked by the next audit; use “Unanswered” to fill them in, or turn on the daily schedule. A key or the data provider has no such cap.",
+        href: "/settings?tab=schedule",
+        cta: "Turn on the schedule",
       };
     case "waiting_for_person":
       return {

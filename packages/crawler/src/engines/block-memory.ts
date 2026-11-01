@@ -1,4 +1,5 @@
 import { getSettings, setSettings } from "@prismgeo/db";
+import { BACKOFF_HOURS } from "./budgets";
 
 /**
  * Remembers when an engine blocked this computer's browser, across audits and restarts.
@@ -6,12 +7,11 @@ import { getSettings, setSettings } from "@prismgeo/db";
  * Without it every new audit, schedule run or calibration searched straight into an active block,
  * and each blocked search can extend it (Google's "unusual traffic" blocks last hours, not
  * minutes). After a block the browser route of that engine rests, for longer after each block in
- * a row (1 h, 3 h, 6 h, 12 h, 24 h); a successful answer clears it. Paid routes are unaffected.
+ * a row (budgets.ts: Google 6–48 h, Perplexity 6–24 h, others 1–24 h); a successful answer clears it. Paid routes are unaffected.
  * This is backing off, never working around a block.
  */
 
 const KEY = "browser_blocks";
-const BACKOFF_HOURS = [1, 3, 6, 12, 24];
 /** Blocks further apart than this do not count as "in a row". */
 const STREAK_RESET_MS = 48 * 3_600_000;
 
@@ -37,7 +37,8 @@ export function recordBrowserBlock(engine: string, reason: string, now = Date.no
   const group = blockGroup(engine);
   const prev = store[group];
   const inRow = prev && now - Date.parse(prev.lastBlockAt) < STREAK_RESET_MS ? prev.blocks + 1 : 1;
-  const hours = BACKOFF_HOURS[Math.min(inRow, BACKOFF_HOURS.length) - 1];
+  const steps = BACKOFF_HOURS[group] ?? BACKOFF_HOURS.default;
+  const hours = steps[Math.min(inRow, steps.length) - 1];
   const block = { blocks: inRow, lastBlockAt: new Date(now).toISOString(), until: new Date(now + hours * 3_600_000).toISOString(), reason: reason.slice(0, 300) };
   setSettings(KEY, { ...store, [group]: block });
   return block;

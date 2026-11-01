@@ -25,6 +25,7 @@ import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteLocation, countryCodeFor,
 import { connectionCountry, countryName, planRoutes } from "../engines/location";
 import { blockGroup, browserCoolingDown, clearBrowserCooldown, recordBrowserBlock, recordBrowserSuccess, untilText } from "../engines/block-memory";
 import { canShowWindow, checkWindowState } from "../engines/check-window";
+import { budgetExhausted, enginePolicy } from "../engines/budgets";
 import {
   addPendingPrompts,
   setPendingPrompts,
@@ -92,8 +93,11 @@ export interface RunFailure {
     | "api_key_rejected"
     | "network"
     | "setup"
+    | "budget_reached"
     | "error";
   message: string;
+  /** When it was recorded (ISO); free-engine budgets count failed attempts by time. */
+  at?: string;
 }
 
 /** Another batch is already crawling this brand (in this or another process). */
@@ -129,9 +133,8 @@ const COOLDOWNS_MS = [10, 20, 30].map((minutes) => minutes * 60_000);
  */
 function pacingFor(engine: EngineName, viaApi: boolean): [number, number] {
   if (viaApi) return [500, 1500];
-  if (engine === "google_aio" || engine === "google_ai_mode") return [15000, 30000];
-  if (engine === "perplexity") return [8000, 15000];
-  return [4000, 8000];
+  const [min, max] = enginePolicy(engine, isProfileConnected(engine)).delay;
+  return [min * 1000, max * 1000];
 }
 
 /** Engine access mode from Settings: browser only, API keys only, or browser with API fallback. */
@@ -563,7 +566,7 @@ export class CrawlerOrchestrator {
 
       const recordFailure = async (failure: RunFailure, { quiet = false } = {}) => {
         failedRuns++;
-        failures.push(failure);
+        failures.push({ ...failure, at: failure.at ?? nowIso() });
         if (!quiet) console.warn(`[CrawlerOrchestrator] ${failure.engine} ${failure.kind}: ${failure.message}`);
         // A busy database must not end an engine: the failure is kept in memory and written with the next update
         try {
@@ -737,6 +740,21 @@ export class CrawlerOrchestrator {
               { quiet: true }
             );
             return;
+          }
+          // A free engine's hourly or daily budget (see budgets.ts) protects the account and this
+          // computer's address; a key in hybrid mode takes over, otherwise the rest waits for later
+          const spent = viaApi || pacingScale === 0 ? null : budgetExhausted(engine, isProfileConnected(engine));
+          if (spent) {
+            if (mode === "hybrid" && apiAllowed(engine)) viaApi = true;
+            else {
+              stopped = {
+                kind: "budget_reached",
+                message: `Not run: ${ENGINES[engine].label} already had ${spent.used} questions from this computer in the last ${spent.window} (safe limit ${spent.limit}), so the rest waits for a later audit. Settings → Schedule can switch to fast pacing if you use your own proxy or paid accounts.`,
+              };
+              skipped++;
+              await recordFailure({ engine, promptId: prompt.id, kind: stopped.kind, message: stopped.message }, { quiet: true });
+              return;
+            }
           }
           if (!firstQuery) await pause();
           firstQuery = false;
