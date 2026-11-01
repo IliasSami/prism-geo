@@ -9,17 +9,17 @@ const profile: BrandProfileInput = {
   niche: description,
   aliases: ["Northwind"],
   competitors: [
-    { name: "Dialsy AI", domain: "dialsy.ai" },
-    { name: "Ringo Calls", domain: "ringocalls.com" },
+    { name: "Vocora AI", domain: "vocora.ai" },
+    { name: "Rinzo Calls", domain: "rinzocalls.com" },
     { name: "Hoop Voice", domain: "hoopvoice.ai" },
     { name: "Talkly", domain: "talkly.com" },
   ],
-  valuePropositions: ["Rings shoppers soon after an abandoned checkout", "Works with Shopify and Klaviyo", "Pay per recovered order", "Shoppers abandon checkout when shipping costs surprise them"],
+  valuePropositions: ["Rings shoppers soon after an abandoned checkout", "Works with Shopify and Mailora", "Pay per recovered order", "Shoppers abandon checkout when shipping costs surprise them"],
 };
 
 test("value propositions are typed as pain, capability or pricing model", () => {
   assert.equal(classifyValueProp("Pay per recovered order"), "pricing");
-  assert.equal(classifyValueProp("Works with Shopify and Klaviyo"), "capability");
+  assert.equal(classifyValueProp("Works with Shopify and Mailora"), "capability");
   assert.equal(classifyValueProp("Rings shoppers soon after an abandoned checkout"), "capability");
   assert.equal(classifyValueProp("Shoppers abandon checkout when shipping costs surprise them"), "pain");
 });
@@ -46,7 +46,7 @@ test("generated questions are grammatical, typed, varied, unprimed and competito
     assert.ok(!/\b(\w+) \1\b/i.test(t), t);
     assert.ok(!/best way to handle (works|pay|calls)/i.test(t), `value prop pasted into a pain template: ${t}`);
   }
-  assert.ok(texts.includes("Which AI voice agents integrate with Shopify and Klaviyo?"));
+  assert.ok(texts.includes("Which AI voice agents integrate with Shopify and Mailora?"));
   assert.ok(texts.includes("Are there AI voice agents that charge only per recovered order?"));
   assert.ok(texts.includes("Is there an AI voice agent that rings shoppers soon after an abandoned checkout?"));
   assert.ok(texts.some((t) => /^Shoppers abandon checkout when shipping costs surprise them\. What actually works/.test(t)), "symptom phrasing");

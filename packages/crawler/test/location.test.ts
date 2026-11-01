@@ -76,7 +76,7 @@ async function captureRequest(reply: unknown, run: () => Promise<unknown>) {
   }
 }
 
-const longAnswer = "Klaviyo and Postscript are the most used options for abandoned cart recovery on Shopify stores in the US market today.";
+const longAnswer = "Mailora and Postscript are the most used options for abandoned cart recovery on Shopify stores in the US market today.";
 
 test("each paid route is asked from the search location, and the answer records it", async () => {
   const opts = { location: "United States", language: "en" };

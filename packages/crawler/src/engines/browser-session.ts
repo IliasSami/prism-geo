@@ -388,7 +388,7 @@ export async function extractAnswer(page: Page, selector: string, excludeHosts: 
         }
         // Remove source chips only: a host-like label ("help.example.com"), a counted chip
         // ("Reddit +1"), or a lone one-word label that is part of its link's host ("examplehq" ->
-        // examplehq.com). A linked product name ("<a>Dialsy</a> - ...") is prose and stays in the
+        // examplehq.com). A linked product name ("<a>Vocora</a> - ...") is prose and stays in the
         // text: it is both a mention and a citation.
         let host = "";
         try {
@@ -398,7 +398,7 @@ export async function extractAnswer(page: Page, selector: string, excludeHosts: 
         }
         const bare = label.toLowerCase().replace(/\s*\+\s?\d+$/, "").replace(/[\s.-]+/g, "");
         const blockText = (a.parentElement?.textContent || "").replace(/\s+/g, " ").trim();
-        // Chips are lower-case hosts; a capitalised "Callora.io" is a product name. A host written
+        // Chips are lower-case hosts; a capitalised "Callexa.io" is a product name. A host written
         // inside a sentence ("the main site is example.ai.") is prose too: chips follow a sentence,
         // they never follow a word.
         const before = blockText.slice(0, Math.max(0, blockText.indexOf(label))).trimEnd();
@@ -414,7 +414,7 @@ export async function extractAnswer(page: Page, selector: string, excludeHosts: 
       const text = (clone.textContent || "")
         .split("\n")
         .map((l) => l.replace(/\s+/g, " ").trim())
-        // Drop UI chrome and non-link source pills ("+1", "help.skio.com") that render as text
+        // Drop UI chrome and non-link source pills ("+1", "help.subio.com") that render as text
         .filter((l) => l && !/^\+\s?\d+$/.test(l) && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(l) && !/^ChatGPT said:?$/i.test(l))
         .join("\n");
       return { text, links };

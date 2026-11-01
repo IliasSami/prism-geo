@@ -53,8 +53,9 @@ USER pwuser
 VOLUME ["/app/data"]
 EXPOSE 3333
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD ["node", "-e", "fetch('http://127.0.0.1:3333/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+  CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PRISMGEO_PORT||3333)+'/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
 WORKDIR /app/apps/web
-# node itself is the server process (no pnpm or shell wrapper), so SIGTERM reaches it directly;
-# run it under an init (compose: init: true, or docker run --init) to reap Chromium's processes
-CMD ["node", "node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", "3333"]
+# node itself becomes the server process (exec, no pnpm wrapper), so SIGTERM reaches it directly;
+# run it under an init (compose: init: true, or docker run --init) to reap Chromium's processes.
+# PRISMGEO_PORT changes the port inside the container.
+CMD ["sh", "-c", "exec node --disable-warning=ExperimentalWarning node_modules/next/dist/bin/next start -H 0.0.0.0 -p \"${PRISMGEO_PORT:-3333}\""]

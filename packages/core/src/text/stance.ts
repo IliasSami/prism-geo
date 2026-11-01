@@ -7,7 +7,7 @@ import type { SentimentType, StanceType } from "../types/index";
  * 1. Every word-bounded occurrence of the entity is read, not only the first.
  * 2. Each occurrence is read in a scope:
  *    - a table row is its own scope;
- *    - a short heading-like line ("Best for X: Dialsy AI", "Ringo Calls") is read with the next line;
+ *    - a short heading-like line ("Best for X: Vocora AI", "Rinzo Calls") is read with the next line;
  *    - a line that names no other tracked entity is its scope;
  *    - otherwise the sentence, split into comma / "but" / "while" clauses; a clause that names no
  *      entity belongs to the entity clause before it ("Unlike A, which can get expensive, B ...").

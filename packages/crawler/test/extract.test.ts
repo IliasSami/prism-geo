@@ -32,16 +32,16 @@ const html = `
       <span><a href="https://www.talkly.com/blog/calls?utm_source=chatgpt.com">talkly.com</a></span></p></li>
     <li><p><strong><a href="https://northwindvoice.ai/?utm_source=chatgpt.com">Northwind</a></strong> — pay per recovered order; best fit for smaller brands.
       <a href="https://www.reddit.com/r/shopify/comments/abc?utm_source=chatgpt.com">Reddit +1</a></p></li>
-    <li><p><strong>Dialsy AI</strong> — high call volume, Klaviyo sync.</p></li>
+    <li><p><strong>Vocora AI</strong> — high call volume, Mailora sync.</p></li>
     <li><p>Also see <a href="https://vocalyze.io/?utm_source=chatgpt.com">Vocalyze</a> for custom workflows.</p></li>
-    <li><p><a href="https://ringocalls.com/">Callora.io</a></p></li>
+    <li><p><a href="https://rinzocalls.com/">Callexa.io</a></p></li>
     <li><p><a href="https://help.example.com/x">helpexample</a></p></li>
   </ol>
 </div></div>`;
 
 test("hyperlinked vendor names stay in the answer text; source chips are removed but kept as links", async () => {
   const ex = await extractAnswer(fakePage(html), "[data-message-author-role='assistant']", ["chat.example"]);
-  for (const name of ["Talkly —", "Northwind —", "Dialsy AI —", "Also see Vocalyze for custom workflows.", "Callora.io"]) {
+  for (const name of ["Talkly —", "Northwind —", "Vocora AI —", "Also see Vocalyze for custom workflows.", "Callexa.io"]) {
     assert.ok(ex.text.includes(name), `"${name}" kept in:\n${ex.text}`);
   }
   assert.ok(!/talkly\.com|Reddit \+1|helpexample/.test(ex.text), `chips removed:\n${ex.text}`);

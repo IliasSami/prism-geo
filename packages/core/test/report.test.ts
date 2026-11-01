@@ -4,14 +4,14 @@ import { buildVisibilityReport, findOpportunities, type ReportInput } from "../s
 
 const brand = { id: "b1", name: "Northwind Voice", domain: "northwindvoice.ai", aliasesJson: JSON.stringify(["Northwind"]) };
 const competitors = [
-  { id: "c-dialsy", name: "Dialsy AI", domain: "dialsy.ai", aliases_json: "[]" },
+  { id: "c-vocora", name: "Vocora AI", domain: "vocora.ai", aliases_json: "[]" },
   { id: "c-talkly", name: "Talkly", domain: "talkly.com", aliases_json: "[]" },
 ];
 
 type M = ReportInput["mentions"][number];
-const mention = (run_id: string, who: "brand" | "c-dialsy" | "c-talkly", extra: Partial<M> = {}): M => ({
+const mention = (run_id: string, who: "brand" | "c-vocora" | "c-talkly", extra: Partial<M> = {}): M => ({
   run_id,
-  entity_name: who === "brand" ? brand.name : who === "c-dialsy" ? "Dialsy AI" : "Talkly",
+  entity_name: who === "brand" ? brand.name : who === "c-vocora" ? "Vocora AI" : "Talkly",
   competitor_id: who === "brand" ? null : who,
   is_target_brand: who === "brand" ? 1 : 0,
   is_prompt_subject: 0,
@@ -38,7 +38,7 @@ function input(): ReportInput {
     brand,
     prompts: [
       { id: "p1", query_text: "best ai voice agent for shopify", intent_type: "category", active: 1 },
-      { id: "p2", query_text: "dialsy ai alternatives", intent_type: "comparison", active: 1 },
+      { id: "p2", query_text: "vocora ai alternatives", intent_type: "comparison", active: 1 },
       { id: "p3", query_text: "is northwind voice legit", intent_type: "category", active: 1 },
       { id: "p4", query_text: "cart recovery pricing", intent_type: "pricing", active: 1 },
       { id: "p5", query_text: "paused question", intent_type: "category", active: 0 },
@@ -57,14 +57,14 @@ function input(): ReportInput {
     ],
     mentions: [
       mention("r1", "brand", { sentiment: "positive", has_caveat: 1 }),
-      mention("r1", "c-dialsy", { position_rank: 2 }),
-      mention("r2", "c-dialsy", { is_prompt_subject: 1, position_rank: null }), // echo of "dialsy ai alternatives"
+      mention("r1", "c-vocora", { position_rank: 2 }),
+      mention("r2", "c-vocora", { is_prompt_subject: 1, position_rank: null }), // echo of "vocora ai alternatives"
       mention("r2", "c-talkly", { position_rank: 1 }),
       mention("r3", "brand", { is_prompt_subject: 1, position_rank: null, entity_confusion: 1 }),
-      mention("r4", "c-dialsy"),
-      mention("r5", "c-dialsy"),
+      mention("r4", "c-vocora"),
+      mention("r5", "c-vocora"),
       // a row stored before is_prompt_subject existed: the echo is derived with the shared term logic
-      mention("r8", "c-dialsy", { is_prompt_subject: null, position_rank: 1 }),
+      mention("r8", "c-vocora", { is_prompt_subject: null, position_rank: 1 }),
       mention("r9", "brand"),
     ],
     citations: [
@@ -95,9 +95,9 @@ test("per-entity denominators leave out prompts that name the entity", () => {
   // organic = active unbranded runs: r1 r2 r4 r5 r7 r8 r9 (r3 is branded, r6 paused)
   assert.equal(r.totalAnswers, 7);
   assert.equal(r.totalQuestions, 3);
-  const dialsy = r.entities.find((e) => e.name === "Dialsy AI")!;
-  assert.equal(dialsy.mentioned.n, 5, "the two answers to 'dialsy ai alternatives' cannot count for Dialsy");
-  assert.equal(dialsy.mentioned.hits, 3);
+  const vocora = r.entities.find((e) => e.name === "Vocora AI")!;
+  assert.equal(vocora.mentioned.n, 5, "the two answers to 'vocora ai alternatives' cannot count for Vocora");
+  assert.equal(vocora.mentioned.hits, 3);
   const talkly = r.entities.find((e) => e.name === "Talkly")!;
   assert.equal(talkly.mentioned.n, 7);
   assert.equal(talkly.mentioned.hits, 1);
@@ -172,10 +172,10 @@ test("brand accuracy counts look-alike confusion with examples", () => {
 
 test("mentions are matched by competitor id, so a renamed competitor keeps its history", () => {
   const data = input();
-  data.competitors = [{ ...competitors[0], name: "Dialsy" }, competitors[1]];
-  const dialsy = buildVisibilityReport(data).entities.find((e) => e.id === "c-dialsy")!;
-  assert.equal(dialsy.name, "Dialsy");
-  assert.equal(dialsy.mentioned.hits, 3);
+  data.competitors = [{ ...competitors[0], name: "Vocora" }, competitors[1]];
+  const vocora = buildVisibilityReport(data).entities.find((e) => e.id === "c-vocora")!;
+  assert.equal(vocora.name, "Vocora");
+  assert.equal(vocora.mentioned.hits, 3);
 });
 
 test("a competitor tracked by a marketplace host gets no citation credit for other listings", () => {

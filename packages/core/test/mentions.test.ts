@@ -35,7 +35,7 @@ test("citation labels and raw URLs are not mentions", () => {
   assert.equal(matches("Northwind Voice", "Sources: https://www.g2.com/products/northwind-voice/reviews"), false);
   assert.equal(matches("Talkly", "see [talkly.com](https://talkly.com/x) and help.example.com +1"), false);
   assert.equal(matches("Northwind Voice", "Read more at northwindvoice.ai/blog/post"), false, "a domain followed by a path is a citation");
-  assert.equal(matches("Northwind Voice", "the dialsy.ai/northwind-voice page"), false);
+  assert.equal(matches("Northwind Voice", "the vocora.ai/northwind-voice page"), false);
 });
 
 test("a vendor name that is a link label stays a mention", () => {
@@ -63,8 +63,8 @@ test("entity terms skip marketplace hosts, ordinary-word stems and short stems",
   assert.ok(!entityTerms("Loopy", [], "loop.ai").includes("loop"), "ordinary word stem");
   assert.ok(!entityTerms("Ring Co", [], "ring.io").includes("ring"));
   assert.ok(!entityTerms("Signal AI", [], "signal.ai").includes("Signal"), "a stripped name that is a common word");
-  assert.ok(entityTerms("Dialsy AI", [], "dialsy.ai").includes("Dialsy"));
-  assert.ok(entityTerms("Dialsy AI", [], "dialsy.ai").includes("dialsy"));
+  assert.ok(entityTerms("Vocora AI", [], "vocora.ai").includes("Vocora"));
+  assert.ok(entityTerms("Vocora AI", [], "vocora.ai").includes("vocora"));
   assert.ok(entityTerms("Talkly", [], "https://www.talkly.com/").includes("talkly.com"));
   // a marketplace domain no longer turns into a term that matches prose
   const listing = { key: "x", name: "Hoop Voice", isTarget: false, terms: entityTerms("Hoop Voice", [], "apps.shopify.com") };
@@ -76,22 +76,22 @@ test("prompt echoes use the same terms as detection", () => {
   const hoop = entities.find((e) => e.name === "Hoop Voice")!;
   assert.equal(namesEntity("hoop subscriptions alternatives", hoop.terms), false);
   assert.equal(namesEntity("hoop voice alternatives", hoop.terms), true);
-  const dialsy = entities.find((e) => e.name === "Dialsy AI")!;
-  assert.equal(namesEntity("dialsy ai alternatives", dialsy.terms), true);
+  const vocora = entities.find((e) => e.name === "Vocora AI")!;
+  assert.equal(namesEntity("vocora ai alternatives", vocora.terms), true);
 });
 
 test("term regex never starts inside a URL path or a domain", () => {
-  assert.equal(termRegex("dialsy", "i").test("g2.com/products/dialsy-ai"), false);
-  assert.equal(termRegex("dialsy", "i").test("dialsy.ai"), false);
-  assert.equal(termRegex("dialsy", "i").test("Dialsy."), true);
-  assert.equal(termRegex("dialsy", "i").test("(Dialsy)"), true);
+  assert.equal(termRegex("vocora", "i").test("g2.com/products/vocora-ai"), false);
+  assert.equal(termRegex("vocora", "i").test("vocora.ai"), false);
+  assert.equal(termRegex("vocora", "i").test("Vocora."), true);
+  assert.equal(termRegex("vocora", "i").test("(Vocora)"), true);
 });
 
 test("list positions come from list items and table rows", () => {
   const caseB = CASES.find((c) => c.id === "B")!;
   const { mentions } = detectMentions(caseB.responseText, entities, caseB.prompt);
   const pos = Object.fromEntries(mentions.map((m) => [m.entity.name, m.listPosition]));
-  assert.deepEqual(pos, { Talkly: 1, "Dialsy AI": 2, "Northwind Voice": 3, Vocalyze: 4 });
+  assert.deepEqual(pos, { Talkly: 1, "Vocora AI": 2, "Northwind Voice": 3, Vocalyze: 4 });
   assert.equal(listItems("one line only").length, 0);
 });
 

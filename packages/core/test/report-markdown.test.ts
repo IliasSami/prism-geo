@@ -9,7 +9,7 @@ const input: ReportInput = {
     { id: "p2", query_text: "best dunning app for shopify subscriptions", intent_type: "consideration", active: 1 },
     { id: "p3", query_text: "is northwind voice legit", intent_type: "direct", active: 1 },
   ],
-  competitors: [{ id: "c1", name: "Dialsy AI", domain: "dialsy.ai", aliases_json: "[]" }],
+  competitors: [{ id: "c1", name: "Vocora AI", domain: "vocora.ai", aliases_json: "[]" }],
   runs: [
     { id: "r1", prompt_id: "p1", engine: "chatgpt", capture_method: "browser", created_at: "2026-10-29T01:00:00.000Z" },
     { id: "r2", prompt_id: "p2", engine: "chatgpt", capture_method: "browser", created_at: "2026-10-29T01:05:00.000Z" },
@@ -18,7 +18,7 @@ const input: ReportInput = {
   ],
   mentions: [
     { run_id: "r1", entity_name: "Northwind Voice", competitor_id: null, is_target_brand: 1, position_rank: 1, sentiment: "positive" },
-    { run_id: "r2", entity_name: "Dialsy AI", competitor_id: "c1", is_target_brand: 0, position_rank: 1, sentiment: "neutral" },
+    { run_id: "r2", entity_name: "Vocora AI", competitor_id: "c1", is_target_brand: 0, position_rank: 1, sentiment: "neutral" },
     { run_id: "r3", entity_name: "Northwind Voice", competitor_id: null, is_target_brand: 1, is_prompt_subject: 1, position_rank: 1, sentiment: "neutral" },
   ],
   citations: [{ run_id: "r1", domain: "northwindvoice.ai", url: "https://northwindvoice.ai/" }],
@@ -38,18 +38,18 @@ test("the Markdown report states rates with their denominators and keeps failure
   const md = renderReportMarkdown(buildVisibilityReport(input), {
     brand: { name: "Northwind Voice", domain: "northwindvoice.ai", category: "AI voice agents for cart recovery" },
     generatedAt: "2026-10-29T02:00:00.000Z",
-    competitors: ["Dialsy AI"],
+    competitors: ["Vocora AI"],
   });
   assert.match(md, /^# AI search visibility: Northwind Voice/);
   assert.match(md, /appears in 25% per-question average \(likely \d+–\d+%; 1 of 3 answers\) of answers to 2 unbranded buyer questions/);
-  assert.match(md, /Most-named competitor:\*\* Dialsy AI/);
+  assert.match(md, /Most-named competitor:\*\* Vocora AI/);
   assert.match(md, /Branded questions\*\* \(that name Northwind Voice\)/);
   assert.match(md, /Perplexity: 1 blocked by the engine, 2 skipped while it kept blocking\./);
-  assert.match(md, /\| best dunning app for shopify subscriptions \| Dialsy AI \(1 of 1\) \| high \|/);
+  assert.match(md, /\| best dunning app for shopify subscriptions \| Vocora AI \(1 of 1\) \| high \|/);
   assert.match(md, /answers captured 2026-10-29 ·/);
   assert.match(md, /\| Gemini \| 1 \| .* \| sources not shown by this engine \|/);
   assert.match(md, /\| discovery \| 1 \| 50% \(1 of 2\) \| none named \|/);
-  assert.match(md, /\| consideration \| 1 \| 0% \(0 of 1\) \| Dialsy AI \(1 of 1\) \|/);
+  assert.match(md, /\| consideration \| 1 \| 0% \(0 of 1\) \| Vocora AI \(1 of 1\) \|/);
   assert.doesNotMatch(md, /NaN|undefined|null%/);
 });
 

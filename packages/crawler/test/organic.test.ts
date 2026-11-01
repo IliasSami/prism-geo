@@ -21,10 +21,10 @@ const PAGE = `
 <div id="search">
   <div id="tads"><a href="https://ad.example/landing"><h3>Sponsored result</h3></a></div>
   <div id="rso">
-    <div><a href="https://www.klaviyo.com/blog/abandoned-cart?utm_source=google"><h3>Abandoned cart emails | Klaviyo</h3></a></div>
+    <div><a href="https://www.mailora.com/blog/abandoned-cart?utm_source=google"><h3>Abandoned cart emails | Mailora</h3></a></div>
     <div><a href="/url?q=https://www.shopify.com/blog/abandoned-carts&sa=U"><h3>Recover abandoned carts - Shopify</h3></a></div>
     <div><a href="https://www.google.com/search?q=related"><h3>More results</h3></a></div>
-    <div><a href="https://www.klaviyo.com/blog/abandoned-cart"><h3>Duplicate of the first</h3></a></div>
+    <div><a href="https://www.mailora.com/blog/abandoned-cart"><h3>Duplicate of the first</h3></a></div>
     <div><a href="https://example.org/guide"><div role="heading" aria-level="3">A guide</div></a></div>
   </div>
 </div>`;
@@ -39,7 +39,7 @@ test("organic results are read in order, without ads, AI Overview links, Google'
     assert.deepEqual(
       results.map((r) => [r.position, new URL(r.url).hostname, r.title]),
       [
-        [1, "www.klaviyo.com", "Abandoned cart emails | Klaviyo"],
+        [1, "www.mailora.com", "Abandoned cart emails | Mailora"],
         [2, "www.shopify.com", "Recover abandoned carts - Shopify"],
         [3, "example.org", "A guide"],
       ]

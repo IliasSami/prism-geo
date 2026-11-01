@@ -9,7 +9,7 @@ export interface BrandProfileInput {
   category?: string;
   aliases: string[];
   competitors: Array<{ name: string; domain: string }>;
-  /** Customer pains, capabilities ("Works with Klaviyo") or pricing models ("Pay per recovered order"). */
+  /** Customer pains, capabilities ("Works with Mailora") or pricing models ("Pay per recovered order"). */
   valuePropositions: string[];
 }
 

@@ -68,7 +68,7 @@ export function isGenericHost(host: string): boolean {
   return GENERIC_HOSTS.has(h);
 }
 
-/** Generic suffixes dropped from a name ("Dialsy AI" -> "Dialsy", "Callora.io" -> "Callora"). */
+/** Generic suffixes dropped from a name ("Vocora AI" -> "Vocora", "Callexa.io" -> "Callexa"). */
 const NAME_SUFFIX = /(\.(ai|io|com|co|app)|\s+(ai|app|inc|hq|io|llc|ltd))$/i;
 
 /** A word that is safe as a standalone term: long enough and not an ordinary English word. */
@@ -120,7 +120,7 @@ const HYPHEN_MODIFIERS =
 /**
  * Whole-word matcher for one term. Dashes in the term match any dash with optional spaces
  * ("Hoop – AI" = "Hoop - AI" = "Hoop—AI"), whitespace matches any whitespace, and a match never
- * starts inside a URL/domain/path segment or ends where a domain or path continues ("dialsy.ai/blog",
+ * starts inside a URL/domain/path segment or ends where a domain or path continues ("vocora.ai/blog",
  * "northwind-voice" path parts and "northwindvoiceai.com" do not match "Northwind Voice").
  * A hyphen after the name only counts as a boundary before a modifier ("Acme-powered", not
  * "voice-over"); a slash only before a plain word ("Acme/Shopify", not "acme/blog/post"); "@Acme" matches.

@@ -88,8 +88,8 @@ test("the full pipeline stores mentions, echoes, stance, confusion flags and ver
   }
   assert.ok(rows.every((r) => r.entity_name !== "Northwind Voice Rival"), "paused competitor not tracked");
   assert.ok(rows.filter((r) => r.entity_name !== PROFILE.brand.name).every((r) => r.competitor_id), "competitor id stored");
-  const dialsyA = rows.find((r) => r.prompt_id === "p-A" && r.entity_name === "Dialsy AI");
-  assert.equal(dialsyA.has_caveat, 1);
+  const vocoraA = rows.find((r) => r.prompt_id === "p-A" && r.entity_name === "Vocora AI");
+  assert.equal(vocoraA.has_caveat, 1);
   assert.equal(rows.find((r) => r.prompt_id === "p-B" && r.entity_name === "Vocalyze").list_position, 4);
 
   // entity confusion: flagged on the run and on the brand mention
@@ -102,8 +102,8 @@ test("the full pipeline stores mentions, echoes, stance, confusion flags and ver
 
   // citations: canonical URLs in document order, engine titles on the right URL
   const cits = sqlite.prepare("SELECT c.url, c.title, c.rank FROM citations c JOIN prompt_runs r ON r.id = c.run_id WHERE r.prompt_id = 'p-D' ORDER BY c.rank").all() as any[];
-  assert.deepEqual(cits.map((c) => c.url), ["https://www.talkly.com/blog/abandoned-checkout-calls", "https://help.shopify.com/en/manual/checkout-settings", "https://northwindvoice.ai/blog/klaviyo-voice"]);
-  assert.equal(cits[2].title, "Klaviyo + voice");
+  assert.deepEqual(cits.map((c) => c.url), ["https://www.talkly.com/blog/abandoned-checkout-calls", "https://help.shopify.com/en/manual/checkout-settings", "https://northwindvoice.ai/blog/mailora-voice"]);
+  assert.equal(cits[2].title, "Mailora + voice");
   assert.equal(cits[0].title, "How to call abandoned checkouts");
 
   // reverse-RAG: nothing stored without evidence of reuse
@@ -111,8 +111,8 @@ test("the full pipeline stores mentions, echoes, stance, confusion flags and ver
 
   // the report built from the stored rows
   const report = buildVisibilityReport(loadReportInput("b1"));
-  const dialsy = report.entities.find((e) => e.name === "Dialsy AI")!;
-  assert.equal(dialsy.mentioned.n, report.totalAnswers - 1, "the 'dialsy ai alternatives' answer is not in Dialsy's denominator");
+  const vocora = report.entities.find((e) => e.name === "Vocora AI")!;
+  assert.equal(vocora.mentioned.n, report.totalAnswers - 1, "the 'vocora ai alternatives' answer is not in Vocora's denominator");
   assert.equal(report.prompts.find((p) => p.id === "p-F")!.youMentioned, 1);
   assert.equal(report.brandAccuracy.confusedAnswers, 1);
   assert.ok(!report.entities.some((e) => e.name === "Northwind Voice Rival"));
