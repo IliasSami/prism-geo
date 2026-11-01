@@ -308,6 +308,8 @@ const FAILURE_BUCKET: Record<string, keyof FailureCounts | null> = {
   wrong_location: null,
   cooling_down: "skipped",
   waiting_for_person: "skipped",
+  not_accepted: "noAnswer",
+  skipped_after_not_accepted: "skipped",
 };
 
 export function buildVisibilityReport(input: ReportInput): Report {

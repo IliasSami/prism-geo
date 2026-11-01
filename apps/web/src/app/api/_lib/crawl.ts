@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { getRawDb, getSettings, type BrandRecord } from "@prismgeo/db";
-import { BatchRunningError, CrawlerOrchestrator, closeStaleBatches, isProfileConnected } from "@prismgeo/crawler";
+import { BatchRunningError, CrawlerOrchestrator, closeStaleBatches, isProfileConnected, unansweredPromptIdsByEngine } from "@prismgeo/crawler";
 import { ENGINE_IDS, intSchema, brandIdSchema, type EngineId } from "./validate";
 
 /** Body of POST /api/crawl/start (also used by the MCP start_crawl tool). */
@@ -14,6 +14,8 @@ export const crawlStartSchema = z.object({
   sampleSize: intSchema(1, 20, "Runs per question").optional(),
   // null means "all questions", like leaving it out
   promptLimit: z.preprocess((v) => (v === null ? undefined : v), intSchema(1, 100_000, "The number of questions").optional()),
+  // "gaps": each engine asks only the active questions it has never answered (promptLimit caps it per engine)
+  scope: z.enum(["all", "gaps"], { error: 'scope must be "all" or "gaps"' }).optional(),
 });
 export type CrawlStartInput = z.output<typeof crawlStartSchema>;
 
@@ -43,8 +45,9 @@ export function startCrawl(
   brand: BrandRecord,
   input: CrawlStartInput,
   /** Ask exactly these questions per engine (resuming the ones a request held), not all of them. */
-  only?: { promptIdsByEngine: Partial<Record<EngineId, string[]>> }
+  onlyQuestions?: { promptIdsByEngine: Partial<Record<EngineId, string[]>> }
 ): CrawlStartResult {
+  let only = onlyQuestions;
   const sqlite = getRawDb();
 
   // Unknown engine ids are an input error, not something to drop silently
@@ -70,6 +73,20 @@ export function startCrawl(
   });
   if (engines.length === 0) {
     return { ok: false, status: 400, body: { error: "None of the selected engines can run", ignoredEngines } };
+  }
+
+  // Fill the gaps: each engine gets only the questions it has never answered
+  if (input.scope === "gaps" && !only) {
+    const gaps = unansweredPromptIdsByEngine(brand.id, engines, input.promptLimit);
+    for (const e of [...engines]) {
+      if (gaps[e]?.length) continue;
+      ignoredEngines.push({ engine: e, reason: "Already answered every active question" });
+      engines.splice(engines.indexOf(e), 1);
+    }
+    if (engines.length === 0) {
+      return { ok: false, status: 400, body: { error: "Every selected engine has already answered every active question.", ignoredEngines } };
+    }
+    only = { promptIdsByEngine: Object.fromEntries(engines.map((e) => [e, gaps[e]])) };
   }
 
   // Concurrency lock. Batches whose process stopped (restart, killed CLI) stop sending

@@ -61,6 +61,19 @@ export function stalestPromptIds(brandId: string, limit: number, engine?: string
   return rows.map((r) => r.id);
 }
 
+/**
+ * Each engine's active prompts it has never answered, oldest prompts first (at most `limit` per
+ * engine): what a "fill the gaps" audit asks so every engine covers every question.
+ */
+export function unansweredPromptIdsByEngine(brandId: string, engines: readonly string[], limit?: number): Record<string, string[]> {
+  const stmt = getRawDb().prepare(
+    `SELECT p.id FROM prompts p
+     WHERE p.brand_id = ? AND p.active = 1 AND NOT EXISTS (SELECT 1 FROM prompt_runs r WHERE r.prompt_id = p.id AND r.engine = ?)
+     ORDER BY p.created_at, p.id LIMIT ?`
+  );
+  return Object.fromEntries(engines.map((e) => [e, (stmt.all(brandId, e, limit ?? -1) as Array<{ id: string }>).map((r) => r.id)]));
+}
+
 /** Each engine's own stalest prompts (per-engine staleness, random tie-break). */
 export function stalestPromptIdsByEngine(brandId: string, engines: readonly string[], limit: number): Record<string, string[]> {
   return Object.fromEntries(engines.map((e) => [e, stalestPromptIds(brandId, limit, e)]));

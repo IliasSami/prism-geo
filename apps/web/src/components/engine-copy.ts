@@ -43,6 +43,8 @@ export const KIND_PHRASE: Record<string, string> = {
   wrong_location: "not run: would have searched from outside the search location",
   cooling_down: "not run: resting after the engine blocked this computer",
   waiting_for_person: "waiting for you to complete a human check or sign-in (see the bell)",
+  not_accepted: "the engine's page did not accept the question from the automated browser",
+  skipped_after_not_accepted: "skipped after the engine's page kept ignoring questions",
   error: "unexpected error",
 };
 
@@ -122,6 +124,14 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
         next: "The engine blocked this computer's browser, so PrismGEO leaves it alone for a while (longer after each block in a row) instead of extending the block. A key or the data provider still answers in the meantime.",
         href: "/settings?tab=engines",
         cta: "Add a key",
+      };
+    case "not_accepted":
+    case "skipped_after_not_accepted":
+      return {
+        title: `${list} did not accept the questions`,
+        next: "The page loaded and the account is signed in, but the engine ignored the question sent by the automated browser (its page is changing or failing to load). PrismGEO asks ChatGPT logged out instead when this happens. For the others, capture answers by hand with the PrismGEO Capture extension, add a key or the data provider, and run the audit again later.",
+        href: "/settings?tab=engines",
+        cta: "Capture by hand",
       };
     case "waiting_for_person":
       return {

@@ -19,7 +19,7 @@ import { GoogleAioCrawler, NoAiOverviewError } from "../engines/google-aio";
 import { CopilotEngineCrawler } from "../engines/copilot";
 import { GeminiEngineCrawler } from "../engines/gemini";
 import { ChatGptEngineCrawler } from "../engines/chatgpt";
-import { AnswerNotFinishedError, EngineBlockedError, type EngineAnswer } from "../engines/browser-session";
+import { AnswerNotFinishedError, EngineBlockedError, QuestionNotSentError, type EngineAnswer } from "../engines/browser-session";
 import { getProxyConfig } from "../engines/proxy";
 import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteLocation, countryCodeFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
 import { connectionCountry, countryName, planRoutes } from "../engines/location";
@@ -82,6 +82,8 @@ export interface RunFailure {
     | "wrong_location"
     | "cooling_down"
     | "waiting_for_person"
+    | "not_accepted"
+    | "skipped_after_not_accepted"
     | "skipped_after_blocks"
     | "skipped_after_network"
     | "skipped_setup"
@@ -201,6 +203,7 @@ export function classifyFailure(engine: EngineName, promptId: string | null, err
   if (err instanceof EngineBlockedError) kind = "blocked";
   else if (err instanceof NoAiOverviewError) kind = "no_ai_overview";
   else if (err instanceof ApiKeyRejectedError) kind = "api_key_rejected";
+  else if (err instanceof QuestionNotSentError) kind = "not_accepted";
   else if (err instanceof AnswerNotFinishedError || /No extractable response|present but empty|did not finish/.test(message)) kind = "no_answer";
   // A profile another browser holds fails to launch too, but it is not a missing browser: it passes
   else if (err instanceof ProfileInUseError || PROFILE_IN_USE.test(rawMessage)) kind = "error";
@@ -597,6 +600,7 @@ export class CrawlerOrchestrator {
       const crawlEngine = async (engine: EngineName): Promise<void> => {
         let consecutiveBlocks = 0;
         let consecutiveNetwork = 0;
+        let consecutiveNotAccepted = 0;
         let successesSinceBlock = 0;
         let paused = false;
         let cooldownsUsed = 0;
@@ -825,6 +829,9 @@ export class CrawlerOrchestrator {
             await recordFailure(failure);
             consecutiveBlocks = failure.kind === "blocked" ? consecutiveBlocks + 1 : 0;
             consecutiveNetwork = failure.kind === "network" ? consecutiveNetwork + 1 : 0;
+            consecutiveNotAccepted = failure.kind === "not_accepted" ? consecutiveNotAccepted + 1 : 0;
+            // The engine's page keeps ignoring questions: asking the rest would only repeat it
+            if (consecutiveNotAccepted >= 2) stopped = { kind: "skipped_after_not_accepted", message: `Not run: ${ENGINES[engine].label} did not accept ${consecutiveNotAccepted} questions in a row from the automated browser` };
             if (failure.kind === "blocked") {
               pacingFactor = Math.min(4, pacingFactor * 2);
               successesSinceBlock = 0;
@@ -844,6 +851,7 @@ export class CrawlerOrchestrator {
           if (!engineResult.searchedFrom && engineResult.captureMethod !== "manual" && connection) engineResult = { ...engineResult, searchedFrom: connection };
           consecutiveBlocks = 0;
           consecutiveNetwork = 0;
+          consecutiveNotAccepted = 0;
           if (pacingFactor > 1 && ++successesSinceBlock >= PACING_DECAY_AFTER) {
             pacingFactor = Math.max(1, pacingFactor / 2);
             successesSinceBlock = 0;

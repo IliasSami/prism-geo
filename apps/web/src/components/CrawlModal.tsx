@@ -214,7 +214,9 @@ export function AuditProvider({
     };
   }, [open, close]);
 
-  const questionCount = questions === 0 ? totalPrompts : Math.min(questions, totalPrompts);
+  // -1: each engine asks only the questions it has never answered ("fill the gaps")
+  const gapsOnly = questions === -1;
+  const questionCount = questions <= 0 ? totalPrompts : Math.min(questions, totalPrompts);
   const runs = questionCount * repeats * selected.length;
   const questionOptions = [10, 25, 50].filter((n) => n < totalPrompts);
 
@@ -225,7 +227,7 @@ export function AuditProvider({
       const res = await fetch("/api/crawl/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brandId, sampleSize: repeats, engines: selected, promptLimit: questions === 0 ? undefined : questions }),
+        body: JSON.stringify({ brandId, sampleSize: repeats, engines: selected, promptLimit: questions <= 0 ? undefined : questions, scope: gapsOnly ? "gaps" : "all" }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 409 && data.runningBatchId) {
@@ -294,8 +296,8 @@ export function AuditProvider({
             <>
               <fieldset>
                 <legend className="text-sm font-medium text-zinc-700">Questions</legend>
-                <div className={cn("mt-2 grid gap-1.5 rounded-lg bg-zinc-100 p-1", ["grid-cols-1", "grid-cols-2", "grid-cols-3", "grid-cols-4"][questionOptions.length])}>
-                  {[...questionOptions, 0].map((n) => (
+                <div className={cn("mt-2 grid gap-1.5 rounded-lg bg-zinc-100 p-1", ["grid-cols-2", "grid-cols-3", "grid-cols-4", "grid-cols-5"][questionOptions.length])}>
+                  {[...questionOptions, 0, -1].map((n) => (
                     <button
                       key={n}
                       type="button"
@@ -306,13 +308,14 @@ export function AuditProvider({
                         questions === n ? "bg-white text-zinc-900 shadow-card" : "text-zinc-600 hover:text-zinc-900"
                       )}
                     >
-                      {n === 0 ? `All ${totalPrompts}` : `First ${n}`}
+                      {n === -1 ? "Unanswered" : n === 0 ? `All ${totalPrompts}` : `First ${n}`}
                     </button>
                   ))}
                 </div>
                 <p className="mt-1.5 text-xs text-zinc-500">
                   You have {totalPrompts} active {totalPrompts === 1 ? "question" : "questions"}.{" "}
                   {questionOptions.length > 0 && "A smaller audit starts with the first active ones. "}
+                  {gapsOnly && "Unanswered: each engine asks only the questions it has never answered, so every engine ends up covering every question. "}
                   To re-check them every day, turn on the daily schedule in{" "}
                   <Link href="/settings?tab=schedule" onClick={close} className="font-medium text-accent-700 underline-offset-2 hover:underline">
                     Settings → Schedule

@@ -235,6 +235,21 @@ const ANSWER_SHOWN_MIN_CHARS = 200;
  * searched, since an answer about captchas or "unusual activity" is still an answer. The check's
  * own markup and the usage-limit dialog are still looked for.
  */
+/**
+ * The page's visible text. A page that redirects while loading (copilot.com, seen live 2026-11-01)
+ * destroys the evaluation context mid-read: wait for the new page to load and read again.
+ */
+async function bodyText(page: Page): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return ((await page.evaluate(() => document.body?.innerText || "")) as string) || "";
+    } catch (err) {
+      if (attempt >= 2 || !/context was destroyed|navigat/i.test((err as Error).message)) throw err;
+      await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => null);
+    }
+  }
+}
+
 export async function assertNotBlocked(page: Page, tag: string, answerSelector?: string): Promise<void> {
   const answered = answerSelector
     ? ((await page
@@ -251,7 +266,7 @@ export async function assertNotBlocked(page: Page, tag: string, answerSelector?:
         .catch(() => false)) as boolean)
     : false;
   if (!answered) {
-    const head = ((await page.evaluate(() => document.body?.innerText || "")) as string).slice(0, 3000).toLowerCase();
+    const head = (await bodyText(page)).slice(0, 3000).toLowerCase();
     const hit = BLOCK_SIGNALS.find((s) => head.includes(s));
     if (hit) throw new EngineBlockedError(`[${tag}] Blocked by engine ("${hit}")`);
   }
@@ -262,7 +277,7 @@ export async function assertNotBlocked(page: Page, tag: string, answerSelector?:
     .catch(() => false)) as boolean;
   if (challenge) throw new EngineBlockedError(`[${tag}] Blocked by engine (a "verify you are human" check)`);
   // An account's usage limit is shown as a dialog after the page text, so the whole page is read
-  const body = ((await page.evaluate(() => document.body?.innerText || "")) as string).toLowerCase();
+  const body = (await bodyText(page)).toLowerCase();
   const limit = USAGE_LIMIT_SIGNALS.find((s) => body.includes(s));
   if (limit) throw new EngineBlockedError(`[${tag}] The account's usage limit is reached ("${limit}"); it resets after a few hours`);
 }
@@ -275,6 +290,12 @@ const USAGE_LIMIT_SIGNALS = ["reached your free search limit", "you've reached o
 
 /** The answer was still streaming when the wait ran out; storing it would undercount late mentions. */
 export class AnswerNotFinishedError extends Error {}
+
+/**
+ * The page looked normal but the engine did not take the question (nothing was sent). Seen live
+ * 2026-11-01 on signed-in ChatGPT and on Copilot. Not a block and not something a person can clear.
+ */
+export class QuestionNotSentError extends Error {}
 
 /**
  * Polls the last element matching `selector` until its text stops changing for `stableMs`
