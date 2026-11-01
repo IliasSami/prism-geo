@@ -57,13 +57,14 @@ function browserUse(engine: string, sinceIso: string): number {
   ).n;
   // Attempts that ended without an answer count too; "not run" entries never reached the engine
   const failed = db
-    .prepare("SELECT errors_json FROM crawl_batches WHERE created_at >= ? AND errors_json LIKE ?")
-    .all(new Date(Date.parse(sinceIso) - 24 * 3_600_000).toISOString(), `%"${engine}"%`) as Array<{ errors_json: string }>;
+    .prepare("SELECT errors_json, COALESCE(finished_at, heartbeat_at, created_at) AS ended FROM crawl_batches WHERE COALESCE(finished_at, heartbeat_at, created_at) >= ? AND errors_json LIKE ?")
+    .all(sinceIso, `%"${engine}"%`) as Array<{ errors_json: string; ended: string }>;
   let attempts = 0;
   for (const b of failed) {
     try {
       for (const f of JSON.parse(b.errors_json) as Array<{ engine: string; kind: string; at?: string }>) {
-        if (f.engine === engine && ATTEMPT_KINDS.has(f.kind) && (!f.at || f.at >= sinceIso)) attempts++;
+        // Failures recorded before timestamps existed take their audit's end time
+        if (f.engine === engine && ATTEMPT_KINDS.has(f.kind) && (f.at ?? b.ended) >= sinceIso) attempts++;
       }
     } catch {
       // unreadable row: ignore

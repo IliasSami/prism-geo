@@ -29,6 +29,13 @@ test("Google gets at most 8 browser searches an hour; paid captures and other en
   assert.equal(budgetExhausted("gemini", false, now), null);
 });
 
+test("undated failures from older audits count at their audit's end time, not as recent", () => {
+  batch.run("b-old", ago(300), JSON.stringify(Array.from({ length: 9 }, () => ({ engine: "chatgpt", promptId: "p1", kind: "no_answer", message: "x" }))));
+  sqlite.prepare("UPDATE crawl_batches SET finished_at = ? WHERE id = 'b-old'").run(ago(290));
+  assert.equal(budgetExhausted("chatgpt", true, now), null, "five hours ago is outside the hour");
+  assert.deepEqual(budgetExhausted("chatgpt", false, now), null, "and under the logged-out daily cap of 60");
+});
+
 test("the daily cap counts the last 24 hours; logged-out Perplexity is capped hardest", () => {
   for (let i = 0; i < 10; i++) answer.run(`p${i}`, "perplexity", "browser", ago(120 + i * 60));
   assert.deepEqual(budgetExhausted("perplexity", false, now), { window: "day", used: 10, limit: 10 });
