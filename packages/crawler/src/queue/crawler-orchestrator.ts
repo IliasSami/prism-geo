@@ -743,13 +743,21 @@ export class CrawlerOrchestrator {
           }
           // A free engine's hourly or daily budget (see budgets.ts) protects the account and this
           // computer's address; a key in hybrid mode takes over, otherwise the rest waits for later
-          const spent = viaApi || pacingScale === 0 ? null : budgetExhausted(engine, isProfileConnected(engine));
+          let spent = viaApi || pacingScale === 0 ? null : budgetExhausted(engine, isProfileConnected(engine));
+          // Over the hourly cap: wait for room within the hour (the audit carries on by itself);
+          // only the daily cap ends the engine's part of the audit
+          while (spent?.window === "hour" && !(mode === "hybrid" && apiAllowed(engine))) {
+            updateBatch(batchId, { currentEngine: engine, currentPrompt: `Pacing: ${ENGINES[engine].label} reached its safe hourly limit (${spent.limit}); continuing when the hour allows` });
+            await new Promise((r) => setTimeout(r, 60_000));
+            if (promptStatus(prompt.id) !== "ok") break;
+            spent = budgetExhausted(engine, isProfileConnected(engine));
+          }
           if (spent) {
             if (mode === "hybrid" && apiAllowed(engine)) viaApi = true;
             else {
               stopped = {
                 kind: "budget_reached",
-                message: `Not run: ${ENGINES[engine].label} already had ${spent.used} questions from this computer in the last ${spent.window} (safe limit ${spent.limit}), so the rest waits for a later audit. Settings → Schedule can switch to fast pacing if you use your own proxy or paid accounts.`,
+                message: `Not run: ${ENGINES[engine].label} already had ${spent.used} questions from this computer in the last ${spent.window === "day" ? "24 hours" : "hour"} (safe limit ${spent.limit}), so the rest waits for a later audit. Settings → Schedule can switch to fast pacing if you use your own proxy or paid accounts.`,
               };
               skipped++;
               await recordFailure({ engine, promptId: prompt.id, kind: stopped.kind, message: stopped.message }, { quiet: true });
