@@ -8,8 +8,10 @@ import { NextResponse, type NextRequest } from "next/server";
  *    the attacker's domain and would pass an Origin-equals-Host check. Only answering to known
  *    host names stops it from reading client data, exports or the connector token. Extra names
  *    (a reverse proxy, a LAN name) come from PRISMGEO_URL and PRISMGEO_ALLOWED_HOSTS.
- * 2. Same-origin JSON for mutating API calls: a text/plain body skips the CORS preflight, so
- *    without this any page the user visits could change API keys, the proxy, or start crawls.
+ * 2. Same-origin only for every API call (Sec-Fetch-Site and Origin): GETs too, since a GET can
+ *    start a backup or return the connector token.
+ * 3. JSON for mutating API calls: a text/plain body skips the CORS preflight, so without this any
+ *    page the user visits could change API keys, the proxy, or start crawls.
  *
  * /api/mcp (exactly, or below it) is exempt from both: it is authenticated by its bearer token
  * and may be reached through a tunnel under another host name.
@@ -50,6 +52,27 @@ export function isMcpPath(pathname: string): boolean {
   return pathname === "/api/mcp" || pathname.startsWith("/api/mcp/");
 }
 
+/** The routes the capture extension calls with its bearer token. */
+export function isCaptureTokenPath(pathname: string): boolean {
+  return pathname === "/api/capture" || pathname === "/api/capture/context";
+}
+
+/**
+ * Whether a request comes from the dashboard itself (or a typed URL, or a tool like curl).
+ * Browsers send Sec-Fetch-Site on every request; Origin is checked too for older browsers.
+ */
+export function sameOrigin(fetchSite: string | null, origin: string | null, host: string): boolean {
+  if (fetchSite === "cross-site" || fetchSite === "same-site") return false;
+  if (origin) {
+    let originHost = "";
+    try {
+      originHost = new URL(origin).host;
+    } catch {}
+    if (originHost !== host) return false;
+  }
+  return true;
+}
+
 export function middleware(request: NextRequest) {
   const { method, nextUrl, headers } = request;
   if (isMcpPath(nextUrl.pathname)) return NextResponse.next();
@@ -66,29 +89,26 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  if (!nextUrl.pathname.startsWith("/api/") || method === "GET" || method === "HEAD" || method === "OPTIONS") {
-    return NextResponse.next();
-  }
-  // The capture extension posts from its own origin and authenticates with its capture token
+  if (!nextUrl.pathname.startsWith("/api/")) return NextResponse.next();
+  const readOnly = method === "GET" || method === "HEAD" || method === "OPTIONS";
+
+  // The capture extension calls from its own origin and authenticates with its capture token
   // (checked in the route). Token management (/api/capture/token) stays same-origin only.
-  if ((nextUrl.pathname === "/api/capture" || nextUrl.pathname === "/api/capture/context") && /^Bearer\s+\S/i.test(headers.get("authorization") || "")) {
+  if (isCaptureTokenPath(nextUrl.pathname) && /^Bearer\s+\S/i.test(headers.get("authorization") || "")) {
     const type = headers.get("content-type") || "";
-    if (!type.toLowerCase().startsWith("application/json")) {
+    if (!readOnly && !type.toLowerCase().startsWith("application/json")) {
       return NextResponse.json({ error: "Requests must be sent as application/json" }, { status: 415 });
     }
     return NextResponse.next();
   }
 
-  const origin = headers.get("origin");
-  if (origin) {
-    let originHost = "";
-    try {
-      originHost = new URL(origin).host;
-    } catch {}
-    if (originHost !== host) {
-      return NextResponse.json({ error: "Cross-origin requests are not allowed" }, { status: 403 });
-    }
+  // Every method: a GET can start a backup or read the connector and capture tokens, so another
+  // site (or a site on a sibling subdomain) may not call the API at all
+  if (!sameOrigin(headers.get("sec-fetch-site"), headers.get("origin"), host)) {
+    return NextResponse.json({ error: "Cross-origin requests are not allowed" }, { status: 403 });
   }
+  if (readOnly) return NextResponse.next();
+
   const type = headers.get("content-type") || "";
   if (!type.toLowerCase().startsWith("application/json")) {
     return NextResponse.json({ error: "Requests must be sent as application/json" }, { status: 415 });

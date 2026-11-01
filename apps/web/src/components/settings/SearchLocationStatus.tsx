@@ -42,8 +42,9 @@ function CalibrationPanel({ location }: { location: string }) {
   }, [cal?.status, load]);
   const start = async () => {
     setError(null);
-    const r = await fetch("/api/engines/location/calibrate", { method: "POST" });
-    if (!r.ok) setError((await r.json().catch(() => ({}))).error || "Could not start");
+    const r = await fetch("/api/engines/location/calibrate", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => null);
+    if (!r) setError("Could not reach PrismGEO. Try again.");
+    else if (!r.ok) setError((await r.json().catch(() => ({}))).error || "Could not start");
     load();
   };
   return (

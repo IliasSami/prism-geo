@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSettings, getRawDb, getDbPath } from "@prismgeo/db";
-import { parseBody, route } from "../_lib/http";
+import { jsonError, parseBody, route } from "../_lib/http";
 import { MASK, isMasked, maskKey, maskProxyUrl, unmaskProxyUrl } from "../_lib/secrets";
 import {
   BYOK_PROVIDERS,
   ENGINE_IDS,
   ENGINE_MODES,
   LIMITS,
+  byokKeyError,
   byokSchema,
   engineSettingsSchema,
   intSchema,
@@ -126,13 +127,8 @@ export const POST = route("settings POST", async (request: Request) => {
       if (value === undefined) continue;
       const trimmed = (value ?? "").trim();
       if (isMasked(trimmed)) continue; // the masked value shown by GET: unchanged
-      // DataForSEO authenticates with the API login and password from app.dataforseo.com/api-access
-      if (provider === "dataforseo" && trimmed && !/^[^:\s]+:\S+$/.test(trimmed)) {
-        return NextResponse.json(
-          { error: "DataForSEO: enter your API login and password as login:password (from app.dataforseo.com/api-access)" },
-          { status: 400 },
-        );
-      }
+      const keyError = byokKeyError(provider, trimmed);
+      if (keyError) return jsonError(keyError, 400);
       keys[provider] = trimmed;
     }
     writes.push(["byok_api_keys", keys]);
@@ -145,15 +141,22 @@ export const POST = route("settings POST", async (request: Request) => {
     const next = { ...current.crawler };
     for (const [k, v] of Object.entries(rest)) if (v !== undefined) (next as Record<string, unknown>)[k] = v;
     // The password is never sent to the browser; a masked one means "keep the saved password"
-    if (proxyUrl !== undefined) next.proxyUrl = unmaskProxyUrl(proxyUrl, String(current.crawler.proxyUrl || ""));
+    if (proxyUrl !== undefined) {
+      const unmasked = unmaskProxyUrl(proxyUrl, String(current.crawler.proxyUrl || ""));
+      if (unmasked === null) {
+        return jsonError("Proxy: the host or user name changed, so enter the proxy password again (the saved one is only kept for the same proxy).", 400);
+      }
+      next.proxyUrl = unmasked;
+    }
     writes.push(["crawler_settings", next]);
   }
 
   const sqlite = getRawDb();
-  const save = sqlite.prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)");
+  const save = sqlite.prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES (?, ?, ?)");
+  const now = new Date().toISOString();
   sqlite.exec("BEGIN IMMEDIATE");
   try {
-    for (const [key, value] of writes) save.run(key, JSON.stringify(value));
+    for (const [key, value] of writes) save.run(key, JSON.stringify(value), now);
     sqlite.exec("COMMIT");
   } catch (err) {
     sqlite.exec("ROLLBACK");

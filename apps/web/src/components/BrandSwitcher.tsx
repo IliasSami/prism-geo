@@ -28,20 +28,23 @@ export function BrandSwitcher({
   const [loading, setLoading] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
+  const [listError, setListError] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   // Reload on every open so clients added or deleted elsewhere (Settings, setup) show up
   useEffect(() => {
+    if (!open) setSwitchError(null);
     fetch("/api/brands", { cache: "no-store" })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.brands) {
-          setBrands(data.brands);
-        }
+      .then(async (res) => {
+        const data = res.ok ? await res.json().catch(() => null) : null;
+        if (!Array.isArray(data?.brands)) throw new Error();
+        setBrands(data.brands);
+        setListError(false);
       })
-      .catch(() => {});
+      .catch(() => setListError(true));
   }, [open]);
 
   // Click & Touch outside listener + Escape listener
@@ -119,6 +122,7 @@ export function BrandSwitcher({
     }
     setLoading(true);
     setSwitchingId(brandId);
+    setSwitchError(null);
     try {
       const res = await fetch("/api/brands/active", {
         method: "POST",
@@ -129,14 +133,13 @@ export function BrandSwitcher({
         window.location.reload();
         return;
       }
-      setLoading(false);
-      setSwitchingId(null);
+      setSwitchError(((await res.json().catch(() => null)) as { error?: string } | null)?.error || "Could not switch client. Try again.");
     } catch {
-      setLoading(false);
-      setSwitchingId(null);
-    } finally {
-      setOpen(false);
+      setSwitchError("Could not reach PrismGEO. Try again.");
     }
+    // The list stays open so the message is seen next to the clients
+    setLoading(false);
+    setSwitchingId(null);
   }
 
   const activeName = currentBrandName || brands.find((b) => b.id === currentBrandId)?.name || "Select a client";
@@ -173,6 +176,11 @@ export function BrandSwitcher({
           aria-label="Clients"
           className="absolute left-0 right-0 top-full z-50 mt-1.5 origin-top rounded-xl border border-zinc-200 bg-white p-1 shadow-pop animate-scale-in"
         >
+          {(switchError || (listError && brands.length === 0)) && (
+            <p role="alert" className="px-2.5 py-2 text-sm text-red-700">
+              {switchError || "Could not load the clients. Close and open this list to try again."}
+            </p>
+          )}
           <div className="max-h-64 overflow-y-auto" tabIndex={-1}>
             {brands.map((b, idx) => {
               const isSelected = b.id === currentBrandId;

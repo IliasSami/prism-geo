@@ -8,6 +8,7 @@ import { Drawer, type HighlightGroup } from "@/components/answers/Drawer";
 import { Markdown, makeHighlighter } from "@/components/answers/Markdown";
 import { Pager, SegmentLinks } from "@/components/insights/parts";
 import { copyText } from "@/components/clipboard";
+import { LocalTime } from "@/components/LocalTime";
 import { CAPTURE_METHOD_LABELS } from "@prismgeo/core";
 
 interface RunItem {
@@ -28,12 +29,6 @@ const METHOD_LABEL: Record<string, string> = CAPTURE_METHOD_LABELS;
 /** Gemini's consumer app does not expose its sources to a browser capture; its API does. */
 // Gemini in a browser shows sources as buttons; provider, API and hand captures do include them
 const sourcesHidden = (r: RunItem) => r.citations.length === 0 && r.engine === "gemini" && (r.captureMethod === "browser" || r.captureMethod === "browser_signed_in");
-
-function formatDate(value: string): string {
-  const d = new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleDateString("en-GB", { month: "short", day: "numeric" }) + ", " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-}
 
 function NamesYou({ named, brandName }: { named: boolean; brandName: string }) {
   return named ? (
@@ -211,7 +206,7 @@ export function ResponsesClient({
                         r.citations.length
                       )}
                     </td>
-                    <td className={cn(td, "whitespace-nowrap text-right text-sm text-zinc-500 tabular")}>{formatDate(r.createdAt)}</td>
+                    <td className={cn(td, "whitespace-nowrap text-right text-sm text-zinc-500 tabular")}><LocalTime iso={r.createdAt} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -230,7 +225,7 @@ export function ResponsesClient({
                       <span aria-hidden="true">·</span>
                       <span>{sourcesHidden(r) ? "sources n/a" : `${r.citations.length} ${r.citations.length === 1 ? "source" : "sources"}`}</span>
                       <span aria-hidden="true">·</span>
-                      <span className="tabular">{formatDate(r.createdAt)}</span>
+                      <LocalTime iso={r.createdAt} className="tabular" />
                     </div>
                   </button>
                 </li>
@@ -255,7 +250,7 @@ export function ResponsesClient({
               <Badge>{engineLabel(open.engine)}</Badge>
               <Badge tone="outline">{METHOD_LABEL[open.captureMethod] || open.captureMethod}</Badge>
               {open.namedYou ? <Badge tone="accent">Names {brandName}</Badge> : <Badge tone="outline">Doesn&apos;t name {brandName}</Badge>}
-              <span className="tabular">{formatDate(open.createdAt)}</span>
+              <LocalTime iso={open.createdAt} className="tabular" />
               {open.executionMs > 0 && <span className="tabular">· {(open.executionMs / 1000).toFixed(0)}s</span>}
             </>
           )

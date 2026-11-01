@@ -32,14 +32,17 @@ export default async function ResponsesPage({
   const where = ["r.brand_id = ?"];
   const args: Array<string | number> = [brandId];
   if (engine !== "all") (where.push("r.engine = ?"), args.push(engine));
+  // % and _ in the search are literal characters, not LIKE wildcards
+  const like = `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const match = "(p.query_text LIKE ? ESCAPE '\\' OR r.response_text LIKE ? ESCAPE '\\')";
   if (query) {
-    where.push("(p.query_text LIKE ? OR r.response_text LIKE ?)");
-    args.push(`%${query}%`, `%${query}%`);
+    where.push(match);
+    args.push(like, like);
   }
   const W = where.join(" AND ");
   // Engines that have answers (for the current search), with counts, for the engine filter
-  const countWhere = ["r.brand_id = ?", ...(query ? ["(p.query_text LIKE ? OR r.response_text LIKE ?)"] : [])];
-  const countArgs = query ? [brandId, `%${query}%`, `%${query}%`] : [brandId];
+  const countWhere = ["r.brand_id = ?", ...(query ? [match] : [])];
+  const countArgs = query ? [brandId, like, like] : [brandId];
   const engineCounts = (
     sqlite
       .prepare(`SELECT r.engine AS engine, COUNT(*) AS n FROM prompt_runs r JOIN prompts p ON p.id = r.prompt_id WHERE ${countWhere.join(" AND ")} GROUP BY r.engine ORDER BY n DESC`)

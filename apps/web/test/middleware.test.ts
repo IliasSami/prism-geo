@@ -79,3 +79,42 @@ test("/api/mcp is exempt, /api/mcpx and /api/mcp-admin are not", () => {
   assert.equal(middleware(request("/api/mcpx", { headers: { host: "evil.example" } })).status, 421);
   assert.equal(middleware(request("/api/mcp-admin", { headers: { host: "evil.example" } })).status, 421);
 });
+
+test("cross-site and same-site GETs to the API get 403", () => {
+  for (const site of ["cross-site", "same-site"]) {
+    assert.equal(middleware(request("/api/backup", { headers: { "sec-fetch-site": site } })).status, 403);
+    assert.equal(middleware(request("/api/connector", { headers: { "sec-fetch-site": site } })).status, 403);
+  }
+});
+
+test("a GET with a foreign Origin gets 403", () => {
+  assert.equal(middleware(request("/api/capture/token", { headers: { origin: "chrome-extension://abcdef" } })).status, 403);
+  assert.equal(middleware(request("/api/export", { headers: { origin: "http://evil.example" } })).status, 403);
+});
+
+test("same-origin, typed and header-less GETs pass", () => {
+  assert.ok(passed(middleware(request("/api/backup", { headers: { "sec-fetch-site": "same-origin", origin: "http://localhost:3333" } }))));
+  assert.ok(passed(middleware(request("/api/export", { headers: { "sec-fetch-site": "none" } }))));
+  assert.ok(passed(middleware(request("/api/health"))));
+});
+
+test("a POST the browser marks cross-site gets 403", () => {
+  const res = middleware(
+    request("/api/settings", { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "cross-site" } }),
+  );
+  assert.equal(res.status, 403);
+});
+
+test("pages are not origin-checked", () => {
+  assert.ok(passed(middleware(request("/settings", { headers: { "sec-fetch-site": "cross-site" } }))));
+});
+
+test("the capture extension passes with its bearer token, from its own origin", () => {
+  const ext = { origin: "chrome-extension://abcdef", "sec-fetch-site": "cross-site", authorization: "Bearer pgc_x", "content-type": "application/json" };
+  assert.ok(passed(middleware(request("/api/capture/context", { headers: ext }))));
+  assert.ok(passed(middleware(request("/api/capture", { method: "POST", headers: ext }))));
+  assert.equal(middleware(request("/api/capture", { method: "POST", headers: { ...ext, "content-type": "text/plain" } })).status, 415);
+  // Without the token, or on token management, the origin rules apply
+  assert.equal(middleware(request("/api/capture/context", { headers: { origin: ext.origin, "sec-fetch-site": "cross-site" } })).status, 403);
+  assert.equal(middleware(request("/api/capture/token", { method: "POST", headers: ext })).status, 403);
+});
