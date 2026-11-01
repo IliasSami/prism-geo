@@ -41,7 +41,7 @@ test("the Markdown report states rates with their denominators and keeps failure
     competitors: ["Dialsy AI"],
   });
   assert.match(md, /^# AI search visibility: Northwind Voice/);
-  assert.match(md, /appears in 25% \(likely \d+–\d+%, 1 of 3\) of answers to 2 unbranded buyer questions/);
+  assert.match(md, /appears in 25% per-question average \(likely \d+–\d+%; 1 of 3 answers\) of answers to 2 unbranded buyer questions/);
   assert.match(md, /Most-named competitor:\*\* Dialsy AI/);
   assert.match(md, /Branded questions\*\* \(that name Northwind Voice\)/);
   assert.match(md, /Perplexity: 1 blocked by the engine, 2 skipped while it kept blocking\./);

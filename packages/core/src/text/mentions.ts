@@ -10,6 +10,7 @@ import { hostKey } from "../url/canonical";
  *   termRegex(term)        whole-word, dash/space tolerant, URL-safe matcher for one term
  *   findEntityHits(...)    every occurrence of an entity in a prose text
  *   namesEntity(text, t)   does a short text (a prompt) name the entity
+ *   dropNestedHits(...)    drops hits inside another entity's longer name ("Acme" in "Big Acme")
  *   detectMentions(...)    ranked, echo-aware mentions of tracked entities in one answer
  */
 
@@ -112,19 +113,42 @@ export function foldAccents(text: string): string {
   return out;
 }
 
+/** Words that can follow a name after a hyphen without making it a different name or a slug ("Acme-powered"). */
+const HYPHEN_MODIFIERS =
+  "powered|based|backed|built|driven|enabled|native|first|style|like|owned|made|led|integrated|compatible|friendly|certified|approved|hosted|specific|only|branded|focused|centric|ready|supported|exclusive";
+
 /**
  * Whole-word matcher for one term. Dashes in the term match any dash with optional spaces
  * ("Hoop – AI" = "Hoop - AI" = "Hoop—AI"), whitespace matches any whitespace, and a match never
  * starts inside a URL/domain/path segment or ends where a domain or path continues ("dialsy.ai/blog",
  * "northwind-voice" path parts and "northwindvoiceai.com" do not match "Northwind Voice").
+ * A hyphen after the name only counts as a boundary before a modifier ("Acme-powered", not
+ * "voice-over"); a slash only before a plain word ("Acme/Shopify", not "acme/blog/post"); "@Acme" matches.
  */
 export function termRegex(term: string, flags = "gi"): RegExp {
   // Callers match against foldAccents(text): buyers often type brand names without accents
-  const body = escapeRegex(foldAccents(term).replace(DASHES, "-").replace(ODD_SPACES, " ").trim())
+  const clean = foldAccents(term).replace(DASHES, "-").replace(ODD_SPACES, " ").trim();
+  const body = escapeRegex(clean)
     .replace(/\s*-\s*/g, "\\s*-\\s*")
     .replace(/\s+/g, "\\s+");
-  return new RegExp(`(?<![\\w./@-])${body}(?![\\w/-]|\\.[a-z0-9])`, flags);
+  // A domain term ("acme.com") keeps the strict rules: "sales@acme.com" and "acme.com/blog" are not prose
+  if (clean.includes(".")) return new RegExp(`(?<![\\w./@-])${body}(?![\\w/-]|\\.[a-z0-9])`, flags);
+  const hyphen = `-(?!(?:${HYPHEN_MODIFIERS})\\b(?![-./]\\w))`;
+  const path = `\\/(?=[^\\s/]*[/.][a-z0-9])`;
+  return new RegExp(`(?<![\\w./-])${body}(?!\\w|\\.[a-z0-9]|${hyphen}|${path})`, flags);
 }
+
+/**
+ * Terms matched with their exact case: ordinary words and very short names ("Front", "Close",
+ * "Ada") would otherwise match everyday prose ("in front of", "a close call").
+ */
+export function isCaseSensitiveTerm(term: string): boolean {
+  const t = term.trim();
+  return t.length <= 4 || COMMON_WORDS.has(t.toLowerCase());
+}
+
+/** The matcher findEntityHits and namesEntity use for one term (case-sensitive for ambiguous terms). */
+const entityTermRegex = (term: string, global: boolean) => termRegex(term, `${global ? "g" : ""}${isCaseSensitiveTerm(term) ? "" : "i"}`);
 
 export interface Hit {
   index: number;
@@ -136,7 +160,7 @@ export function findEntityHits(prose: string, terms: string[]): Hit[] {
   const hits: Hit[] = [];
   const folded = foldAccents(prose);
   for (const term of terms) {
-    for (const m of folded.matchAll(termRegex(term))) {
+    for (const m of folded.matchAll(entityTermRegex(term, true))) {
       const index = m.index ?? 0;
       // Keep the longest match at a position, drop matches nested in an earlier, longer one
       const overlap = hits.find((h) => index >= h.index && index < h.index + h.length);
@@ -153,7 +177,28 @@ export function findEntityHits(prose: string, terms: string[]): Hit[] {
 /** True when a short text (a prompt) names the entity. */
 export function namesEntity(text: string, terms: string[]): boolean {
   const prose = foldAccents(proseOf(text));
-  return terms.some((t) => termRegex(t, "i").test(prose));
+  return terms.some((t) => entityTermRegex(t, false).test(prose));
+}
+
+/**
+ * Drops, from each entity's hits, those strictly inside a longer hit of another entity: in
+ * "Big Acme", the tracked "Acme" is part of another tracked name, not a mention of its own.
+ */
+export function dropNestedHits(hitLists: Hit[][]): Hit[][] {
+  return hitLists.map((hits, i) =>
+    hits.filter(
+      (h) =>
+        !hitLists.some(
+          (other, j) => j !== i && other.some((g) => g.length > h.length && g.index <= h.index && g.index + g.length >= h.index + h.length)
+        )
+    )
+  );
+}
+
+/** Which of the entities a short text (a prompt) names, with names nested in another entity's name dropped. */
+export function entitiesNamedIn(text: string, entities: Array<{ terms: string[] }>): boolean[] {
+  const prose = proseOf(text);
+  return dropNestedHits(entities.map((e) => findEntityHits(prose, e.terms))).map((hits) => hits.length > 0);
 }
 
 export interface TrackedEntity {
@@ -182,8 +227,10 @@ export interface DetectedMention<E extends TrackedEntity = TrackedEntity> {
 export function detectMentions<E extends TrackedEntity>(answer: string, entities: E[], promptText: string): { prose: string; mentions: DetectedMention<E>[] } {
   const prose = proseOf(answer);
   const items = listItems(prose);
+  const hitLists = dropNestedHits(entities.map((entity) => findEntityHits(prose, entity.terms)));
+  const echoes = entitiesNamedIn(promptText, entities);
   const found = entities
-    .map((entity) => ({ entity, hits: findEntityHits(prose, entity.terms), isPromptSubject: namesEntity(promptText, entity.terms) }))
+    .map((entity, i) => ({ entity, hits: hitLists[i], isPromptSubject: echoes[i] }))
     .filter((m) => m.hits.length > 0)
     .sort((a, b) => a.hits[0].index - b.hits[0].index);
   let rank = 0;

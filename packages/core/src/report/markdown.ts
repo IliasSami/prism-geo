@@ -14,7 +14,16 @@ export interface MarkdownReportMeta {
 }
 
 const label = (engine: string) => ENGINE_LABELS[engine] || engine;
-const range = (r: Rate) => (r.n ? `${r.pct}% (likely ${r.low}–${r.high}%, ${r.hits} of ${r.n})` : "no answers");
+/**
+ * A rate with its range and raw count. The percent is the mean of each question's share of
+ * answers, so with uneven answers per question it differs from the raw count; it is then labelled
+ * as a per-question average, and the count is always labelled as answers.
+ */
+const range = (r: Rate) => {
+  if (!r.n) return "no answers";
+  const averaged = Math.round((r.hits / r.n) * 100) !== r.pct;
+  return `${r.pct}%${averaged ? " per-question average" : ""} (likely ${r.low}–${r.high}%; ${r.hits} of ${r.n} answers)`;
+};
 const day = (iso: string | null) => (iso ? iso.slice(0, 10) : "–");
 const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
 
@@ -180,6 +189,7 @@ export function renderReportMarkdown(report: Report, meta: MarkdownReportMeta): 
     "",
     `- ${report.totalAnswers} answers to ${report.totalQuestions} unbranded questions (${report.allAnswers} stored in total, including branded and paused questions).`,
     "- Each engine was asked the questions as a buyer would type them; only answers the engine actually returned are counted. Blocks, rate limits and missing AI Overviews are recorded as failures with a reason.",
+    "- Percentages weight every question equally (the average of each question's share of answers); the counts next to them are raw answers, so the two differ when questions have different numbers of answers.",
     "- Ranges are 95% intervals that account for repeated answers to the same question. A company named in the question itself is not counted as mentioned for that question.",
     "- Engines answered without a signed-in account unless noted; answers can vary by account, location and time.",
     ...report.localisation.byEngine

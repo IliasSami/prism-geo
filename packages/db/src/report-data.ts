@@ -10,7 +10,7 @@ import { getRawDb, rowToBrand, type BrandRecord } from "./client";
  */
 export interface ReportInputRows {
   brand: BrandRecord;
-  runs: Array<{ id: string; prompt_id: string; engine: string; capture_method: string; created_at: string; flags_json: string | null }>;
+  runs: Array<{ id: string; batch_id: string | null; prompt_id: string; engine: string; capture_method: string; created_at: string; flags_json: string | null }>;
   prompts: Array<{ id: string; query_text: string; intent_type: string; active: number }>;
   /** Active competitors only (paused competitors are neither tracked nor reported). */
   competitors: Array<{ id: string; name: string; domain: string; aliases_json: string | null }>;
@@ -28,7 +28,7 @@ export interface ReportInputRows {
     entity_confusion: number;
   }>;
   citations: Array<{ run_id: string; domain: string; url: string }>;
-  batches: Array<{ failed_runs: number; errors_json: string }>;
+  batches: Array<{ id: string; failed_runs: number; errors_json: string }>;
 }
 
 export function loadReportInput(brandOrId: string | BrandRecord): ReportInputRows {
@@ -45,7 +45,7 @@ export function loadReportInput(brandOrId: string | BrandRecord): ReportInputRow
   return {
     brand,
     runs: sqlite
-      .prepare("SELECT id, prompt_id, engine, capture_method, created_at, flags_json FROM prompt_runs WHERE brand_id = ? ORDER BY created_at")
+      .prepare("SELECT id, batch_id, prompt_id, engine, capture_method, created_at, flags_json FROM prompt_runs WHERE brand_id = ? ORDER BY created_at")
       .all(id) as ReportInputRows["runs"],
     prompts: sqlite.prepare("SELECT id, query_text, intent_type, active FROM prompts WHERE brand_id = ? ORDER BY created_at").all(id) as ReportInputRows["prompts"],
     competitors: sqlite
@@ -58,6 +58,6 @@ export function loadReportInput(brandOrId: string | BrandRecord): ReportInputRow
       )
       .all(id) as ReportInputRows["mentions"],
     citations: sqlite.prepare("SELECT run_id, domain, url FROM citations WHERE brand_id = ?").all(id) as ReportInputRows["citations"],
-    batches: sqlite.prepare("SELECT failed_runs, errors_json FROM crawl_batches WHERE brand_id = ?").all(id) as ReportInputRows["batches"],
+    batches: sqlite.prepare("SELECT id, failed_runs, errors_json FROM crawl_batches WHERE brand_id = ?").all(id) as ReportInputRows["batches"],
   };
 }

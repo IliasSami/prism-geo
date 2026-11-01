@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { checkSqlShape, readsProtectedTable, runGuardedQuery } from "../src/sql";
+import { checkSqlShape, liveQueryProcesses, readsProtectedTable, runGuardedQuery, withRowCap } from "../src/sql";
 
 let dir: string;
 let dbPath: string;
@@ -100,4 +100,24 @@ test("a single slow step is abandoned at the time budget without blocking the ev
   clearInterval(timer);
   assert.ok(!res.ok && /took longer/.test(res.error), JSON.stringify(res));
   assert.ok(ticks >= 10, `event loop ran ${ticks} ticks`);
+});
+
+test("a stopped slow query is really killed, so later queries keep working", async () => {
+  const slow = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT 500000000) SELECT count(*) FROM c";
+  for (let i = 0; i < 3; i++) {
+    const res = await runGuardedQuery(ro, dbPath, slow, { budgetMs: 200 });
+    assert.ok(!res.ok && /stopped/.test(res.error), JSON.stringify(res));
+  }
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(liveQueryProcesses(), 0, "every slow query's process is gone");
+  const next = await runGuardedQuery(ro, dbPath, "SELECT name FROM brands");
+  assert.ok(next.ok && next.rows[0].name === "Northwind Voice", JSON.stringify(next));
+});
+
+test("user SQL is wrapped in a row cap that survives trailing semicolons and comments", async () => {
+  assert.equal(withRowCap("SELECT 1;;", 10), "SELECT * FROM (\nSELECT 1\n) LIMIT 11");
+  const res = await runGuardedQuery(ro, dbPath, "SELECT name FROM brands -- trailing note", { maxRows: 5 });
+  assert.ok(res.ok && res.rowCount === 1, JSON.stringify(res));
+  const capped = await runGuardedQuery(ro, dbPath, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT x FROM c;", { maxRows: 3 });
+  assert.ok(capped.ok && capped.rowCount === 3 && capped.truncated, JSON.stringify(capped));
 });

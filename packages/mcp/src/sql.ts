@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
+import { spawn } from "node:child_process";
 
 /**
  * Guarded read-only SQL for the MCP query_database tool.
@@ -10,18 +10,19 @@ import { Worker } from "node:worker_threads";
  *   query is compiled with EXPLAIN and refused if its program opens any b-tree of that table or
  *   its index, whatever the spelling (views, aliases, quoting, comments, subqueries). This is
  *   the same decision an SQLite authorizer would make, taken on the compiled program.
- * - Resources: the query runs in a worker thread on its own read-only connection, stops at
- *   MAX_ROWS rows, and is abandoned after the time budget, so a runaway query never blocks the
- *   web server's event loop.
+ * - Resources: the query is wrapped in an outer LIMIT and runs in a child process on its own
+ *   read-only connection. The child is killed (SIGKILL) at the time budget: unlike a worker
+ *   thread, a process can be stopped in the middle of a long SQLite step, so a runaway query
+ *   never keeps running and never blocks the web server's event loop or later queries.
  */
 
 export const MAX_ROWS = 500;
 export const TIME_BUDGET_MS = 5_000;
 const MAX_SQL_LENGTH = 20_000;
-const MAX_LIVE_WORKERS = 2;
+const MAX_LIVE_CHILDREN = 4;
 const PROTECTED_TABLES = ["system_settings"];
 
-type Token = { kind: "word" | "semicolon" | "other"; text: string };
+type Token = { kind: "word" | "semicolon" | "other"; text: string; start: number };
 
 /** Splits SQL into words and semicolons, skipping strings, quoted identifiers and comments. */
 export function tokenize(sql: string): Token[] {
@@ -55,18 +56,18 @@ export function tokenize(sql: string): Token[] {
         j = k + 1;
         break;
       }
-      tokens.push({ kind: "other", text: sql.slice(i, j) });
+      tokens.push({ kind: "other", text: sql.slice(i, j), start: i });
       i = j;
     } else if (ch === ";") {
-      tokens.push({ kind: "semicolon", text: ";" });
+      tokens.push({ kind: "semicolon", text: ";", start: i });
       i++;
     } else if (/[A-Za-z_]/.test(ch)) {
       let j = i + 1;
       while (j < sql.length && /[A-Za-z0-9_$]/.test(sql[j])) j++;
-      tokens.push({ kind: "word", text: sql.slice(i, j) });
+      tokens.push({ kind: "word", text: sql.slice(i, j), start: i });
       i = j;
     } else {
-      tokens.push({ kind: "other", text: ch });
+      tokens.push({ kind: "other", text: ch, start: i });
       i++;
     }
   }
@@ -84,6 +85,18 @@ export function checkSqlShape(sql: string): string | null {
     return "Send one statement at a time (found more after a semicolon)";
   }
   return null;
+}
+
+/**
+ * The statement wrapped in an outer LIMIT, so SQLite itself stops producing rows at the cap (one
+ * extra row tells the caller the result was truncated). Call after checkSqlShape: trailing
+ * semicolons are dropped, and the closing parenthesis goes on its own line so a trailing
+ * "-- comment" cannot swallow it.
+ */
+export function withRowCap(sql: string, maxRows: number): string {
+  const semicolon = tokenize(sql).find((t) => t.kind === "semicolon");
+  const body = semicolon ? sql.slice(0, semicolon.start) : sql;
+  return `SELECT * FROM (\n${body}\n) LIMIT ${Math.max(0, Math.floor(maxRows)) + 1}`;
 }
 
 /** Root pages of the protected tables and their indexes in the main database. */
@@ -106,39 +119,44 @@ export type QueryResult =
   | { ok: true; rows: Record<string, unknown>[]; rowCount: number; truncated: boolean; timedOut: boolean; elapsedMs: number }
   | { ok: false; error: string };
 
-// Plain CommonJS for the worker: evaluated from a string, so it works the same under tsx and bundlers
-const WORKER_SOURCE = `
-const { parentPort, workerData } = require("node:worker_threads");
+// Plain CommonJS for the child process: passed with -e, so it works the same under tsx and bundlers
+const RUNNER_SOURCE = `
 const { DatabaseSync } = require("node:sqlite");
-const { dbPath, sql, maxRows, budgetMs } = workerData;
-const started = Date.now();
-try {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  db.exec("PRAGMA query_only = 1");
-  const rows = [];
-  let truncated = false;
-  let timedOut = false;
-  // Keep the statement referenced for the whole loop: on Node 22.13 an unreferenced statement can
-  // be garbage-collected mid-iteration ("statement has been finalized")
-  const stmt = db.prepare(sql);
-  for (const row of stmt.iterate()) {
-    if (rows.length >= maxRows) { truncated = true; break; }
-    rows.push(row);
-    if (Date.now() - started > budgetMs) { timedOut = true; break; }
+process.once("message", ({ dbPath, sql, maxRows, budgetMs }) => {
+  const started = Date.now();
+  let reply;
+  try {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    db.exec("PRAGMA query_only = 1");
+    const rows = [];
+    let truncated = false;
+    let timedOut = false;
+    // Keep the statement referenced for the whole loop: on Node 22.13 an unreferenced statement can
+    // be garbage-collected mid-iteration ("statement has been finalized")
+    const stmt = db.prepare(sql);
+    for (const row of stmt.iterate()) {
+      if (rows.length >= maxRows) { truncated = true; break; }
+      rows.push(row);
+      if (Date.now() - started > budgetMs) { timedOut = true; break; }
+    }
+    void stmt;
+    db.close();
+    reply = { ok: true, rows, truncated, timedOut, elapsedMs: Date.now() - started };
+  } catch (err) {
+    reply = { ok: false, error: String((err && err.message) || err) };
   }
-  void stmt;
-  db.close();
-  parentPort.postMessage({ ok: true, rows, truncated, timedOut, elapsedMs: Date.now() - started });
-} catch (err) {
-  parentPort.postMessage({ ok: false, error: String((err && err.message) || err) });
-}
+  process.send(reply, () => process.exit(0));
+});
 `;
 
-let liveWorkers = 0;
+let liveChildren = 0;
+
+/** Query processes still alive (a stopped query's process is gone within milliseconds). */
+export const liveQueryProcesses = () => liveChildren;
 
 /**
  * Runs a read-only query with the guards above. `db` is a read-only connection used only to
- * compile the query for the secrets check; the rows are produced in a worker.
+ * compile the query for the secrets check; the rows are produced in a child process.
  */
 export async function runGuardedQuery(
   db: DatabaseSync,
@@ -148,29 +166,39 @@ export async function runGuardedQuery(
 ): Promise<QueryResult> {
   const shape = checkSqlShape(sql);
   if (shape) return { ok: false, error: shape };
+  const capped = withRowCap(sql, maxRows);
   try {
-    if (readsProtectedTable(db, sql)) return { ok: false, error: "system_settings holds API keys and the connector token, so it cannot be queried" };
+    if (readsProtectedTable(db, capped)) return { ok: false, error: "system_settings holds API keys and the connector token, so it cannot be queried" };
   } catch (err) {
     return { ok: false, error: `SQL error: ${(err as Error).message}` };
   }
-  if (liveWorkers >= MAX_LIVE_WORKERS) return { ok: false, error: "Earlier queries are still running. Try again shortly, with a LIMIT." };
+  if (liveChildren >= MAX_LIVE_CHILDREN) return { ok: false, error: "Earlier queries are still running. Try again shortly, with a LIMIT." };
 
-  liveWorkers++;
-  const worker = new Worker(WORKER_SOURCE, { eval: true, workerData: { dbPath, sql, maxRows, budgetMs } });
-  worker.once("exit", () => liveWorkers--);
+  liveChildren++;
+  const child = spawn(process.execPath, ["-e", RUNNER_SOURCE], {
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+    serialization: "advanced",
+    // Plain Node: no inherited loaders (tsx), and an Electron runtime does not start its app
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", NODE_OPTIONS: "" },
+  });
+  child.once("exit", () => liveChildren--);
   return new Promise<QueryResult>((resolve) => {
-    // The row loop checks the budget between rows; this catches a single slow step (a big sort or join)
-    const timer = setTimeout(() => {
-      void worker.terminate();
-      resolve({ ok: false, error: `The query took longer than ${Math.round(budgetMs / 1000)} s and was stopped. Add a LIMIT or a narrower WHERE.` });
-    }, budgetMs + 1_000);
-    worker.once("message", (msg: QueryResult) => {
+    let done = false;
+    const finish = (result: QueryResult) => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
-      resolve(msg.ok ? { ...msg, rowCount: msg.rows.length } : { ok: false, error: `SQL error: ${msg.error}` });
-    });
-    worker.once("error", (err) => {
-      clearTimeout(timer);
-      resolve({ ok: false, error: `SQL error: ${err.message}` });
-    });
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      resolve(result);
+    };
+    // The row loop checks the budget between rows; killing the process stops a single slow step (a big sort or join)
+    const timer = setTimeout(
+      () => finish({ ok: false, error: `The query took longer than ${Math.round(budgetMs / 1000)} s and was stopped. Add a LIMIT or a narrower WHERE.` }),
+      budgetMs + 1_000,
+    );
+    child.once("message", (msg: QueryResult) => finish(msg.ok ? { ...msg, rowCount: msg.rows.length } : { ok: false, error: `SQL error: ${msg.error}` }));
+    child.once("error", (err) => finish({ ok: false, error: `SQL error: ${err.message}` }));
+    child.once("exit", (code, signal) => finish({ ok: false, error: `The query process stopped before answering (${signal || `exit ${code}`})` }));
+    child.send({ dbPath, sql: capped, maxRows, budgetMs });
   });
 }

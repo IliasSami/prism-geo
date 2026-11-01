@@ -1,5 +1,5 @@
 import { ENGINES } from "../engines";
-import { entityTerms, isGenericHost, namesEntity } from "../text/mentions";
+import { entitiesNamedIn, entityTerms, isGenericHost } from "../text/mentions";
 import { domainMatches, hostKey } from "../url/canonical";
 import { clusteredRate, wilsonInterval, type PromptCluster } from "../metrics/visibility-stats";
 import { competitorMatcher } from "../parser/reverse-rag";
@@ -29,6 +29,8 @@ export interface Rate {
   n: number;
   /** Rate in percent: the mean over questions of each question's hit share (equals hits/n with one answer per question). */
   pct: number;
+  /** The same rate unrounded, 0..1, for averaging (averaging rounded percents compounds rounding). */
+  p?: number;
   /** 95% interval in percent: Wilson on the prompt-clustered effective sample size. */
   low: number;
   high: number;
@@ -266,16 +268,16 @@ export interface ReportInput {
 
 /** Plain Wilson rate (answers treated as independent). */
 export function rate(hits: number, n: number): Rate {
-  if (n === 0) return { hits, n, pct: 0, low: 0, high: 0, questions: 0, nEff: 0 };
+  if (n === 0) return { hits, n, pct: 0, p: 0, low: 0, high: 0, questions: 0, nEff: 0 };
   const [low, high] = wilsonInterval(hits, n);
-  return { hits, n, pct: Math.round((hits / n) * 100), low: Math.round(low * 100), high: Math.round(high * 100), questions: n, nEff: n };
+  return { hits, n, pct: Math.round((hits / n) * 100), p: hits / n, low: Math.round(low * 100), high: Math.round(high * 100), questions: n, nEff: n };
 }
 
 /** Prompt-clustered rate from per-prompt clusters. */
 export function clusteredRateOf(clusters: PromptCluster[]): Rate {
   const c = clusteredRate(clusters);
-  if (c.answers === 0) return { hits: 0, n: 0, pct: 0, low: 0, high: 0, questions: 0, nEff: 0 };
-  return { hits: c.hits, n: c.answers, pct: Math.round(c.p * 100), low: Math.round(c.low * 100), high: Math.round(c.high * 100), questions: c.questions, nEff: c.nEff };
+  if (c.answers === 0) return { hits: 0, n: 0, pct: 0, p: 0, low: 0, high: 0, questions: 0, nEff: 0 };
+  return { hits: c.hits, n: c.answers, pct: Math.round(c.p * 100), p: c.p, low: Math.round(c.low * 100), high: Math.round(c.high * 100), questions: c.questions, nEff: c.nEff };
 }
 
 const parseJson = <T>(s: string | null | undefined, fallback: T): T => {
@@ -342,7 +344,10 @@ export function buildVisibilityReport(input: ReportInput): Report {
   const competitorIds = new Set(competitorList.map((e) => e.key));
   const promptById = new Map(input.prompts.map((p) => [p.id, p]));
   const promptNames = new Map<string, Set<string>>();
-  for (const p of input.prompts) promptNames.set(p.id, new Set(entityList.filter((e) => namesEntity(p.query_text, e.terms)).map((e) => e.key)));
+  for (const p of input.prompts) {
+    const named = entitiesNamedIn(p.query_text, entityList);
+    promptNames.set(p.id, new Set(entityList.filter((_, i) => named[i]).map((e) => e.key)));
+  }
   const names = (promptId: string, key: string) => promptNames.get(promptId)?.has(key) ?? false;
   const isBranded = (p: { id: string; intent_type: string }) => p.intent_type === "direct" || names(p.id, BRAND_KEY);
   const isActive = (p: { active: number } | undefined) => !!p && p.active !== 0;
@@ -394,6 +399,8 @@ export function buildVisibilityReport(input: ReportInput): Report {
     mentionsByEntity[ei].push({ ri, m });
   }
   const domainsBy: Array<string[] | undefined> = new Array(R);
+  /** Per run, the cited hosts where a citation URL itself matched a competitor (its site or its listing path). */
+  const competitorHostsBy: Array<Set<string> | undefined> = new Array(R);
   const citedHit = new Uint8Array(R * E);
   const matchers = entityList.map((e) => competitorMatcher(e.key === BRAND_KEY ? brand.domain : input.competitors.find((c) => c.id === e.key)!.domain));
   const matchedEntities = new Map<string, number[]>();
@@ -413,6 +420,7 @@ export function buildVisibilityReport(input: ReportInput): Report {
       matchedEntities.set(url, eis);
     }
     for (const ei of eis) citedHit[ri * E + ei] = 1;
+    if (eis.some((ei) => !entityList[ei].isTarget)) (competitorHostsBy[ri] ??= new Set()).add(d);
   }
   /** Entities whose configured domain can be attributed at all (not a bare marketplace host). */
   const citable = new Set(entityList.filter((e) => e.domain && !isGenericHost(e.domain)).map((e) => e.key));
@@ -490,18 +498,22 @@ export function buildVisibilityReport(input: ReportInput): Report {
     return { engine, promptsCovered: covered.size, activeUnbrandedPrompts: totalQuestions, share: Number(share.toFixed(3)), inHeadline: share >= 0.5, byIntent };
   });
   const included = coverage.filter((c) => c.inHeadline).map((c) => c.engine);
-  const meanOf = (xs: number[]) => (xs.length ? Math.round(xs.reduce((s, x) => s + x, 0) / xs.length) : null);
+  /** Mean of unrounded per-engine rates, in percent, over engines that counted any answer (n > 0). */
+  const meanOf = (rates: Rate[]) => {
+    const xs = rates.filter((r) => r.n > 0).map((r) => r.p ?? r.pct / 100);
+    return xs.length ? Math.round((xs.reduce((s, x) => s + x, 0) / xs.length) * 100) : null;
+  };
 
   const entities = entityRows(organic);
   for (const e of entities) {
-    e.mentionedStratified = meanOf(included.map((engine) => entitiesByEngine[engine].find((x) => x.id === e.id)!.mentioned.pct));
+    e.mentionedStratified = meanOf(included.map((engine) => entitiesByEngine[engine].find((x) => x.id === e.id)!.mentioned));
   }
   const brandIn = (engine: string) => entitiesByEngine[engine].find((x) => x.id === BRAND_KEY)!;
   const headline: StratifiedHeadline = {
     engines: included,
     excluded: coverage.filter((c) => !c.inHeadline).map((c) => ({ engine: c.engine, share: c.share })),
-    brandMentionedPct: meanOf(included.map((engine) => brandIn(engine).mentioned.pct)),
-    brandCitedPct: meanOf(included.filter((engine) => brandIn(engine).cited.n > 0).map((engine) => brandIn(engine).cited.pct)),
+    brandMentionedPct: meanOf(included.map((engine) => brandIn(engine).mentioned)),
+    brandCitedPct: meanOf(included.map((engine) => brandIn(engine).cited)),
   };
 
   const BRAND = entityIndex.get(BRAND_KEY)!;
@@ -594,7 +606,16 @@ export function buildVisibilityReport(input: ReportInput): Report {
       return v;
     };
   };
-  const isCompetitorDomain = memo((d) => competitorList.some((c) => citable.has(c.key) && domainMatches(d, c.domain)));
+  // A competitor configured as a bare site marks its whole host. One configured as a listing
+  // ("apps.shopify.com/acme") marks a host only where a cited URL is under that listing, so the
+  // marketplace's other pages are not counted as competitor sources.
+  const listingCompetitors = new Set(input.competitors.filter((c) => /\/./.test(c.domain.replace(/^[a-z]+:\/\//i, ""))).map((c) => c.id));
+  const isCompetitorHost = memo((d) => competitorList.some((c) => citable.has(c.key) && !listingCompetitors.has(c.key) && domainMatches(d, c.domain)));
+  const isCompetitorSource = (d: string, runs: Iterable<number>) => {
+    if (isCompetitorHost(d)) return true;
+    for (const ri of runs) if (competitorHostsBy[ri]?.has(d)) return true;
+    return false;
+  };
   const isBrandDomain = memo((d) => domainMatches(d, brandDomain));
   const promptRows: PromptRow[] = input.prompts.map((p, pi) => {
     const pr = runsByPrompt[pi];
@@ -607,7 +628,13 @@ export function buildVisibilityReport(input: ReportInput): Report {
       .filter((c) => c.answers > 0)
       .sort((a, b) => b.answers - a.answers);
     const sourceCounts = new Map<string, number>();
-    for (const ri of pr) for (const d of domainsBy[ri] || []) if (!isBrandDomain(d)) sourceCounts.set(d, (sourceCounts.get(d) || 0) + 1);
+    const sourceRuns = new Map<string, number[]>();
+    for (const ri of pr)
+      for (const d of domainsBy[ri] || []) {
+        if (isBrandDomain(d)) continue;
+        sourceCounts.set(d, (sourceCounts.get(d) || 0) + 1);
+        (sourceRuns.get(d) ?? sourceRuns.set(d, []).get(d)!).push(ri);
+      }
     const engines = [...new Set(pr.map((ri) => allRuns[ri].engine))];
     const enginesMissingYou = engines.filter((e) => !pr.some((ri) => allRuns[ri].engine === e && you(ri)));
     const topComp = comps[0]?.answers || 0;
@@ -625,7 +652,7 @@ export function buildVisibilityReport(input: ReportInput): Report {
       enginesMissingYou,
       competitors: comps,
       sources: [...sourceCounts.entries()]
-        .map(([domain, answers]) => ({ domain, answers, isCompetitor: isCompetitorDomain(domain) }))
+        .map(([domain, answers]) => ({ domain, answers, isCompetitor: isCompetitorSource(domain, sourceRuns.get(domain) || []) }))
         .sort((a, b) => b.answers - a.answers)
         .slice(0, 6),
       status,
@@ -635,9 +662,14 @@ export function buildVisibilityReport(input: ReportInput): Report {
   });
 
   const sourceCounts = new Map<string, number>();
-  for (const ri of organic) for (const d of domainsBy[ri] || []) sourceCounts.set(d, (sourceCounts.get(d) || 0) + 1);
+  const competitorCited = new Set<string>();
+  for (const ri of organic)
+    for (const d of domainsBy[ri] || []) {
+      sourceCounts.set(d, (sourceCounts.get(d) || 0) + 1);
+      if (competitorHostsBy[ri]?.has(d)) competitorCited.add(d);
+    }
   const topSources = [...sourceCounts.entries()]
-    .map(([domain, answers]) => ({ domain, answers, isBrand: isBrandDomain(domain), isCompetitor: isCompetitorDomain(domain) }))
+    .map(([domain, answers]) => ({ domain, answers, isBrand: isBrandDomain(domain), isCompetitor: isCompetitorHost(domain) || competitorCited.has(domain) }))
     .sort((a, b) => b.answers - a.answers)
     .slice(0, 10);
 

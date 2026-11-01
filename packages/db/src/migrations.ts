@@ -331,6 +331,14 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 8,
+    name: "index for a brand's latest crawl batches (the brand+status index cannot order by date)",
+    changesData: false,
+    up(db) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_batches_brand_created ON crawl_batches(brand_id, created_at);");
+    },
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

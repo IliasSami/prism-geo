@@ -14,3 +14,4 @@ export * from "./text/discover";
 export * from "./engines";
 export * from "./markets";
 export * from "./geo/uule";
+export * from "./url/competitor-domain";

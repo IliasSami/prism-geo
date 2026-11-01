@@ -107,16 +107,22 @@ function shingles(tokens: string[]): Set<string> {
   return out;
 }
 
-const BOILERPLATE = /\b(cookies?|privacy policy|terms of (service|use)|all rights reserved|subscribe|newsletter|sign up|log in|sign in|book a demo|accept all|manage preferences)\b/i;
+const BOILERPLATE = /\b(cookies?|privacy policy|terms of (service|use)|all rights reserved|subscribe|newsletter|sign up|log in|sign in|book a demo|accept all|manage preferences)\b/gi;
 
 /**
- * Page paragraphs that cannot be evidence of reuse: cookie banners, sign-up and demo prompts,
+ * Page paragraphs that cannot be evidence of reuse: cookie banners, sign-up and demo prompts
+ * (short, or mostly made of such phrases, so a product paragraph that says "sign up" is kept),
  * navigation strings (no function words, or mostly repeated words) and fragments under 8 words.
  */
 export function isBoilerplateParagraph(paragraph: string): boolean {
   const words = paragraph.split(/\s+/).filter(Boolean);
   if (words.length < 8) return true;
-  if (BOILERPLATE.test(paragraph) && words.length < 60) return true;
+  const phrases = paragraph.match(BOILERPLATE) || [];
+  if (phrases.length) {
+    const phraseWords = phrases.reduce((n, p) => n + p.split(/\s+/).length, 0);
+    // A cookie banner strings several such phrases together; a product paragraph mentions one or two
+    if (words.length < 20 || phrases.length >= 3 || phraseWords / words.length >= 0.25) return true;
+  }
   const lower = words.map((w) => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "")).filter(Boolean);
   if (lower.length === 0) return true;
   const unique = new Set(lower).size / lower.length;
