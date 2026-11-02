@@ -23,7 +23,8 @@ type Route = "logged_out" | "signed_in";
 
 const SAFE: Record<string, Record<Route, EnginePolicy>> = {
   chatgpt: { logged_out: { delay: [60, 180], perHour: 15, perDay: 60 }, signed_in: { delay: [90, 240], perHour: 8, perDay: 30 } },
-  perplexity: { logged_out: { delay: [120, 300], perHour: 5, perDay: 10 }, signed_in: { delay: [60, 180], perHour: 10, perDay: 40 } },
+  // Signed in: a free account's search limit was reached at about 16 questions in 24 h (live, 2026-11-02)
+  perplexity: { logged_out: { delay: [120, 300], perHour: 5, perDay: 10 }, signed_in: { delay: [60, 180], perHour: 5, perDay: 15 } },
   google_aio: { logged_out: { delay: [120, 300], perHour: 8, perDay: 30 }, signed_in: { delay: [120, 300], perHour: 8, perDay: 30 } },
   gemini: { logged_out: { delay: [60, 180], perHour: 12, perDay: 50 }, signed_in: { delay: [90, 240], perHour: 10, perDay: 40 } },
   copilot: { logged_out: { delay: [90, 240], perHour: 10, perDay: 40 }, signed_in: { delay: [90, 240], perHour: 10, perDay: 40 } },

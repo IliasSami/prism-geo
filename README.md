@@ -126,7 +126,7 @@ PrismGEO never exhausts a free engine. Every browser question is counted per eng
 | Engine (free, browser) | Pause between questions | Per hour | Per day | Rest after blocks in a row |
 | :--- | :--- | :--- | :--- | :--- |
 | Google AI Overviews | 2–5 min | 8 | 30 | 6 h, 12 h, 24 h, 48 h |
-| Perplexity logged out / signed in | 2–5 min / 1–3 min | 5 / 10 | 10 / 40 | 6 h, 12 h, 24 h |
+| Perplexity logged out / signed in | 2–5 min / 1–3 min | 5 / 5 | 10 / 15 | 6 h, 12 h, 24 h |
 | ChatGPT logged out / signed in | 1–3 min / 1.5–4 min | 15 / 8 | 60 / 30 | 1 h, 3 h, 6 h, 12 h, 24 h |
 | Gemini logged out / signed in | 1–3 min / 1.5–4 min | 12 / 10 | 50 / 40 | 1 h … 24 h |
 | Copilot (signed in) | 1.5–4 min | 10 | 40 | 1 h … 24 h |
