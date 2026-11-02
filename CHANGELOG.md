@@ -2,6 +2,35 @@
 
 All notable changes to PrismGEO are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.0.0-beta.4 (2026-11-03)
+
+### New
+
+- **Autopilot** (Settings → Schedule): keeps auditing by itself for days or weeks until every engine has answered every active question, within each engine's safe limits; skips engines resting, waiting in the bell or refusing questions and retries them later; survives restarts; reports when coverage is complete.
+- **SerpApi's monthly searches are rationed**: the plan's remaining searches come from SerpApi's account endpoint (free), 10% is kept in reserve, the rest is shared out per day over the month, and every request is metered (new reason `api_budget_reached`). SerpApi is spent only where no free route exists (Google AI Mode) or when Google's browser route is blocked.
+- **Approximate location for Google** (as valentin.app does it): browser searches carry Google's location signal (uule, gl, hl) and count as in your market, labelled `locationApproximate`. Calibration now measures how close they are instead of gating them (except for "Only search from here").
+- **Stop audit** in the audit dialog (and `POST /api/crawl/stop`).
+- **Desktop notifications** on macOS and Linux when an engine needs you and when coverage is complete (Settings → Schedule, or `PRISMGEO_NO_NOTIFY=1`).
+- **Keeps running by itself**: `pnpm service:install` runs PrismGEO in the background, starts it at login and restarts it if it stops (macOS, Linux, Windows).
+- **Engine switches** in Settings → Engines & access; a switched-off engine never runs, from the audit dialog, the bell's Resume, the schedule, the autopilot or Claude (MCP).
+- **"Unanswered" audits show the real gap counts** per engine before starting.
+
+### Fixed
+
+- **Calibration** no longer wastes searches: its repeat search skips SerpApi's cache (a cached copy made the noise floor a meaningless 100%) and both reference searches come from the reserve.
+- ChatGPT goes straight to a logged-out page for 24 hours after its signed-in session ignores a question (one visit per question instead of two).
+- Markdown escapes ("e\-commerce") no longer appear in SerpApi AI Mode answers.
+- SerpApi metering: parallel requests can no longer overspend; a renewed plan starts a fresh share; calibration spends from the reserve, not the day's audit share.
+- Autopilot: never reports "complete" with every engine off; never overlaps the schedule or a calibration; an engine whose browser rests is sized by its key route's allowance; an engine that got no answer in a step waits an hour (no empty audits in a loop).
+- "No AI Overview" counts as covered; questions that failed recently go to the back of the queue.
+- Budgets check the daily cap first, count only browser attempts, and include calibration's Google searches.
+- The dashboard no longer turns into a browser error page when PrismGEO is unreachable; Settings warns before leaving with unsaved edits and never saves half a form; wizard competitor errors appear on the right step in plain words; validation messages read naturally; length limits are checked as you type; API requests with unknown fields are refused.
+- Engines page fits a phone screen; Answers has a Search button; persona labels read "CRO", "Head of growth".
+- Generated capability questions read correctly ("…that is HIPAA ready?").
+- The Claude connector (stdio) answers malformed input with JSON-RPC errors; Windows gets a working Claude Desktop config; install.ps1 keeps its window open on errors.
+- Reports: accurate wording for questions not asked; clearer export errors.
+- Quieter install: no lint or SQLite warnings during the build.
+
 ## 1.0.0-beta.3 (2026-11-02)
 
 ### New
@@ -12,11 +41,6 @@ All notable changes to PrismGEO are listed here. Versions follow [Semantic Versi
 - **"Unanswered" audits** ask each engine only the questions it has never answered (also `scope: "gaps"` on `/api/crawl/start`), so coverage gaps between engines close.
 - New failure reasons: `waiting_for_person`, `not_accepted` (the engine's page ignored the question), `budget_reached` (paused to protect free access).
 - `/api/health` reports the version, Node.js and database schema.
-- **Autopilot** (Settings → Schedule): keeps auditing by itself for days or weeks until every engine has answered every active question, within each engine's safe limits; skips engines resting, waiting in the bell or refusing questions and retries them later; survives restarts; reports when coverage is complete.
-- **SerpApi's monthly searches are rationed**: the plan's remaining searches come from SerpApi's account endpoint (free), 10% is kept in reserve, the rest is shared out per day over the month, and every request is metered (new reason `api_budget_reached`). SerpApi is spent only where no free route exists (Google AI Mode) or when Google's browser route is blocked.
-- **Approximate location for Google** (as valentin.app does it): browser searches carry Google's location signal (uule, gl, hl) and count as in your market, labelled `locationApproximate`. Calibration now measures how close they are instead of gating them (except for "Only search from here").
-- **Stop audit** in the audit dialog (and `POST /api/crawl/stop`).
-- **Desktop notifications** on macOS and Linux when an engine needs you and when coverage is complete (Settings → Schedule, or `PRISMGEO_NO_NOTIFY=1`).
 
 ### Fixed
 
@@ -25,9 +49,6 @@ All notable changes to PrismGEO are listed here. Versions follow [Semantic Versi
 - **Measurement:** a tracked name inside another tracked name ("Acme" in "Big Acme") no longer counts for both; "Acme-powered", "Acme/Shopify" and "@Acme" are counted; short or everyday-word names ("Front", "Loop") must match their capitalisation; look-alike domains are matched at label boundaries and the brand's own country domains are not flagged; marketplace listings no longer mark every page of the marketplace as a competitor; percentages say whether they are per-question averages; engine averages skip engines without answers; passage reuse no longer drops short product paragraphs that mention "sign up".
 - **Reliability:** saved browser profiles are never opened by two things at once; one engine's error no longer ends the whole audit; a rejected key stops that engine instead of failing every question; check windows count as cleared only after a real page load and a few clean seconds; calibration cannot start twice; sign-in windows use the proxy.
 - **Dashboard:** Calibrate works again (it was refused by the JSON check); Settings never saves empty keys after a failed load; API requests from other sites are refused for every method; the proxy password is kept only for the same proxy host; one shared poll for the bell; local times without hydration errors; clearer error states on Settings, Engines, Competitors and the client switcher.
-- **Calibration** no longer wastes searches: its repeat search skips SerpApi's cache (a cached copy made the noise floor a meaningless 100%) and both reference searches come from the reserve.
-- ChatGPT goes straight to a logged-out page for 24 hours after its signed-in session ignores a question (one visit per question instead of two).
-- Markdown escapes ("e\-commerce") no longer appear in SerpApi AI Mode answers.
 - **Claude connector:** slow SQL queries are really stopped; report filters (engine, batch) apply to every number; audits of more than 50 runs need confirmation; answer text is marked as untrusted content; ids from another client are refused.
 - Test fixtures and examples use fictional companies only.
 

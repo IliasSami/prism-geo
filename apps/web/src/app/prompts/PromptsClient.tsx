@@ -23,7 +23,15 @@ type Method = "POST" | "PATCH" | "DELETE";
 const ITEMS_PER_PAGE = 20;
 const SUGGESTED_INTENTS = ["category", "dilemma", "comparison", "alternatives", "pricing", "risk", "integration", "direct"];
 
-const humanize = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+/** Acronyms that stay in capitals in persona and intent labels ("cro" → "CRO"). */
+const ACRONYMS = new Set(["cro", "cmo", "cto", "ceo", "coo", "cfo", "vp", "seo", "crm", "smb", "dtc", "b2b", "b2c", "ai", "it", "hr"]);
+/** "head_of_growth" → "Head of growth", "cro" → "CRO": sentence case, acronyms kept. */
+const humanize = (s: string) =>
+  s
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w, i) => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : i === 0 ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w.toLowerCase()))
+    .join(" ");
 
 async function callApi(method: Method, body: unknown) {
   const res = await request("/api/prompts", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
