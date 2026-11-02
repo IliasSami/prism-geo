@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Check, Copy, ExternalLink, Search, X, AlertTriangle } from "lucide-react";
 import { Badge, Button, Card, EmptyState, cn, engineLabel, inputClass, td, th } from "@/components/ui";
@@ -89,6 +89,14 @@ export function ResponsesClient({
   };
   const go = (next: { engine?: string; q?: string; page?: number }) => router.push(href(next), { scroll: false });
 
+  // Searches as you type, after a short pause; replace() so each keystroke is not a Back step
+  useEffect(() => {
+    if (searchQuery.trim() === query.trim()) return;
+    const t = setTimeout(() => router.replace(href({ q: searchQuery, page: 1 }), { scroll: false }), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
+
   const doCopy = async (text: string) => {
     const ok = await copyText(text);
     setCopy(ok ? "ok" : "failed");
@@ -111,12 +119,13 @@ export function ResponsesClient({
         />
         <form
           role="search"
-          className="relative w-full lg:w-72"
+          className="flex w-full gap-2 lg:w-96"
           onSubmit={(e) => {
             e.preventDefault();
             go({ q: searchQuery, page: 1 });
           }}
         >
+          <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" aria-hidden />
           <input
             type="search"
@@ -139,6 +148,8 @@ export function ResponsesClient({
               <X className="h-3.5 w-3.5" aria-hidden />
             </button>
           )}
+          </div>
+          <Button type="submit">Search</Button>
         </form>
       </div>
 

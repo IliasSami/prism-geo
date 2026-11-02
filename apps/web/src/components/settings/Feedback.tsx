@@ -39,21 +39,44 @@ export function Toast({ toast, onClose }: { toast: ToastState | null; onClose: (
   );
 }
 
-/** Appears at the bottom of the page while there are unsaved changes. */
-export function SaveBar({ visible, saving, onSave, onDiscard }: { visible: boolean; saving: boolean; onSave: () => void; onDiscard: () => void }) {
+/**
+ * Appears at the bottom of the page while there are unsaved changes. With problems listed, Save is
+ * disabled and the first one is shown, so nothing is half saved.
+ */
+export function SaveBar({
+  visible,
+  saving,
+  onSave,
+  onDiscard,
+  problems = [],
+}: {
+  visible: boolean;
+  saving: boolean;
+  onSave: () => void;
+  onDiscard: () => void;
+  problems?: string[];
+}) {
   if (!visible) return null;
+  const blocked = problems.length > 0;
   return (
     <div className="sticky bottom-4 z-30 animate-fade-up">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white/95 px-4 py-3 shadow-pop backdrop-blur">
-        <p className="text-base text-zinc-700">
-          <span className="mr-2 inline-block h-2 w-2 rounded-full bg-amber-500 align-middle" aria-hidden />
-          You have unsaved changes
+        <p className="min-w-0 text-base text-zinc-700" id="save-bar-status" aria-live="polite">
+          <span className={cn("mr-2 inline-block h-2 w-2 rounded-full align-middle", blocked ? "bg-red-500" : "bg-amber-500")} aria-hidden />
+          {blocked ? (
+            <span className="text-red-800">
+              Fix this before saving: {problems[0]}
+              {problems.length > 1 && ` (and ${problems.length - 1} more)`}
+            </span>
+          ) : (
+            "You have unsaved changes"
+          )}
         </p>
         <div className="flex gap-2">
           <Button onClick={onDiscard} disabled={saving}>
             Discard
           </Button>
-          <Button variant="primary" onClick={onSave} disabled={saving}>
+          <Button variant="primary" onClick={onSave} disabled={saving || blocked} aria-describedby={blocked ? "save-bar-status" : undefined}>
             {saving ? "Saving…" : "Save changes"}
           </Button>
         </div>

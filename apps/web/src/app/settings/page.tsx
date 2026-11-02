@@ -15,8 +15,10 @@ import { CaptureExtensionPanel } from "@/components/settings/CaptureExtensionPan
 import { SearchLocationStatus } from "@/components/settings/SearchLocationStatus";
 import { PlacePicker } from "@/components/settings/PlacePicker";
 import { AutopilotCard } from "@/components/settings/AutopilotCard";
-import { SEARCH_COUNTRIES, searchCountry } from "@prismgeo/core";
+import { ENGINES, ENGINE_IDS, SEARCH_COUNTRIES, searchCountry } from "@prismgeo/core";
 import { cleanedHint, domainError } from "@/components/domain";
+import { LIMITS } from "@/app/api/_lib/limits";
+import { NOT_RUNNING, OfflineError, request } from "@/components/request";
 
 type TabId = "client" | "competitors" | "engines" | "schedule" | "claude" | "data";
 
@@ -98,11 +100,37 @@ function browserTimeZone(): string {
 
 /** GETs JSON; a non-ok answer rejects with the server's message. */
 async function readJson(url: string): Promise<any> {
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await request(url, { cache: "no-store" });
   const data = await res.json().catch(() => null);
   if (!res.ok || !data || typeof data !== "object") throw new Error(data?.error || `Could not load settings (${res.status}).`);
   return data;
 }
+
+/** The same checks the server makes, so Save never sends one half and fails on the other. */
+function draftProblems(d: Snapshot, brandEdited: boolean): string[] {
+  const out: string[] = [];
+  const b = d.brandForm;
+  // The profile is only checked when edited: it is only sent then
+  if (brandEdited) {
+    const name = b.name.trim();
+    if (name.length < 2) out.push("Client profile: the brand name needs at least 2 characters.");
+    if (name.length > LIMITS.name) out.push(`Client profile: the brand name can be at most ${LIMITS.name} characters.`);
+    if (!b.domain.trim()) out.push("Client profile: enter the website, e.g. example.com.");
+    else if (domainError(b.domain)) out.push(`Client profile: ${domainError(b.domain)}`);
+    const category = b.category.trim();
+    const words = category.split(/\s+/).filter(Boolean).length;
+    if (category && (words < 2 || words > 8 || category.length > 80)) out.push("Client profile: describe the category in 2 to 8 words.");
+    if (b.description.length > LIMITS.description) out.push(`Client profile: "What you do" can be at most ${LIMITS.description} characters.`);
+  }
+  const c = d.crawler;
+  const proxy = c.proxyUrl.trim();
+  if (proxy && !proxy.includes("••••") && !/^(https?|socks5?):\/\/[^\s]+$/i.test(proxy)) out.push("Proxy URL: use a format like http://user:pass@host:port or socks5://host:port.");
+  if (!Number.isInteger(c.schedulePromptsPerDay) || c.schedulePromptsPerDay < 1 || c.schedulePromptsPerDay > 200) out.push("Questions per day: use a whole number from 1 to 200.");
+  if (!Number.isInteger(c.scheduleHour) || c.scheduleHour < 0 || c.scheduleHour > 23) out.push("Start hour: use a whole number from 0 to 23.");
+  return out;
+}
+
+const LEAVE_MESSAGE = "You have unsaved changes in Settings. Leave without saving them?";
 
 export default function SettingsPage() {
   return (
@@ -180,12 +208,31 @@ function Settings() {
   }, []);
   useEffect(() => load(), [load]);
 
-  // Leaving the page with unsaved edits asks first
+  // Leaving the page with unsaved edits asks first: closing or reloading the tab (beforeunload), and
+  // links inside the app, which change pages without unloading. The click is caught on the way down,
+  // before Next.js' link handler, and stopped when the person stays.
   useEffect(() => {
     if (!dirty) return;
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
+      const url = new URL(a.href, window.location.href);
+      // Other sites open as normal; downloads (/api/...) and links within this page do not leave it
+      if (url.origin !== window.location.origin || url.pathname.startsWith("/api/")) return;
+      if (url.pathname === window.location.pathname) return;
+      if (!window.confirm(LEAVE_MESSAGE)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
     window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
+    document.addEventListener("click", onClick, true);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      document.removeEventListener("click", onClick, true);
+    };
   }, [dirty]);
 
   /** Permanently deletes a non-active client after the user types its name. */
@@ -212,18 +259,16 @@ function Settings() {
 
   async function save() {
     if (loading || loadError) return;
+    // Nothing is sent while a field is invalid, so a save never stops half way
+    const problems = draftProblems(draft, Boolean(activeBrandId) && JSON.stringify(draft.brandForm) !== JSON.stringify(initial.brandForm));
+    if (problems.length) return setToast({ type: "error", message: problems[0] });
     setSaving(true);
     try {
-      const res = await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ byok: draft.byok, engines: draft.engines, crawler: { ...draft.crawler, scheduleTimeZone: browserTimeZone() } }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not save settings");
-
+      // The client profile goes first: its server checks (a domain another client uses) are the
+      // ones the browser cannot make, and when they fail nothing else has been saved yet
       const b = draft.brandForm;
-      if (activeBrandId && (b.name || b.domain) && JSON.stringify(b) !== JSON.stringify(initial.brandForm)) {
-        const brandRes = await fetch("/api/brands", {
+      if (activeBrandId && JSON.stringify(b) !== JSON.stringify(initial.brandForm)) {
+        const brandRes = await request("/api/brands", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -236,7 +281,18 @@ function Settings() {
             valueProps: b.valueProps,
           }),
         });
-        if (!brandRes.ok) throw new Error((await brandRes.json().catch(() => ({}))).error || "Could not save client details");
+        if (!brandRes.ok) throw new Error(`Nothing was saved. ${(await brandRes.json().catch(() => ({}))).error || "The client details could not be saved."}`);
+        setInitial((cur) => ({ ...cur, brandForm: b }));
+      }
+
+      const res = await request("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ byok: draft.byok, engines: draft.engines, crawler: { ...draft.crawler, scheduleTimeZone: browserTimeZone() } }),
+      });
+      if (!res.ok) {
+        const reason = (await res.json().catch(() => ({}))).error || "Could not save settings";
+        throw new Error(activeBrandId && JSON.stringify(b) !== JSON.stringify(initial.brandForm) ? `The client profile was saved, but the other settings were not: ${reason}` : reason);
       }
 
       // Re-read so masked keys and saved-key badges reflect what is stored
@@ -249,7 +305,7 @@ function Settings() {
       setDraft(next);
       setToast({ type: "success", message: "Settings saved" });
     } catch (e) {
-      setToast({ type: "error", message: (e as Error).message });
+      setToast({ type: "error", message: e instanceof OfflineError ? NOT_RUNNING : (e as Error).message });
     } finally {
       setSaving(false);
     }
@@ -261,7 +317,9 @@ function Settings() {
   }
 
   const { brandForm, byok, crawler } = draft;
-  const brandDomainError = domainError(brandForm.domain);
+  const brandDomainError = activeBrandId && !brandForm.domain.trim() ? "Enter the website, e.g. example.com" : domainError(brandForm.domain);
+  const problems = dirty ? draftProblems(draft, Boolean(activeBrandId) && JSON.stringify(brandForm) !== JSON.stringify(initial.brandForm)) : [];
+  const brandNameBad = Boolean(activeBrandId) && brandForm.name.trim().length < 2;
 
   return (
     <div className={cn("mx-auto max-w-6xl space-y-6", dirty ? "pb-28" : "pb-8")}>
@@ -298,7 +356,14 @@ function Settings() {
               />
               <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
                 <Field label="Brand name" htmlFor="brand-name">
-                  <input id="brand-name" className={inputClass} value={brandForm.name} onChange={(e) => set("brandForm", { name: e.target.value })} />
+                  <input
+                    id="brand-name"
+                    maxLength={LIMITS.name}
+                    aria-invalid={brandNameBad}
+                    className={cn(inputClass, brandNameBad && "border-red-400")}
+                    value={brandForm.name}
+                    onChange={(e) => set("brandForm", { name: e.target.value })}
+                  />
                 </Field>
                 <Field
                   label="Website domain"
@@ -308,6 +373,7 @@ function Settings() {
                 >
                   <input
                     id="brand-domain"
+                    maxLength={253}
                     aria-invalid={Boolean(brandDomainError)}
                     aria-describedby="brand-domain-hint"
                     className={cn(inputClass, brandDomainError && "border-red-400")}
@@ -331,6 +397,7 @@ function Settings() {
                     <textarea
                       id="brand-description"
                       rows={3}
+                      maxLength={LIMITS.description}
                       className={textareaClass}
                       value={brandForm.description}
                       placeholder="e.g. Accounting software for small online shops"
@@ -346,6 +413,7 @@ function Settings() {
                   >
                     <input
                       id="brand-category"
+                      maxLength={80}
                       className={inputClass}
                       value={brandForm.category}
                       placeholder="e.g. accounting software for online shops"
@@ -398,7 +466,7 @@ function Settings() {
                           <Button size="sm" onClick={() => switchBrand(b.id)}>
                             Switch to {b.name}
                           </Button>
-                          <Button size="sm" variant="danger" onClick={() => deleteBrand(b)}>
+                          <Button size="sm" variant="danger" aria-label={`Delete ${b.name}`} onClick={() => deleteBrand(b)}>
                             Delete
                           </Button>
                         </div>
@@ -415,6 +483,46 @@ function Settings() {
           </TabPanel>
 
           <TabPanel id="engines" active={tab}>
+            <Card>
+              <CardHeader
+                title="Engines in audits"
+                description="Engines switched off are never asked: not by Run audit, the daily schedule, the autopilot, Resume in the bell or the Claude connector. Saved with the Save bar."
+              />
+              <ul className="grid grid-cols-1 gap-x-6 p-5 sm:grid-cols-2">
+                {ENGINE_IDS.map((id) => {
+                  const on = draft.engines[id] !== false;
+                  return (
+                    <li key={id}>
+                      <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 border-b border-zinc-100 py-1.5 text-base text-zinc-800">
+                        <span>{ENGINES[id].label}</span>
+                        <span className="inline-flex items-center gap-2 text-sm text-zinc-600">
+                          {on ? "On" : "Off"}
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            aria-label={`Ask ${ENGINES[id].label} in audits`}
+                            aria-checked={on}
+                            checked={on}
+                            onChange={(e) => set("engines", { [id]: e.target.checked })}
+                            className="peer sr-only"
+                          />
+                          <span
+                            aria-hidden
+                            className="relative h-5 w-9 rounded-full bg-zinc-300 transition peer-checked:bg-accent-600 peer-focus-visible:ring-2 peer-focus-visible:ring-accent-500 peer-focus-visible:ring-offset-2 after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow after:transition peer-checked:after:translate-x-4"
+                          />
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+              {ENGINE_IDS.every((id) => draft.engines[id] === false) && (
+                <div className="px-5 pb-5">
+                  <Notice tone="warning">Every engine is off, so audits have nothing to ask. Switch at least one on.</Notice>
+                </div>
+              )}
+            </Card>
+
             <Card>
               <CardHeader title="How engines are reached" description="Applies to every engine in the next audit." />
               <fieldset className="grid grid-cols-1 gap-3 p-5 md:grid-cols-3">
@@ -550,7 +658,13 @@ function Settings() {
                   );
                 })()}
                 <div className="md:col-span-2">
-                  <SearchLocationStatus location={String(initial.engines.providerLocation ?? "United States")} strict={draft.engines.strictLocation === true} />
+                  {/* What is saved decides the notice: an unsaved or failed switch does not skip anything yet */}
+                  <SearchLocationStatus location={String(initial.engines.providerLocation ?? "United States")} strict={initial.engines.strictLocation === true} />
+                  {draft.engines.strictLocation !== initial.engines.strictLocation && (
+                    <p className="mt-2 text-xs text-zinc-500">
+                      &ldquo;Only search from here&rdquo; turns {draft.engines.strictLocation ? "on" : "off"} when you save.
+                    </p>
+                  )}
                 </div>
                 <div className="md:col-span-2">
                   <Field
@@ -935,7 +1049,7 @@ function Settings() {
             <LogViewer />
           </TabPanel>
 
-          <SaveBar visible={dirty} saving={saving} onSave={save} onDiscard={discard} />
+          <SaveBar visible={dirty} saving={saving} onSave={save} onDiscard={discard} problems={problems} />
         </>
       )}
 

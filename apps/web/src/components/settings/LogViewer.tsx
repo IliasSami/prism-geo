@@ -4,9 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button, Card, CardHeader, EmptyState, Notice } from "@/components/ui";
 
-/** Tail of data/logs/prismgeo.log (server + crawler), newest line at the bottom. */
+/** Tail of the server log (logs/prismgeo.log next to the database), newest line at the bottom. */
 export function LogViewer() {
   const [lines, setLines] = useState<string[] | null>(null);
+  const [path, setPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const box = useRef<HTMLPreElement>(null);
@@ -17,9 +18,11 @@ export function LogViewer() {
     try {
       const res = await fetch("/api/logs?lines=200", { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setLines((await res.json()).lines || []);
+      const data = (await res.json()) as { lines?: string[]; path?: string };
+      setLines(data.lines || []);
+      setPath(data.path || null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof TypeError ? "PrismGEO did not answer. Is it running?" : (e as Error).message);
     } finally {
       setLoading(false);
     }
@@ -37,7 +40,11 @@ export function LogViewer() {
     <Card>
       <CardHeader
         title="Server log"
-        description="Last 200 lines from data/logs/prismgeo.log: audits, blocks, retries and errors."
+        description={
+          <>
+            Last 200 lines from <span className="break-all font-mono text-xs">{path || "prismgeo.log in the logs folder next to the database"}</span>: audits, blocks, retries and errors.
+          </>
+        }
         actions={
           <Button size="sm" onClick={load} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden />

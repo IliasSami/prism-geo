@@ -28,7 +28,7 @@ export default async function OverviewPage() {
     return (
       <div className="space-y-6">
         <PageHeader title="Overview" description={`How often AI assistants name and cite ${brand.name}, measured from their real answers.`} />
-        <FirstRunChecklist brandName={brand.name} counts={setupCounts(brand.id)} latest={latest} />
+        <FirstRunChecklist brandName={brand.name} counts={setupCounts(brand.id)} latest={latest} enginesOff={views.every((v) => !v.enabled)} />
         <EngineIssues views={views} />
       </div>
     );

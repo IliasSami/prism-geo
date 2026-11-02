@@ -13,7 +13,7 @@ const descriptionSchema = z
   .trim()
   .max(LIMITS.description, `The description can be at most ${LIMITS.description} characters`);
 
-const createSchema = z.object({
+const createSchema = z.strictObject({
   name: nameSchema("brand name"),
   domain: domainSchema,
   description: descriptionSchema.optional(),
@@ -23,7 +23,7 @@ const createSchema = z.object({
   setActive: z.boolean().optional(),
 });
 
-const patchSchema = z.object({
+const patchSchema = z.strictObject({
   id: idSchema("Client id"),
   name: nameSchema("brand name").optional(),
   domain: domainSchema.optional(),
@@ -33,7 +33,7 @@ const patchSchema = z.object({
   category: z.union([categorySchema, z.null()]).optional(),
 });
 
-const deleteSchema = z.object({ id: idSchema("Client id") });
+const deleteSchema = z.strictObject({ id: idSchema("Client id") });
 
 /** Whether the brands table has a column (a category column may be added by a later migration). */
 function brandsHaveColumn(name: string): boolean {

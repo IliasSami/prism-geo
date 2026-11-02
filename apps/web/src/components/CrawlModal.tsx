@@ -7,6 +7,7 @@ import Link from "next/link";
 import { Play, X, Check, AlertTriangle, Loader2, Info } from "lucide-react";
 import { Button, Badge, Dot, cn, engineLabel, buttonClass, type Tone } from "./ui";
 import { auditOutcome, issueLine, isRealOutcome, type EngineState, type Issue } from "./engine-copy";
+import { NOT_RUNNING } from "./request";
 
 /** Engine status as shown everywhere else (components/insights/engine-state.ts). */
 export interface EngineOption {
@@ -50,12 +51,36 @@ function estimate(engines: string[], questions: number, repeats: number): string
   return engines.length > 1 ? `${time}, engines run side by side` : time;
 }
 
+/** Why an engine cannot be picked in the dialog, with where to fix it; null when it can run. */
+function blockedReason(e: EngineOption): { text: string; href: string; cta: string } | null {
+  if (!e.enabled) return { text: "Switched off in Settings.", href: "/settings?tab=engines", cta: "Switch it on" };
+  if (e.engine === "copilot" && e.state === "not_set_up") return { text: "Copilot needs a signed-in Microsoft account.", href: "/engines#sessions", cta: "Connect it on Engines" };
+  if (e.engine === "google_ai_mode" && e.state === "not_set_up")
+    return { text: "Google AI Mode needs a SerpApi key, an Apify token or the DataForSEO data provider.", href: "/settings?tab=engines", cta: "Add one in Settings" };
+  return null;
+}
+
 interface AuditContextValue {
   openAudit: (opener?: HTMLElement | null) => void;
   available: boolean;
+  /** Every engine is switched off in Settings, so nothing can run. */
+  enginesOff: boolean;
 }
 
-const AuditContext = createContext<AuditContextValue>({ openAudit: () => {}, available: false });
+const AuditContext = createContext<AuditContextValue>({ openAudit: () => {}, available: false, enginesOff: false });
+
+/** "Every engine is switched off" with a link to Settings → Engines & access. */
+export function EnginesOffNote({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <span>
+      Every engine is switched off, so an audit has nothing to ask.{" "}
+      <Link href="/settings?tab=engines" onClick={onNavigate} className="font-medium text-accent-700 underline-offset-2 hover:underline">
+        Switch engines on in Settings → Engines &amp; access
+      </Link>
+      .
+    </span>
+  );
+}
 
 /** Opens the audit dialog from anywhere: the header, the mobile bar, or an empty state. */
 export function useAudit() {
@@ -86,8 +111,14 @@ export function AuditTrigger({ compact = false }: { compact?: boolean }) {
 
 /** A call to action for empty states. */
 export function RunAuditButton({ label = "Run an audit", variant = "primary" }: { label?: string; variant?: "primary" | "secondary" }) {
-  const { openAudit, available } = useAudit();
+  const { openAudit, available, enginesOff } = useAudit();
   if (!available) return null;
+  if (enginesOff)
+    return (
+      <Link href="/settings?tab=engines" className={buttonClass(variant, "md")}>
+        Switch engines on to run an audit
+      </Link>
+    );
   return (
     <button type="button" onClick={(e) => openAudit(e.currentTarget)} className={buttonClass(variant, "md")}>
       <Play className="h-4 w-4" aria-hidden />
@@ -126,6 +157,9 @@ export function AuditProvider({
   const dialogRef = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const available = Boolean(brandId);
+  const enginesOff = engines.length > 0 && engines.every((e) => !e.enabled);
+  // Per engine, the active questions it has never answered (for "Unanswered"); null until loaded
+  const [gaps, setGaps] = useState<Record<string, number> | null>(null);
 
   useEffect(() => setMounted(true), []);
 
@@ -147,14 +181,26 @@ export function AuditProvider({
     openAudit(null);
   }, [pathname, openAudit]);
 
-  const selectable = engines.filter((e) => e.state !== "not_set_up" || e.engine !== "copilot");
+  const selectable = engines.filter((e) => !blockedReason(e));
+  // Only engines that can run are ever sent, even if Settings changed while the dialog was open
+  const chosen = selected.filter((id) => selectable.some((e) => e.engine === id));
 
   // Defaults on open: engines enabled in Settings, repeats from Settings (capped for a first look)
   useEffect(() => {
     if (!open) return;
     setError(null);
     setQuestions((q) => (q >= totalPrompts ? 0 : q));
-    setSelected((cur) => (cur.length ? cur : selectable.filter((e) => e.enabled).map((e) => e.engine)));
+    // Engines switched off (or not set up) since the last open are taken out of the selection
+    setSelected((cur) => {
+      const kept = cur.filter((id) => selectable.some((e) => e.engine === id));
+      return kept.length ? kept : selectable.map((e) => e.engine);
+    });
+    setGaps(null);
+    if (brandId)
+      fetch(`/api/crawl/gaps?brandId=${encodeURIComponent(brandId)}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d?.gaps && setGaps(d.gaps as Record<string, number>))
+        .catch(() => null);
     fetch("/api/settings", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d?.crawler?.sampleSize && setRepeats(Math.min(5, Math.max(1, Number(d.crawler.sampleSize)))))
@@ -216,8 +262,12 @@ export function AuditProvider({
 
   // -1: each engine asks only the questions it has never answered ("fill the gaps")
   const gapsOnly = questions === -1;
-  const questionCount = questions <= 0 ? totalPrompts : Math.min(questions, totalPrompts);
-  const runs = questionCount * repeats * selected.length;
+  const fullCount = questions <= 0 ? totalPrompts : Math.min(questions, totalPrompts);
+  // Unanswered: each engine asks only its own gaps, so the count comes from the server
+  const gapCounts = chosen.map((e) => (gaps ? (gaps[e] ?? 0) : totalPrompts));
+  const questionCount = gapsOnly ? Math.max(0, ...gapCounts) : fullCount;
+  const runs = gapsOnly ? gapCounts.reduce((sum, n) => sum + n, 0) * repeats : fullCount * repeats * chosen.length;
+  const gapEngines = gapsOnly ? chosen.filter((e, i) => gapCounts[i] > 0) : chosen;
   const questionOptions = [10, 25, 50].filter((n) => n < totalPrompts);
 
   async function start() {
@@ -227,7 +277,7 @@ export function AuditProvider({
       const res = await fetch("/api/crawl/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brandId, sampleSize: repeats, engines: selected, promptLimit: questions <= 0 ? undefined : questions, scope: gapsOnly ? "gaps" : "all" }),
+        body: JSON.stringify({ brandId, sampleSize: repeats, engines: chosen, promptLimit: questions <= 0 ? undefined : questions, scope: gapsOnly ? "gaps" : "all" }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 409 && data.runningBatchId) {
@@ -238,7 +288,7 @@ export function AuditProvider({
         setAudit({ ...IDLE, status: "running", batchId: data.batchId, totalRuns: runs, currentPrompt: "Starting browsers…" });
       }
     } catch (e) {
-      setError(`The audit could not be started: ${(e as Error).message || "network error"}.`);
+      setError(e instanceof TypeError ? NOT_RUNNING : `The audit could not be started: ${(e as Error).message}.`);
     } finally {
       setSubmitting(false);
     }
@@ -260,7 +310,7 @@ export function AuditProvider({
       }
     } catch {
       setStopping(false);
-      setError("PrismGEO did not answer. Is the server running?");
+      setError(NOT_RUNNING);
     }
   }
 
@@ -312,6 +362,11 @@ export function AuditProvider({
         </div>
 
         <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-5">
+          {!running && !finished && enginesOff && (
+            <div role="note" className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-sm text-amber-900">
+              <EnginesOffNote onNavigate={close} />
+            </div>
+          )}
           {!running && !finished && (
             <>
               <fieldset>
@@ -335,7 +390,10 @@ export function AuditProvider({
                 <p className="mt-1.5 text-xs text-zinc-500">
                   You have {totalPrompts} active {totalPrompts === 1 ? "question" : "questions"}.{" "}
                   {questionOptions.length > 0 && "A smaller audit starts with the first active ones. "}
-                  {gapsOnly && "Unanswered: each engine asks only the questions it has never answered, so every engine ends up covering every question. "}
+                  {gapsOnly &&
+                    `Unanswered: each engine asks only the questions it has never answered, so every engine ends up covering every question${
+                      gaps ? ` (${chosen.map((e) => `${engineLabel(e)} ${gaps[e] ?? 0}`).join(", ") || "no engine selected"})` : ""
+                    }. `}
                   To re-check them every day, turn on the daily schedule in{" "}
                   <Link href="/settings?tab=schedule" onClick={close} className="font-medium text-accent-700 underline-offset-2 hover:underline">
                     Settings → Schedule
@@ -370,8 +428,9 @@ export function AuditProvider({
                 <legend className="text-sm font-medium text-zinc-700">Engines</legend>
                 <ul className="mt-2 space-y-1.5">
                   {engines.map((e) => {
-                    const disabled = e.engine === "copilot" && e.state === "not_set_up";
-                    const isOn = selected.includes(e.engine);
+                    const blocked = blockedReason(e);
+                    const disabled = Boolean(blocked);
+                    const isOn = !disabled && selected.includes(e.engine);
                     return (
                       <li key={e.engine}>
                         <label
@@ -385,21 +444,21 @@ export function AuditProvider({
                             className="mt-0.5 h-5 w-5 shrink-0 accent-accent-600"
                             checked={isOn}
                             disabled={disabled}
-                            aria-describedby={e.reason ? `engine-reason-${e.engine}` : undefined}
+                            aria-describedby={blocked || e.reason ? `engine-reason-${e.engine}` : undefined}
                             onChange={() => toggle(e.engine)}
                           />
                           <span className="min-w-0 flex-1">
                             <span className="flex flex-wrap items-center gap-2">
                               <span className="text-base font-medium text-zinc-900">{engineLabel(e.engine)}</span>
-                              <Badge tone={e.tone}>{e.label}</Badge>
+                              {e.enabled ? <Badge tone={e.tone}>{e.label}</Badge> : <Badge tone="outline">Switched off</Badge>}
                               {e.route === "signed_in" && <Badge tone="info">Signed in</Badge>}
                               {(e.route === "api" || e.apiFallback) && <Badge tone="info">{e.routeLabel || "API key"}</Badge>}
                             </span>
-                            {disabled ? (
+                            {blocked ? (
                               <span id={`engine-reason-${e.engine}`} className="mt-1 block text-xs text-zinc-600">
-                                Can&apos;t be selected: Copilot needs a signed-in Microsoft account.{" "}
-                                <Link href="/engines#sessions" onClick={close} className="font-medium text-accent-700 underline-offset-2 hover:underline">
-                                  Connect it on Engines
+                                Can&apos;t be selected: {blocked.text}{" "}
+                                <Link href={blocked.href} onClick={close} className="font-medium text-accent-700 underline-offset-2 hover:underline">
+                                  {blocked.cta}
                                 </Link>
                               </span>
                             ) : (
@@ -488,10 +547,10 @@ export function AuditProvider({
           {!running && !finished ? (
             <>
               <span className="text-sm text-zinc-600 tabular">
-                {gapsOnly ? "up to " : ""}
-                {runs} {runs === 1 ? "answer" : "answers"} · {estimate(selected, questionCount, repeats)}
+                {gapsOnly && !gaps ? "up to " : ""}
+                {runs} {runs === 1 ? "answer" : "answers"} · {estimate(gapEngines, questionCount, repeats)}
               </span>
-              <Button variant="primary" onClick={start} disabled={submitting || selected.length === 0 || questionCount === 0}>
+              <Button variant="primary" onClick={start} disabled={submitting || enginesOff || chosen.length === 0 || questionCount === 0}>
                 {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Play className="h-4 w-4" aria-hidden />}
                 Start audit
               </Button>
@@ -533,7 +592,7 @@ export function AuditProvider({
   );
 
   return (
-    <AuditContext.Provider value={{ openAudit, available }}>
+    <AuditContext.Provider value={{ openAudit, available, enginesOff }}>
       {children}
       {mounted && open && createPortal(dialog, document.body)}
     </AuditContext.Provider>

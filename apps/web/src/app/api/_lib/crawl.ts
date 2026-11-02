@@ -2,10 +2,12 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { getRawDb, getSettings, type BrandRecord } from "@prismgeo/db";
 import { BatchRunningError, CrawlerOrchestrator, closeStaleBatches, isProfileConnected, unansweredPromptIdsByEngine } from "@prismgeo/crawler";
+import { ENGINES } from "@prismgeo/core";
 import { ENGINE_IDS, intSchema, brandIdSchema, type EngineId } from "./validate";
 
 /** Body of POST /api/crawl/start (also used by the MCP start_crawl tool). */
-export const crawlStartSchema = z.object({
+// Strict: an unknown key ({"enabled": "yes"}) is a mistake, not something to start an audit with
+export const crawlStartSchema = z.strictObject({
   brandId: brandIdSchema,
   engines: z
     .array(z.string({ error: "Engines must be engine ids" }), { error: "engines must be a list of engine ids" })
@@ -36,6 +38,13 @@ export type CrawlStartResult =
   | { ok: false; status: number; body: { error: string; runningBatchId?: string; ignoredEngines?: Array<{ engine: string; reason: string }> } };
 
 const COPILOT_REASON = "Copilot needs a signed-in session (Settings → Engines & access)";
+export const SWITCHED_OFF_REASON = "Switched off in Settings";
+
+/** Engines the person switched off in Settings; they never run, whoever asks (dialog, bell, MCP, API). */
+export function switchedOffEngines(): EngineId[] {
+  const engineSettings = getSettings<Record<string, unknown>>("engine_settings", {});
+  return ENGINE_IDS.filter((e) => engineSettings[e] === false);
+}
 
 /**
  * Starts a crawl batch for a brand in this process: checks the per-brand lock, picks the engines,
@@ -56,14 +65,27 @@ export function startCrawl(
     return { ok: false, status: 400, body: { error: `Unknown engine${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}. Use ${ENGINE_IDS.join(", ")}.` } };
   }
 
-  // Without an explicit list, run the engines enabled in Settings (the scheduler does the same)
-  const engineSettings = getSettings<Record<string, unknown>>("engine_settings", {});
-  const requested: EngineId[] = input.engines
-    ? [...new Set(input.engines as EngineId[])]
-    : ENGINE_IDS.filter((e) => engineSettings[e] !== false);
+  // Without an explicit list, run the engines enabled in Settings (the scheduler does the same).
+  // An explicit list never brings back an engine switched off there.
+  const off = new Set(switchedOffEngines());
+  const requested: EngineId[] = input.engines ? [...new Set(input.engines as EngineId[])] : ENGINE_IDS.filter((e) => !off.has(e));
 
   const ignoredEngines: Array<{ engine: string; reason: string }> = [];
-  const engines = requested.filter((e) => {
+  const switchedOn = requested.filter((e) => {
+    if (!off.has(e)) return true;
+    ignoredEngines.push({ engine: e, reason: SWITCHED_OFF_REASON });
+    return false;
+  });
+  if (switchedOn.length === 0) {
+    const error =
+      input.engines && input.engines.length
+        ? requested.length > 1
+          ? `These engines are switched off in Settings: ${requested.map((e) => ENGINES[e]?.label || e).join(", ")}. Switch them on in Settings → Engines & access.`
+          : `${ENGINES[requested[0]]?.label || requested[0]} is switched off in Settings. Switch it on in Settings → Engines & access.`
+        : "Every engine is switched off in Settings. Switch at least one on in Settings → Engines & access.";
+    return { ok: false, status: 400, body: { error, ignoredEngines } };
+  }
+  const engines = switchedOn.filter((e) => {
     // Copilot has no logged-out chat, so it only runs with a signed-in session
     if (e === "copilot" && !isProfileConnected("copilot")) {
       ignoredEngines.push({ engine: e, reason: COPILOT_REASON });
@@ -72,7 +94,7 @@ export function startCrawl(
     return true;
   });
   if (engines.length === 0) {
-    return { ok: false, status: 400, body: { error: "None of the selected engines can run", ignoredEngines } };
+    return { ok: false, status: 400, body: { error: `None of the selected engines can run. ${ignoredEngines.map((i) => `${ENGINES[i.engine as EngineId]?.label || i.engine}: ${i.reason}`).join("; ")}.`, ignoredEngines } };
   }
 
   // Fill the gaps: each engine gets only the questions it has never answered

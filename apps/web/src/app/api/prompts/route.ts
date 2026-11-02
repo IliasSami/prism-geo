@@ -9,14 +9,14 @@ import { LIMITS, brandIdSchema, dedupePrompts, idSchema, intentSchema, personaSc
 
 export const dynamic = "force-dynamic";
 
-const createSchema = z.object({
+const createSchema = z.strictObject({
   brandId: brandIdSchema,
   prompts: promptListSchema,
   intent: intentSchema.optional(),
   persona: personaSchema.optional(),
 });
 
-const patchSchema = z.object({
+const patchSchema = z.strictObject({
   brandId: brandIdSchema,
   id: idSchema("Prompt id"),
   active: z.boolean({ error: "active must be true or false" }).optional(),
@@ -30,7 +30,7 @@ const patchSchema = z.object({
   personaDimension: personaSchema.optional(),
 });
 
-const deleteSchema = z.object({ brandId: brandIdSchema, id: idSchema("Prompt id") });
+const deleteSchema = z.strictObject({ brandId: brandIdSchema, id: idSchema("Prompt id") });
 
 /**
  * Adds prompts to a client: { prompts: [string | {query, intent?, persona?}], intent?, persona?, brandId? }.

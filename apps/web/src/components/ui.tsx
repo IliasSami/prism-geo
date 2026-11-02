@@ -137,9 +137,18 @@ const badgeTones: Record<Tone, string> = {
   info: "bg-sky-50 text-sky-700 ring-sky-200",
 };
 
-export function Badge({ tone = "neutral", className, children, title }: { tone?: Tone; className?: string; children: ReactNode; title?: string }) {
+/** A short label. `wrap` lets long text break over lines instead of widening the page on phones. */
+export function Badge({ tone = "neutral", className, children, title, wrap = false }: { tone?: Tone; className?: string; children: ReactNode; title?: string; wrap?: boolean }) {
   return (
-    <span title={title} className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs font-medium ring-1 ring-inset", badgeTones[tone], className)}>
+    <span
+      title={title}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium ring-1 ring-inset",
+        wrap ? "min-w-0 max-w-full whitespace-normal break-words" : "whitespace-nowrap",
+        badgeTones[tone],
+        className
+      )}
+    >
       {children}
     </span>
   );

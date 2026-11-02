@@ -23,8 +23,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const wizardSchema = z.object({
-  brand: z.object(
+const wizardSchema = z.strictObject({
+  brand: z.strictObject(
     {
       name: nameSchema("brand name"),
       domain: domainSchema,
@@ -44,7 +44,7 @@ const wizardSchema = z.object({
   promptLimit: intSchema(1, LIMITS.prompts, "The number of questions").optional(),
   byok: byokSchema.optional(),
   engines: engineSettingsSchema.optional(),
-  crawler: z.object({ sampleSize: intSchema(1, 20, "Runs per question").optional() }).optional(),
+  crawler: z.strictObject({ sampleSize: intSchema(1, 20, "Runs per question").optional() }).optional(),
 });
 
 const slugify = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "client";
@@ -74,8 +74,8 @@ export const POST = route("setup/wizard", async (request: Request) => {
   }
   const seenDomains = new Set<string>();
   for (const [i, c] of competitors.entries()) {
-    if (c.domain === brand.domain) return jsonError(`competitors.${i}.domain: ${c.domain} is the brand's own domain`, 400);
-    if (seenDomains.has(c.domain)) return jsonError(`competitors.${i}.domain: ${c.domain} is listed twice`, 400);
+    if (c.domain === brand.domain) return jsonError(`Competitor ${i + 1}: ${c.domain} is ${brand.name}'s own website, not a competitor`, 400);
+    if (seenDomains.has(c.domain)) return jsonError(`Competitor ${i + 1}: ${c.domain} is listed twice`, 400);
     seenDomains.add(c.domain);
   }
 

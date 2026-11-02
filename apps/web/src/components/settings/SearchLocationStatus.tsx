@@ -139,7 +139,12 @@ export function SearchLocationStatus({ location, strict }: { location: string; s
   }, [location]);
 
   const calibration = <CalibrationPanel location={location} />;
-  if (failed) return <Notice tone="warning">PrismGEO could not check which country this computer connects from. With “Only search from here” on, browser engines are skipped until it can.</Notice>;
+  if (failed)
+    return (
+      <Notice tone="warning">
+        PrismGEO could not check which country this computer connects from.{strict ? " With “Only search from here” on, browser engines are skipped until it can." : ""}
+      </Notice>
+    );
   if (!status) return <p className="text-sm text-zinc-500">Checking where this computer connects from…</p>;
   const here = status.connectionName || "an unknown country";
   if (status.browserInMarket)

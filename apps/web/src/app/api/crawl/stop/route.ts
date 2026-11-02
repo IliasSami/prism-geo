@@ -5,7 +5,7 @@ import { jsonError, parseBody, route } from "../../_lib/http";
 
 export const dynamic = "force-dynamic";
 
-const bodySchema = z.object({ batchId: z.string({ error: "batchId is required" }).min(1, "batchId is required").max(120) });
+const bodySchema = z.strictObject({ batchId: z.string({ error: "batchId is required" }).min(1, "batchId is required").max(120) });
 
 /**
  * { batchId }: stops a running audit. The question in progress finishes; the rest is recorded as
