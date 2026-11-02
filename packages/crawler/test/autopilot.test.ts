@@ -41,3 +41,11 @@ test("Google AI Mode runs only on today's SerpApi share", () => {
   setSettings("serpapi_ledger", { day: "2026-11-02", usedToday: 7, leftAtDayStart: 229, perMonth: 250, checkedAt: new Date(now).toISOString(), left: 222 });
   assert.match(engineRoom("google_ai_mode", "b1", now).waiting ?? "", /continues tomorrow/);
 });
+
+test("a resting Google browser route with a SerpApi key waits for the plan's share, not the browser budget", () => {
+  recordBrowserBlock("google_aio", "unusual traffic", now);
+  setSettings("serpapi_ledger", { day: "2026-11-02", usedToday: 7, leftAtDayStart: 229, perMonth: 250, checkedAt: new Date(now).toISOString(), left: 222 });
+  assert.match(engineRoom("google_aio", "b1", now + 60_000).waiting ?? "", /SerpApi share is used/);
+  setSettings("serpapi_ledger", { day: "2026-11-02", usedToday: 2, leftAtDayStart: 229, perMonth: 250, checkedAt: new Date(now).toISOString(), left: 227 });
+  assert.deepEqual(engineRoom("google_aio", "b1", now + 60_000), { room: 5, waiting: null });
+});

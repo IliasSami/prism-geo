@@ -53,6 +53,11 @@ const CHECK_EVERY_MS = 5 * 60_000;
 const PAID_SLICE = 50;
 /** An engine whose page refused questions is tried again after this long. */
 const NOT_ACCEPTED_PAUSE_MS = 12 * 3_600_000;
+/** An engine that got no answer in an autopilot step is left alone this long (no empty audits in a loop). */
+const EMPTY_STEP_PAUSE_MS = 60 * 60_000;
+const PAUSES = "autopilot_engine_pauses";
+const pausedUntil = (engine: string) => getSettings<Record<string, string>>(PAUSES, {})[engine] ?? null;
+
 /** Reasons that only a setup change can lift (see engineRoom). */
 const SETUP_BLOCKER = /needs a signed-in Microsoft account|needs a SerpApi key/;
 
@@ -84,11 +89,16 @@ export function engineRoom(engine: EngineName, brandId: string, now = Date.now()
   if (engine === "copilot" && !isProfileConnected("copilot")) return { room: 0, waiting: `${label} needs a signed-in Microsoft account` };
   if (engine === "google_ai_mode" && !route) return { room: 0, waiting: `${label} needs a SerpApi key or the data provider` };
   if (openActionFor(engine, brandId)) return { room: 0, waiting: `${label} waits for you (see the bell)` };
+  const pause = pausedUntil(engine);
+  if (pause && Date.parse(pause) > now) return { room: 0, waiting: `${label} got no answer in the last step; tried again after ${pause.slice(11, 16)} UTC` };
   const refused = lastNotAccepted(engine);
   if (refused && now - refused < NOT_ACCEPTED_PAUSE_MS) return { room: 0, waiting: `${label}'s page did not accept questions recently; tried again after ${new Date(refused + NOT_ACCEPTED_PAUSE_MS).toISOString().slice(11, 16)} UTC` };
 
-  // Engines answered through a paid route: the SerpApi plan's daily share, or a slice for pay-as-you-go
-  if (route && (engine === "google_ai_mode" || settings.mode === "byok")) {
+  // Engines answered through a paid route (always for AI Mode and in "keys only" mode; in hybrid
+  // mode while the browser route rests after a block): the SerpApi plan's daily share, or a slice
+  // for pay-as-you-go. Sizing these by the browser budget started empty audits every few minutes.
+  const resting = browserCoolingDown(engine, now);
+  if (route && (engine === "google_ai_mode" || settings.mode === "byok" || resting)) {
     if (route.kind === "serpapi") {
       const b = serpApiBudgetState(new Date(now));
       // AI Overviews may take two searches each
@@ -97,8 +107,7 @@ export function engineRoom(engine: EngineName, brandId: string, now = Date.now()
     }
     return { room: PAID_SLICE, waiting: null };
   }
-  const rest = browserCoolingDown(engine, now);
-  if (rest && browserOnly) return { room: 0, waiting: `${label} rests after a block until ${rest.until.slice(11, 16)} UTC` };
+  if (resting && browserOnly) return { room: 0, waiting: `${label} rests after a block until ${resting.until.slice(11, 16)} UTC` };
   const signedIn = engine === "chatgpt" ? chatGptSignedInUsable(now) : isProfileConnected(engine);
   const day = budgetExhausted(engine, signedIn, now);
   if (day?.window === "day") return { room: 0, waiting: `${label} reached its safe daily limit; continues tomorrow` };
@@ -181,6 +190,12 @@ export async function runAutopilot(now = Date.now()): Promise<void> {
           onStarted: (id) => setSettings(STATE, { ...getAutopilotState(), lastBatchId: id }),
         });
         setSettings(STATE, { ...getAutopilotState(), lastBatchId: batchId, checkedAt: nowIso() });
+        // An engine with no answer in this step (limits, blocks, refusals) waits an hour before the next try
+        const answered = new Set((db.prepare("SELECT DISTINCT engine FROM prompt_runs WHERE batch_id = ?").all(batchId) as Array<{ engine: string }>).map((r) => r.engine));
+        const until = new Date(Date.now() + EMPTY_STEP_PAUSE_MS).toISOString();
+        const pauses = { ...getSettings<Record<string, string>>(PAUSES, {}) };
+        for (const e of ready) if (!answered.has(e.engine)) pauses[e.engine] = until;
+        setSettings(PAUSES, pauses);
       } catch (err) {
         if (!(err instanceof BatchRunningError)) console.error(`[Autopilot] ${brand.name}:`, (err as Error).message);
       }
