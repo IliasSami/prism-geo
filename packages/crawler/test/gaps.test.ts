@@ -38,6 +38,16 @@ test("fill the gaps: each engine gets only the active questions it never answere
   assert.deepEqual(unansweredPromptIdsByEngine("b1", ["perplexity"], 2).perplexity, ["p1", "p2"], "the limit caps each engine");
 });
 
+test("no AI Overview counts as covered; recently failed questions go to the back", () => {
+  sqlite
+    .prepare("INSERT INTO crawl_batches (id, brand_id, status, created_at, errors_json) VALUES ('fb', 'b1', 'completed', ?, ?)")
+    .run(new Date().toISOString(), JSON.stringify([
+      { engine: "google_aio", promptId: "p1", kind: "no_ai_overview", message: "x" },
+      { engine: "google_aio", promptId: "p2", kind: "blocked", message: "x" },
+    ]));
+  assert.deepEqual(unansweredPromptIdsByEngine("b1", ["google_aio"]).google_aio, ["p3", "p2"]);
+});
+
 test("a question the engine's page did not accept is its own reason, and the engine stops after two in a row", async () => {
   assert.equal(classifyFailure("copilot", "p1", new QuestionNotSentError("[CopilotCrawler] not accepted")).kind, "not_accepted");
   let asked = 0;

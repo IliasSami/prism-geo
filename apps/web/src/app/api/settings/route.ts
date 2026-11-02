@@ -62,6 +62,7 @@ const crawlerSchema = z.object({
   schedulePromptsPerDay: intSchema(1, 200, "Questions per day").optional(),
   scheduleHour: intSchema(0, 23, "The start hour").optional(),
   pacing: z.enum(["safe", "fast"], { error: 'pacing must be "safe" or "fast"' }).optional(),
+  desktopNotifications: z.boolean({ error: "desktopNotifications must be true or false" }).optional(),
   scheduleTimeZone: z
     .string({ error: "The time zone must be text" })
     .trim()

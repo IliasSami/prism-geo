@@ -244,6 +244,26 @@ export function AuditProvider({
     }
   }
 
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (audit.status !== "running") setStopping(false);
+  }, [audit.status]);
+  async function stop() {
+    if (!audit.batchId) return;
+    setStopping(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/crawl/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId: audit.batchId }) });
+      if (!res.ok) {
+        setStopping(false);
+        setError(((await res.json().catch(() => ({}))) as { error?: string }).error || `The audit could not be stopped (error ${res.status}).`);
+      }
+    } catch {
+      setStopping(false);
+      setError("PrismGEO did not answer. Is the server running?");
+    }
+  }
+
   const toggle = (id: string) => setSelected((cur) => (cur.includes(id) ? cur.filter((e) => e !== id) : [...cur, id]));
 
   const running = audit.status === "running";
@@ -468,6 +488,7 @@ export function AuditProvider({
           {!running && !finished ? (
             <>
               <span className="text-sm text-zinc-600 tabular">
+                {gapsOnly ? "up to " : ""}
                 {runs} {runs === 1 ? "answer" : "answers"} · {estimate(selected, questionCount, repeats)}
               </span>
               <Button variant="primary" onClick={start} disabled={submitting || selected.length === 0 || questionCount === 0}>
@@ -496,9 +517,14 @@ export function AuditProvider({
           ) : (
             <>
               <span className="flex items-center gap-2 text-sm text-zinc-600">
-                <Dot tone="accent" pulse /> Running
+                <Dot tone="accent" pulse /> {stopping ? "Stopping after the current question…" : "Running"}
               </span>
-              <Button onClick={close}>Close</Button>
+              <span className="flex gap-2">
+                <Button variant="ghost" onClick={stop} disabled={stopping || !audit.batchId}>
+                  Stop audit
+                </Button>
+                <Button onClick={close}>Close</Button>
+              </span>
             </>
           )}
         </div>

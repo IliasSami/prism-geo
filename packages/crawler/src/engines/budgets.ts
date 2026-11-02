@@ -1,4 +1,4 @@
-import { getRawDb, getSettings } from "@prismgeo/db";
+import { getRawDb, getSettings, setSettings } from "@prismgeo/db";
 
 /**
  * How hard PrismGEO may use each free engine, so free accounts and this computer's address are
@@ -63,15 +63,25 @@ function browserUse(engine: string, sinceIso: string): number {
   let attempts = 0;
   for (const b of failed) {
     try {
-      for (const f of JSON.parse(b.errors_json) as Array<{ engine: string; kind: string; at?: string }>) {
-        // Failures recorded before timestamps existed take their audit's end time
-        if (f.engine === engine && ATTEMPT_KINDS.has(f.kind) && (f.at ?? b.ended) >= sinceIso) attempts++;
+      for (const f of JSON.parse(b.errors_json) as Array<{ engine: string; kind: string; at?: string; route?: string }>) {
+        // Failures recorded before timestamps existed take their audit's end time; a key or provider
+        // route's failures never reached the engine's free site
+        if (f.engine === engine && f.route !== "api" && ATTEMPT_KINDS.has(f.kind) && (f.at ?? b.ended) >= sinceIso) attempts++;
       }
     } catch {
       // unreadable row: ignore
     }
   }
-  return answered + attempts;
+  // Calibration's browser searches (Google) are not audits but reach the same site
+  const calibration = (getSettings<string[]>(CALIBRATION_USES, []) || []).filter((at) => engine === "google_aio" && at >= sinceIso).length;
+  return answered + attempts + calibration;
+}
+
+const CALIBRATION_USES = "calibration_browser_uses";
+/** Records one calibration search on Google's free site (kept for two days, for the budget). */
+export function recordCalibrationBrowserUse(now = Date.now()): void {
+  const cutoff = new Date(now - 48 * 3_600_000).toISOString();
+  setSettings(CALIBRATION_USES, [...(getSettings<string[]>(CALIBRATION_USES, []) || []).filter((at) => at >= cutoff), new Date(now).toISOString()]);
 }
 
 /** Failure kinds where a question really went to the engine. */
@@ -84,9 +94,17 @@ const ATTEMPT_KINDS = new Set(["blocked", "no_answer", "no_ai_overview", "error"
 export function budgetExhausted(engine: string, signedIn: boolean, now = Date.now()): { window: "hour" | "day"; used: number; limit: number } | null {
   const policy = enginePolicy(engine, signedIn);
   if (!Number.isFinite(policy.perHour)) return null;
-  const hour = browserUse(engine, new Date(now - 3_600_000).toISOString());
-  if (hour >= policy.perHour) return { window: "hour", used: hour, limit: policy.perHour };
+  // The day first: an engine done for the day stops at once instead of waiting out the hour
   const day = browserUse(engine, new Date(now - 24 * 3_600_000).toISOString());
   if (day >= policy.perDay) return { window: "day", used: day, limit: policy.perDay };
+  const hour = browserUse(engine, new Date(now - 3_600_000).toISOString());
+  if (hour >= policy.perHour) return { window: "hour", used: hour, limit: policy.perHour };
   return null;
+}
+
+/** Questions the engine may still be asked in the coming 24 hours (Infinity with fast pacing). */
+export function budgetLeftToday(engine: string, signedIn: boolean, now = Date.now()): number {
+  const policy = enginePolicy(engine, signedIn);
+  if (!Number.isFinite(policy.perDay)) return Infinity;
+  return Math.max(0, policy.perDay - browserUse(engine, new Date(now - 24 * 3_600_000).toISOString()));
 }

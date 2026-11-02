@@ -63,16 +63,30 @@ export function stalestPromptIds(brandId: string, limit: number, engine?: string
 }
 
 /**
- * Each engine's active prompts it has never answered, oldest prompts first (at most `limit` per
- * engine): what a "fill the gaps" audit asks so every engine covers every question.
+ * Each engine's active prompts it has never answered, at most `limit` per engine: what a "fill the
+ * gaps" audit asks so every engine covers every question. "No AI Overview" is a real outcome, so a
+ * prompt Google showed none for in the last 30 days counts as covered. Prompts whose last attempt
+ * failed go to the back, so a few unanswerable questions cannot block the rest.
  */
-export function unansweredPromptIdsByEngine(brandId: string, engines: readonly string[], limit?: number): Record<string, string[]> {
+export function unansweredPromptIdsByEngine(brandId: string, engines: readonly string[], limit?: number, now = Date.now()): Record<string, string[]> {
+  const since = new Date(now - 30 * 24 * 3_600_000).toISOString();
   const stmt = getRawDb().prepare(
-    `SELECT p.id FROM prompts p
-     WHERE p.brand_id = ? AND p.active = 1 AND NOT EXISTS (SELECT 1 FROM prompt_runs r WHERE r.prompt_id = p.id AND r.engine = ?)
-     ORDER BY p.created_at, p.id LIMIT ?`
+    `WITH outcomes AS (
+       SELECT json_extract(f.value, '$.promptId') AS prompt_id, json_extract(f.value, '$.kind') AS kind,
+              COALESCE(json_extract(f.value, '$.at'), b.created_at) AS at
+       FROM crawl_batches b, json_each(b.errors_json) f
+       WHERE b.brand_id = ? AND b.created_at >= ? AND json_extract(f.value, '$.engine') = ?
+     )
+     SELECT p.id FROM prompts p
+     WHERE p.brand_id = ? AND p.active = 1
+       AND NOT EXISTS (SELECT 1 FROM prompt_runs r WHERE r.prompt_id = p.id AND r.engine = ?)
+       AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.prompt_id = p.id AND o.kind = 'no_ai_overview')
+     ORDER BY (SELECT MAX(o.at) FROM outcomes o WHERE o.prompt_id = p.id AND o.kind IN ('blocked', 'no_answer', 'error', 'not_accepted')) IS NOT NULL,
+              (SELECT MAX(o.at) FROM outcomes o WHERE o.prompt_id = p.id AND o.kind IN ('blocked', 'no_answer', 'error', 'not_accepted')),
+              p.created_at, p.id
+     LIMIT ?`
   );
-  return Object.fromEntries(engines.map((e) => [e, (stmt.all(brandId, e, limit ?? -1) as Array<{ id: string }>).map((r) => r.id)]));
+  return Object.fromEntries(engines.map((e) => [e, (stmt.all(brandId, since, e, brandId, e, limit ?? -1) as Array<{ id: string }>).map((r) => r.id)]));
 }
 
 /** Each engine's own stalest prompts (per-engine staleness, random tie-break). */
@@ -224,6 +238,9 @@ export async function runScheduledAuditsIfDue(now = new Date()): Promise<void> {
     running = false;
   }
 }
+
+/** True while the rolling daily audit is starting or running its slices (the autopilot waits for it). */
+export const rollingAuditRunning = () => running;
 
 /** Starts the once-a-minute schedule check (idempotent across dev hot reloads). */
 export function startScheduler(): void {

@@ -68,6 +68,7 @@ interface Crawler {
   scheduleHour: number;
   scheduleTimeZone?: string;
   pacing?: "safe" | "fast";
+  desktopNotifications?: boolean;
 }
 type Keys = { openai: string; gemini: string; perplexity: string; serpapi: string; dataforseo: string; apify: string };
 interface Snapshot {
@@ -813,6 +814,20 @@ function Settings() {
                     </span>
                   </label>
                 ))}
+                <label className="mt-3 flex cursor-pointer items-start gap-3 pt-1">
+                  <input
+                    type="checkbox"
+                    checked={crawler.desktopNotifications !== false}
+                    onChange={(e) => set("crawler", { desktopNotifications: e.target.checked })}
+                    className="mt-1 accent-accent-600"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-zinc-900">Desktop notifications</span>
+                    <span className="block text-xs text-zinc-500">
+                      A notification on this computer when an engine needs you (a human check or a sign-in) and when the autopilot finishes, even with the dashboard closed (macOS and Linux).
+                    </span>
+                  </span>
+                </label>
               </fieldset>
             </Card>
 

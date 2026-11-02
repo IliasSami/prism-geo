@@ -5,6 +5,7 @@ import { EngineBlockedError, type EngineAnswer } from "../engines/browser-sessio
 import { browserCoolingDown, recordBrowserBlock, recordBrowserSuccess, untilText } from "../engines/block-memory";
 import { apiRouteFor, apiRouteLabel, apiRouteLocation, countryCodeFor, runApiEngine, type ApiKeys } from "../engines/api-engines";
 import { serpApiBudgetState } from "../engines/serpapi-quota";
+import { recordCalibrationBrowserUse } from "../engines/budgets";
 import { connectionCountry, countryName } from "../engines/location";
 import { trackedEntitiesFor } from "./manual-capture";
 import { placeInCountry } from "./crawler-orchestrator";
@@ -169,6 +170,7 @@ async function runCalibration(brandId: string, { sample = calibrationSample(), p
       if (i > 0) await new Promise((r) => setTimeout(r, pauseMs[0] + Math.random() * (pauseMs[1] - pauseMs[0])));
       let browser: EngineAnswer | null;
       try {
+        recordCalibrationBrowserUse();
         browser = await overviewOrNull(() => GoogleAioCrawler.execute(p.query_text, undefined, { country, language: options.language, place }));
         recordBrowserSuccess("google_aio");
       } catch (err) {

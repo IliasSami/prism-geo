@@ -36,7 +36,9 @@ const port = process.env.PRISMGEO_PORT || "3333";
 // The MCP command must print nothing but the protocol on stdout: pnpm --silent hides its banner
 const [cmd, ...pre] = pnpmCommand();
 const mcpArgs = [...pre, "--silent", "--dir", ROOT, "mcp"];
-const mcp = JSON.stringify({ mcpServers: { prismgeo: { command: cmd, args: mcpArgs } } }, null, 2);
+// Claude Desktop starts the command without a shell: on Windows, pnpm and npx are .cmd shims
+const server = process.platform === "win32" ? { command: "cmd", args: ["/c", cmd, ...mcpArgs] } : { command: cmd, args: mcpArgs };
+const mcp = JSON.stringify({ mcpServers: { prismgeo: server } }, null, 2);
 const run = [cmd, ...pre].join(" ");
 say(`
 ✔ PrismGEO is ready.

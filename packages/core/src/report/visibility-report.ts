@@ -311,6 +311,8 @@ const FAILURE_BUCKET: Record<string, keyof FailureCounts | null> = {
   not_accepted: "noAnswer",
   skipped_after_not_accepted: "skipped",
   budget_reached: null,
+  api_budget_reached: null,
+  stopped: null,
 };
 
 export function buildVisibilityReport(input: ReportInput): Report {

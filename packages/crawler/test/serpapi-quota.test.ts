@@ -26,12 +26,29 @@ test("audits stop at today's share; calibration spends from the reserve; the acc
   for (let i = 0; i < 7; i++) await spendSerpApi("k", 1, "audit", day);
   await assert.rejects(spendSerpApi("k", 1, "audit", day), (e: Error) => e instanceof ApiBudgetError && /Today's share/.test(e.message));
   await spendSerpApi("k", 2, "reserve", day);
-  assert.equal(serpApiBudgetState(day).usedToday, 9);
+  assert.equal(serpApiBudgetState(day).usedToday, 7, "calibration is counted apart");
+  assert.equal(serpApiBudgetState(day).usedReserve, 2);
   assert.equal(accountChecks, 1, "one account check per ten minutes");
   // Next day: a fresh share from what is left
   left = 221;
   await spendSerpApi("k", 1, "audit", new Date("2026-11-03T10:00:00Z"));
   assert.equal(serpApiBudgetState(new Date("2026-11-03T10:00:00Z")).usedToday, 1);
+});
+
+test("parallel spends are all counted; a renewed plan starts a fresh share", async () => {
+  setSettings("serpapi_ledger", {});
+  left = 229;
+  configureSerpApiAccountFetch(async () => (await new Promise((r) => setTimeout(r, 20)), { total_searches_left: left, searches_per_month: 250 }));
+  const day = new Date("2026-11-10T10:00:00Z");
+  // 9 in parallel against a share of (229 - 25) / 21 = 9
+  await Promise.all(Array.from({ length: 9 }, () => spendSerpApi("k", 1, "audit", day)));
+  assert.equal(serpApiBudgetState(day).usedToday, 9);
+  await assert.rejects(spendSerpApi("k", 1, "audit", day), ApiBudgetError);
+  // Ten minutes later the account shows the plan renewed: 250 left
+  left = 250;
+  const later = new Date("2026-11-10T10:11:00Z");
+  await spendSerpApi("k", 1, "audit", later);
+  assert.equal(serpApiBudgetState(later).usedToday, 1);
 });
 
 test("nothing is spent when the plan cannot be checked", async () => {

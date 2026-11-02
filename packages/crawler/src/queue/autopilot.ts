@@ -1,10 +1,11 @@
 import { ENGINE_IDS, ENGINES } from "@prismgeo/core";
 import { getRawDb, getSettings, setSettings, nowIso } from "@prismgeo/db";
 import { CrawlerOrchestrator, BatchRunningError, type EngineName } from "./crawler-orchestrator";
-import { unansweredPromptIdsByEngine } from "./scheduler";
+import { rollingAuditRunning, unansweredPromptIdsByEngine } from "./scheduler";
+import { getCalibration } from "./calibrate";
 import { openActionFor } from "./action-requests";
 import { browserCoolingDown } from "../engines/block-memory";
-import { budgetExhausted, enginePolicy } from "../engines/budgets";
+import { budgetExhausted, budgetLeftToday } from "../engines/budgets";
 import { isProfileConnected } from "../engines/profiles";
 import { apiRouteFor, type ApiKeys } from "../engines/api-engines";
 import { refreshSerpApiQuota, serpApiBudgetState } from "../engines/serpapi-quota";
@@ -52,6 +53,8 @@ const CHECK_EVERY_MS = 5 * 60_000;
 const PAID_SLICE = 50;
 /** An engine whose page refused questions is tried again after this long. */
 const NOT_ACCEPTED_PAUSE_MS = 12 * 3_600_000;
+/** Reasons that only a setup change can lift (see engineRoom). */
+const SETUP_BLOCKER = /needs a signed-in Microsoft account|needs a SerpApi key/;
 
 export const getAutopilotState = (): AutopilotState =>
   getSettings<AutopilotState>(STATE, { status: "off", checkedAt: null, brandId: null, lastBatchId: null, engines: [], detail: "" });
@@ -99,9 +102,9 @@ export function engineRoom(engine: EngineName, brandId: string, now = Date.now()
   const signedIn = engine === "chatgpt" ? chatGptSignedInUsable(now) : isProfileConnected(engine);
   const day = budgetExhausted(engine, signedIn, now);
   if (day?.window === "day") return { room: 0, waiting: `${label} reached its safe daily limit; continues tomorrow` };
-  const policy = enginePolicy(engine, signedIn);
-  // The hourly cap is handled inside the audit (it waits); the daily one decides the slice
-  return { room: Number.isFinite(policy.perDay) ? policy.perDay : PAID_SLICE, waiting: null };
+  // The hourly cap is handled inside the audit (it waits); what is left of the day decides the slice
+  const left = budgetLeftToday(engine, signedIn, now);
+  return { room: Number.isFinite(left) ? left : PAID_SLICE, waiting: null };
 }
 
 let busy = false;
@@ -117,8 +120,10 @@ export async function runAutopilot(now = Date.now()): Promise<void> {
   if (busy || now - lastCheck < CHECK_EVERY_MS) return;
   lastCheck = now;
   const db = getRawDb();
-  // One audit at a time on this computer: engines share its address and its saved profiles
+  // One crawl at a time on this computer (audits, the rolling schedule, calibration): engines share
+  // its address and its saved profiles
   if ((db.prepare("SELECT COUNT(*) AS n FROM crawl_batches WHERE status = 'running'").get() as { n: number }).n > 0) return;
+  if (rollingAuditRunning() || getCalibration()?.status === "running") return;
 
   busy = true;
   try {
@@ -137,7 +142,9 @@ export async function runAutopilot(now = Date.now()): Promise<void> {
         const { room, waiting } = gaps[engine].length ? engineRoom(engine, brand.id, now) : { room: 0, waiting: null };
         return { engine, gaps: gaps[engine].length, room, waiting };
       });
-      const open = engines.filter((e) => e.gaps > 0);
+      // Engines that cannot run at all until set up (Copilot without an account, AI Mode without a
+      // key) are shown but do not keep coverage from being complete
+      const open = engines.filter((e) => e.gaps > 0 && !(e.waiting && SETUP_BLOCKER.test(e.waiting)));
       if (open.length === 0) continue;
       allComplete = false;
       const ready = open.filter((e) => e.room > 0 && !e.waiting);

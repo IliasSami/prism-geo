@@ -101,6 +101,8 @@ export function markdownToText(md: string): string {
     .replace(/^[ \t]*[-*+][ \t]+/gm, "")
     .replace(/[ \t]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
+    // Markdown's backslash escapes ("e\-commerce", "\(roughly") are punctuation in the text (seen in SerpApi AI Mode)
+    .replace(/\\([\\`*_{}\[\]()#+\-.!|<>~$])/g, "$1")
     .trim();
 }
 

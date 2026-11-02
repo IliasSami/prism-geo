@@ -36,7 +36,7 @@ export interface EngineHealth {
 const LOCAL_FAILURES = new Set(["network", "setup", "skipped_after_network", "skipped_setup"]);
 /** Never a failure of anything: real outcomes and prompt edits. */
 // Not run because of the search location, or resting after an earlier block (counted when it happened)
-const NOT_FAILURES = new Set(["no_ai_overview", "unavailable", "prompt_removed", "prompt_paused", "wrong_location", "cooling_down", "budget_reached"]);
+const NOT_FAILURES = new Set(["no_ai_overview", "unavailable", "prompt_removed", "prompt_paused", "wrong_location", "cooling_down", "budget_reached", "api_budget_reached", "stopped"]);
 
 /** Most frequent kind, preferring engine failures over local ones on ties. */
 function topKind(kinds: string[]): string | null {

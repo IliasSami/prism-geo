@@ -45,6 +45,8 @@ export const KIND_PHRASE: Record<string, string> = {
   waiting_for_person: "waiting for you to complete a human check or sign-in (see the bell)",
   not_accepted: "the engine's page did not accept the question from the automated browser",
   budget_reached: "not run yet: the engine's safe hourly or daily limit for free use was reached",
+  stopped: "not run: you stopped the audit",
+  api_budget_reached: "not run yet: today's share of the paid plan (e.g. SerpApi's monthly searches) is used",
   skipped_after_not_accepted: "skipped after the engine's page kept ignoring questions",
   error: "unexpected error",
 };
@@ -140,6 +142,13 @@ export function reasonCopy(kind: string, engines: string[] = [], context: "engin
         next: "PrismGEO asks free engines only a safe number of questions per hour and per day, so your accounts and this computer's address are not limited or blocked. The remaining questions are asked by the next audit; use “Unanswered” to fill them in, or turn on the daily schedule. A key or the data provider has no such cap.",
         href: "/settings?tab=schedule",
         cta: "Turn on the schedule",
+      };
+    case "api_budget_reached":
+      return {
+        title: `${list} waiting for tomorrow's share of your plan`,
+        next: "Your paid plan has a monthly allowance (SerpApi's free plan: 250 searches). PrismGEO spreads it evenly over the month and keeps a small reserve, so it never runs out mid-month; the remaining questions are asked on the next days (the autopilot does it by itself).",
+        href: "/settings?tab=schedule",
+        cta: "See the autopilot",
       };
     case "waiting_for_person":
       return {

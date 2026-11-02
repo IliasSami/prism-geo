@@ -95,10 +95,14 @@ export interface RunFailure {
     | "network"
     | "setup"
     | "budget_reached"
+    | "api_budget_reached"
+    | "stopped"
     | "error";
   message: string;
   /** When it was recorded (ISO); free-engine budgets count failed attempts by time. */
   at?: string;
+  /** "api" when a key or provider route failed (it does not count against a free engine's budget). */
+  route?: "browser" | "api";
 }
 
 /** Another batch is already crawling this brand (in this or another process). */
@@ -211,7 +215,7 @@ export function classifyFailure(engine: EngineName, promptId: string | null, err
   else if (err instanceof NoAiOverviewError) kind = "no_ai_overview";
   else if (err instanceof ApiKeyRejectedError) kind = "api_key_rejected";
   else if (err instanceof QuestionNotSentError) kind = "not_accepted";
-  else if (err instanceof ApiBudgetError) kind = "budget_reached";
+  else if (err instanceof ApiBudgetError) kind = "api_budget_reached";
   else if (err instanceof AnswerNotFinishedError || /No extractable response|present but empty|did not finish/.test(message)) kind = "no_answer";
   // A profile another browser holds fails to launch too, but it is not a missing browser: it passes
   else if (err instanceof ProfileInUseError || PROFILE_IN_USE.test(rawMessage)) kind = "error";
@@ -227,6 +231,8 @@ export function classifyFailure(engine: EngineName, promptId: string | null, err
  * it; a batch row left "running" that is not in here was interrupted by a restart.
  */
 const activeBatches: Set<string> = ((globalThis as any).__prismActiveBatches ??= new Set<string>());
+/** Batches a person asked to stop (see requestStop). */
+const stopRequests: Set<string> = ((globalThis as any).__prismStopRequests ??= new Set<string>());
 const BOOT_ID: string = ((globalThis as any).__prismBootId ??= crypto.randomBytes(4).toString("hex"));
 /** Identifies the process running a batch: host, pid and a per-process boot id. */
 export const PROCESS_OWNER = `${os.hostname()}:${process.pid}:${BOOT_ID}`;
@@ -395,6 +401,17 @@ export class CrawlerOrchestrator {
   /** True while `batchId` is still being executed by this process. */
   public static isRunning(batchId: string): boolean {
     return activeBatches.has(batchId);
+  }
+
+  /**
+   * Asks a running batch to stop: no further question is asked (the one in progress finishes) and
+   * the rest is recorded as "stopped", so it stays unanswered for a later audit. False when the
+   * batch is not running in this process.
+   */
+  public static requestStop(batchId: string): boolean {
+    if (!activeBatches.has(batchId)) return false;
+    stopRequests.add(batchId);
+    return true;
   }
 
   public static async executeBatch(options: CrawlBatchOptions): Promise<string> {
@@ -708,6 +725,7 @@ export class CrawlerOrchestrator {
         const workers = viaApi ? apiConcurrency(engine, apiKeys) : 1;
 
         const processItem = async (prompt: (typeof items)[number]["prompt"], runIdx: number): Promise<void> => {
+          if (!stopped && stopRequests.has(batchId)) stopped = { kind: "stopped", message: "Not run: the audit was stopped" };
           if (!stopped && setupFailure && !viaApi) stopped = { kind: "skipped_setup", message: `Not run: ${setupFailure}` };
           if (stopped) {
             skipped++;
@@ -753,11 +771,22 @@ export class CrawlerOrchestrator {
           let spent = viaApi || pacingScale === 0 ? null : budgetExhausted(engine, usesSignedIn(engine));
           // Over the hourly cap: wait for room within the hour (the audit carries on by itself);
           // only the daily cap ends the engine's part of the audit
-          while (spent?.window === "hour" && !(mode === "hybrid" && apiAllowed(engine))) {
+          while (spent?.window === "hour" && !(mode === "hybrid" && apiAllowed(engine)) && !stopRequests.has(batchId)) {
             updateBatch(batchId, { currentEngine: engine, currentPrompt: `Pacing: ${ENGINES[engine].label} reached its safe hourly limit (${spent.limit}); continuing when the hour allows` });
             await new Promise((r) => setTimeout(r, 60_000));
-            if (promptStatus(prompt.id) !== "ok") break;
+            // The question was paused or deleted while waiting: only it is skipped, not the engine
+            const now = promptStatus(prompt.id);
+            if (now !== "ok") {
+              await recordFailure({ engine, promptId: prompt.id, kind: now, message: now === "prompt_removed" ? "Prompt deleted during the batch; not queried" : "Prompt paused during the batch; not queried" }, { quiet: true });
+              return;
+            }
             spent = budgetExhausted(engine, usesSignedIn(engine));
+          }
+          if (stopRequests.has(batchId)) {
+            stopped = { kind: "stopped", message: "Not run: the audit was stopped" };
+            skipped++;
+            await recordFailure({ engine, promptId: prompt.id, kind: "stopped", message: stopped.message }, { quiet: true });
+            return;
           }
           if (spent) {
             if (mode === "hybrid" && apiAllowed(engine)) viaApi = true;
@@ -816,8 +845,16 @@ export class CrawlerOrchestrator {
               // The API cannot help when this machine has no connection, and "no AI Overview" is a real outcome
               if (!viaApi && keyUsable() && kind !== "no_ai_overview" && kind !== "network") {
                 console.warn(`[CrawlerOrchestrator] ${engine} browser ${kind}; falling back to API: ${(firstErr as Error).message}`);
-                if (kind === "blocked" || kind === "setup") viaApi = true; // stop using a browser that cannot work
-                engineResult = await runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions);
+                const browserWorks = !(kind === "blocked" || kind === "setup");
+                if (!browserWorks) viaApi = true; // stop using a browser that cannot work
+                try {
+                  engineResult = await runApiEngine(engine as ApiEngine, prompt.queryText, apiKeys, providerOptions);
+                } catch (apiErr) {
+                  // The paid plan's share is used: a browser that still works keeps the engine going,
+                  // so only this question fails, with the browser's own reason
+                  if (apiErr instanceof ApiBudgetError && browserWorks) throw firstErr;
+                  throw apiErr;
+                }
               } else {
                 // One retry for transient failures (timeouts, half-rendered or unfinished answers).
                 // Blocks, rejected keys, network/setup failures and "no AI Overview" are never retried.
@@ -828,7 +865,7 @@ export class CrawlerOrchestrator {
               }
             }
           } catch (runErr) {
-            const failure = classifyFailure(engine, prompt.id, runErr);
+            const failure = { ...classifyFailure(engine, prompt.id, runErr), route: viaApi ? "api" : "browser" } as RunFailure;
             if (stillShown) {
               const label = ENGINES[engine].label;
               failure.message = `The ${afterPerson === "sign_in" ? "sign-in" : "human check"} was completed in the window, but ${label} still shows it to the automated browser; use a key or capture by hand (${failure.message})`;
@@ -874,7 +911,7 @@ export class CrawlerOrchestrator {
               stopped = { kind: "skipped_after_network", message: `Not run: ${engine} could not connect ${consecutiveNetwork} times in a row (${failure.message})` };
             }
             // A paid plan's share for today is used up: the rest of this engine waits for the next days
-            if (failure.kind === "budget_reached") stopped = { kind: "budget_reached", message: `Not run: ${failure.message}` };
+            if (failure.kind === "api_budget_reached") stopped = { kind: "api_budget_reached", message: `Not run: ${failure.message}` };
             if (failure.kind === "setup") {
               if (!viaApi) setupFailure = failure.message;
               stopped = { kind: "skipped_setup", message: `Not run: ${failure.message}` };
@@ -990,6 +1027,7 @@ export class CrawlerOrchestrator {
     } finally {
       if (heartbeat) clearInterval(heartbeat);
       activeBatches.delete(batchId);
+      stopRequests.delete(batchId);
       pageCache.clear();
       if (sharedBrowser) {
         try {
