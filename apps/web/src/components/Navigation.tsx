@@ -43,15 +43,36 @@ function PendingBar() {
   );
 }
 
-function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+/** Pages that show one client's data; before the first client exists they have nothing to show. */
+const NEEDS_CLIENT = new Set(["/", "/visibility", "/opportunities", "/citations", "/responses", "/prompts"]);
+
+function NavLinks({ pathname, onNavigate, hasClient }: { pathname: string; onNavigate?: () => void; hasClient: boolean }) {
   return (
     <div className="space-y-5">
+      {!hasClient && (
+        <p className="rounded-lg bg-zinc-100 px-2.5 py-2 text-xs text-zinc-600">
+          Add your first client to open these pages.{" "}
+          <Link href="/setup" onClick={onNavigate} className="font-medium text-accent-700 hover:underline">
+            Add a client
+          </Link>
+        </p>
+      )}
       {navigationGroups.map((group) => (
         <div key={group.title}>
           <div className="px-2.5 pb-1.5 text-xs font-medium text-zinc-500">{group.title}</div>
           <ul className="space-y-0.5">
             {group.items.map((item) => {
               const isActive = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+              if (!hasClient && NEEDS_CLIENT.has(item.href))
+                return (
+                  <li key={item.href}>
+                    <span aria-disabled="true" title="Add a client first" className="flex h-9 cursor-not-allowed items-center gap-2.5 rounded-lg px-2.5 text-base text-zinc-400">
+                      <item.icon className="h-4 w-4 shrink-0" aria-hidden />
+                      {item.label}
+                      <span className="sr-only"> (add a client first)</span>
+                    </span>
+                  </li>
+                );
               return (
                 <li key={item.href}>
                   <Link
@@ -214,7 +235,7 @@ export function Navigation({
             </div>
             <BrandSwitcher currentBrandId={brandId} currentBrandName={brandName} currentBrandDomain={brandDomain} onNavigate={() => setMobileOpen(false)} />
             <nav className="flex-1" aria-label="Main">
-              <NavLinks pathname={pathname} onNavigate={() => setMobileOpen(false)} />
+              <NavLinks hasClient={Boolean(brandId)} pathname={pathname} onNavigate={() => setMobileOpen(false)} />
             </nav>
             {footer}
           </div>
@@ -228,7 +249,7 @@ export function Navigation({
         </div>
         <BrandSwitcher currentBrandId={brandId} currentBrandName={brandName} currentBrandDomain={brandDomain} />
         <nav className="flex-1 overflow-y-auto" aria-label="Main">
-          <NavLinks pathname={pathname} />
+          <NavLinks hasClient={Boolean(brandId)} pathname={pathname} />
         </nav>
         {footer}
       </aside>

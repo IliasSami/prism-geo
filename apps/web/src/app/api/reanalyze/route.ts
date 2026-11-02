@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  * detection rules: { brandId? }. Answers themselves are never changed.
  */
 export const POST = route("reanalyze", async (request: Request) => {
-  const parsed = await parseBody(request, z.object({ brandId: brandIdSchema }));
+  const parsed = await parseBody(request, z.strictObject({ brandId: brandIdSchema }));
   if (!parsed.ok) return parsed.response;
   const resolved = resolveBrand(request, parsed.data.brandId);
   if (!resolved.ok) return resolved.response;

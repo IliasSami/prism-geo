@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronLeft, ChevronRight, Lock, PauseCircle, Pencil, PlayCircle, Plus, Search, Trash2, X } from "lucide-react";
 import { Badge, Button, Card, IconButton, Notice, cn, inputClass, textareaClass } from "@/components/ui";
+import { OfflineError, request } from "@/components/request";
+import { LIMITS, questionLines, tooLongMessage } from "@/app/api/_lib/limits";
 
 interface PromptItem {
   id: string;
@@ -24,7 +26,7 @@ const SUGGESTED_INTENTS = ["category", "dilemma", "comparison", "alternatives", 
 const humanize = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 async function callApi(method: Method, body: unknown) {
-  const res = await fetch("/api/prompts", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const res = await request("/api/prompts", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
@@ -58,7 +60,9 @@ export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: 
   const intents = useMemo(() => [...new Set(prompts.map((p) => p.intentType))].filter(Boolean).sort(), [prompts]);
   const personas = useMemo(() => [...new Set(prompts.map((p) => p.personaDimension))].filter(Boolean).sort(), [prompts]);
   const activeCount = prompts.filter((p) => p.active).length;
-  const newLines = newPrompts.split("\n").map((l) => l.trim()).filter((l) => l.length >= 5);
+  const parsedLines = questionLines(newPrompts);
+  const newLines = parsedLines.questions;
+  const lengthProblem = tooLongMessage(parsedLines.tooLong);
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -85,15 +89,18 @@ export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: 
   const run = async (key: string, fn: () => Promise<string | void>) => {
     setBusy(key);
     setNotice(null);
+    // Refresh only when the server answered: refreshing while it is down ends on the browser's error page
+    let reached = true;
     try {
       const msg = await fn();
       if (msg) setNotice({ ok: true, text: msg });
     } catch (err) {
+      if (err instanceof OfflineError) reached = false;
       setNotice({ ok: false, text: (err as Error).message });
     } finally {
       setBusy(null);
-      // Also after a failure: part of a bulk change may have been saved
-      router.refresh();
+      // Also after a failure the server answered: part of a bulk change may have been saved
+      if (reached) router.refresh();
     }
   };
 
@@ -141,6 +148,11 @@ export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: 
         try {
           await (kind === "delete" ? call("DELETE", { id: ids[i] }) : call("PATCH", { id: ids[i], active: kind === "resume" }));
         } catch (err) {
+          // The server stopped: the rest would fail the same way
+          if (err instanceof OfflineError) {
+            setProgress(null);
+            throw new OfflineError(i - failed > 0 ? `${i - failed} of ${ids.length} done, then PrismGEO stopped answering. Is it running?` : undefined);
+          }
           failed++;
           firstError ||= err instanceof Error ? err.message : String(err);
         }
@@ -181,17 +193,23 @@ export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: 
         onChange={(e) => setNewPrompts(e.target.value)}
         rows={4}
         aria-label="New prompts, one per line"
+        aria-invalid={Boolean(lengthProblem)}
+        aria-describedby="new-prompts-hint"
         placeholder={"what's the best way to recover abandoned checkouts without discounts?\nwhich tools call customers who abandon their cart?"}
         className={cn(textareaClass, "mt-3")}
       />
+      <p id="new-prompts-hint" className={cn("mt-1 text-xs", lengthProblem ? "text-red-700" : "text-zinc-500")}>
+        {lengthProblem ??
+          `${LIMITS.promptMin} to ${LIMITS.promptMax} characters per question. Lines under ${LIMITS.promptMin} characters are ignored${parsedLines.ignored ? ` (${parsedLines.ignored} now)` : ""}.`}
+      </p>
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <label className="space-y-1">
           <span className="block text-sm font-medium text-zinc-700">Intent</span>
-          <input value={newIntent} onChange={(e) => setNewIntent(e.target.value)} list="prompt-intents" className={cn(inputClass, "w-44")} />
+          <input value={newIntent} maxLength={LIMITS.label} onChange={(e) => setNewIntent(e.target.value)} list="prompt-intents" className={cn(inputClass, "w-44")} />
         </label>
         <label className="space-y-1">
           <span className="block text-sm font-medium text-zinc-700">Persona</span>
-          <input value={newPersona} onChange={(e) => setNewPersona(e.target.value)} list="prompt-personas" className={cn(inputClass, "w-44")} />
+          <input value={newPersona} maxLength={LIMITS.label} onChange={(e) => setNewPersona(e.target.value)} list="prompt-personas" className={cn(inputClass, "w-44")} />
         </label>
         <datalist id="prompt-intents">
           {[...new Set([...SUGGESTED_INTENTS, ...intents])].map((i) => (
@@ -203,7 +221,7 @@ export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: 
             <option key={p} value={p} />
           ))}
         </datalist>
-        <Button variant="primary" onClick={addPrompts} disabled={busy !== null || newLines.length === 0}>
+        <Button variant="primary" onClick={addPrompts} disabled={busy !== null || newLines.length === 0 || Boolean(lengthProblem)}>
           <Plus className="h-4 w-4" />
           {busy === "add" ? "Adding…" : newLines.length > 1 ? `Add ${newLines.length} prompts` : "Add prompt"}
         </Button>
@@ -224,7 +242,7 @@ export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: 
   const rowActions = (p: PromptItem) =>
     editing?.id === p.id ? (
       <>
-        <IconButton aria-label="Save prompt" tone="success" onClick={saveEdit} disabled={busy !== null || editing.queryText.trim().length < 5}>
+        <IconButton aria-label="Save prompt" tone="success" onClick={saveEdit} disabled={busy !== null || editing.queryText.trim().length < LIMITS.promptMin}>
           <Check className="h-4 w-4" />
         </IconButton>
         <IconButton aria-label="Cancel editing" onClick={() => setEditing(null)}>
@@ -261,6 +279,7 @@ export function PromptsClient({ prompts, addOnly = false, brandId }: { prompts: 
           autoFocus={p.runCount === 0}
           value={editing.queryText}
           disabled={p.runCount > 0}
+          maxLength={LIMITS.promptMax}
           onChange={(e) => setEditing({ ...editing, queryText: e.target.value })}
           aria-label="Prompt text"
           className={textareaClass}

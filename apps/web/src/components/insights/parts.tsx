@@ -141,10 +141,13 @@ export function FirstRunChecklist({
   brandName,
   counts,
   latest,
+  enginesOff = false,
 }: {
   brandName: string;
   counts: { competitors: number; prompts: number; answers: number };
   latest: LatestAudit | null;
+  /** Every engine is switched off in Settings: the audit step points there instead. */
+  enginesOff?: boolean;
 }) {
   const tried = Boolean(latest) && counts.answers === 0;
   const steps = [
@@ -172,12 +175,18 @@ export function FirstRunChecklist({
       done: counts.answers > 0,
       warn: tried,
       title: tried ? "Tried a first audit: no answers yet" : "Run a first audit of about 10 questions",
-      detail: tried
+      detail: enginesOff
+        ? "Every engine is switched off in Settings, so an audit has nothing to ask. Switch at least one on first."
+        : tried
         ? latest?.outcome.reason
           ? `${latest.outcome.reason.title}. Fix that, then run it again.`
           : "Every run failed. See Engines for the reason, then run it again."
         : "Start small: 10 questions, asked once each, takes a few minutes.",
-      action: tried ? (
+      action: enginesOff ? (
+        <LinkButton href="/settings?tab=engines" variant="primary">
+          Switch engines on <ArrowRight className="h-4 w-4" aria-hidden />
+        </LinkButton>
+      ) : tried ? (
         <div className="flex flex-wrap gap-2">
           <LinkButton href="/engines" variant="primary">
             See how to fix <ArrowRight className="h-4 w-4" aria-hidden />

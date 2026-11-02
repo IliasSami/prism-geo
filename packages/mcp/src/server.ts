@@ -410,7 +410,7 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
         "Browser crawls are paced (several seconds per query per engine), so a batch can take many minutes.",
       inputSchema: {
         ...brandArg,
-        engines: z.array(z.enum(ENGINES)).min(1).optional().describe("Defaults to the engines enabled in Settings"),
+        engines: z.array(z.enum(ENGINES)).min(1).optional().describe("Defaults to the engines enabled in Settings; engines switched off there never run"),
         sample_size: z.number().int().min(1).max(20).default(1).describe("Runs per prompt per engine"),
         prompt_limit: z.number().int().min(1).max(MAX_PROMPT_LIMIT).optional().describe(`Only the first N active prompts (at most ${MAX_PROMPT_LIMIT})`),
         confirm: z.boolean().optional().describe(`Required (true) when the crawl would make more than ${CONFIRM_RUNS_ABOVE} runs; ask the user first`),
@@ -422,7 +422,18 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
       // Same count the app uses: active prompts (capped) x engines x sample size. Without a list,
       // the engines enabled in Settings run; Copilot may still be skipped, so this is an upper bound.
       const settings = getSettings<Record<string, unknown>>("engine_settings", {});
-      const engineCount = engines ? new Set(engines).size : ENGINES.filter((e) => settings[e] !== false).length;
+      // Engines switched off in Settings never run, also when named here (the app refuses them too)
+      const switchedOff = ENGINES.filter((e) => settings[e] === false);
+      const requested = engines ? [...new Set(engines)] : ENGINES.filter((e) => settings[e] !== false);
+      const runnable = requested.filter((e) => !switchedOff.includes(e));
+      if (runnable.length === 0) {
+        return fail(
+          engines
+            ? `Switched off in Settings: ${requested.join(", ")}. The user can switch engines on in PrismGEO under Settings → Engines & access.`
+            : "Every engine is switched off in Settings. The user can switch engines on in PrismGEO under Settings → Engines & access."
+        );
+      }
+      const engineCount = runnable.length;
       const active = Number(get("SELECT COUNT(*) AS n FROM prompts WHERE brand_id = ? AND active = 1", brand.id)?.n || 0);
       const prompts = Math.min(active, prompt_limit ?? MAX_PROMPT_LIMIT);
       const runs = prompts * engineCount * sample_size;
@@ -440,7 +451,7 @@ export function createPrismMcpServer(options: PrismMcpOptions = {}): McpServer {
         });
       }
       try {
-        const args: StartCrawlArgs = { brandId: brand.id, engines, sampleSize: sample_size, promptLimit: prompt_limit };
+        const args: StartCrawlArgs = { brandId: brand.id, engines: engines ? runnable : undefined, sampleSize: sample_size, promptLimit: prompt_limit };
         const res = options.startCrawl
           ? await options.startCrawl(args)
           : await callApp("/api/crawl/start", { method: "POST", body: JSON.stringify(args) });

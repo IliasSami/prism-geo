@@ -51,8 +51,8 @@ export function AutopilotCard() {
       const res = await fetch("/api/autopilot", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }) });
       if (!res.ok) throw new Error();
       await load();
-    } catch {
-      setError("The autopilot could not be switched. Try again.");
+    } catch (e) {
+      setError(e instanceof TypeError ? "PrismGEO did not answer. Is it running?" : "The autopilot could not be switched. Try again.");
     } finally {
       setSaving(false);
     }
@@ -83,6 +83,7 @@ export function AutopilotCard() {
               className="relative h-5 w-9 rounded-full bg-zinc-300 transition peer-checked:bg-accent-600 peer-focus-visible:ring-2 peer-focus-visible:ring-accent-500 peer-focus-visible:ring-offset-2 after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow after:transition peer-checked:after:translate-x-4"
             />
             {status?.enabled ? "On" : "Off"}
+            <span className="text-xs font-normal text-zinc-500">· Saves immediately</span>
           </label>
         }
       />

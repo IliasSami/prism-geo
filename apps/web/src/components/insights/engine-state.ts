@@ -162,15 +162,17 @@ export function getEngineViews(brandId: string | undefined, context: "engines-pa
 }
 
 /** Header chip: "3 working · 1 partly blocked", or the one state every engine shares. */
-export function engineSummary(views: EngineView[]): { text: string; tone: Tone; title: string } {
+export function engineSummary(views: EngineView[]): { text: string; tone: Tone; title: string; href: string } {
   // Engines that cannot run until set up (Copilot without a session, AI Mode without a key) are not "failing"
   const on = views.filter((v) => v.enabled && !((v.engine === "copilot" || v.engine === "google_ai_mode") && v.state === "not_set_up"));
   const order: EngineState[] = ["working", "partly_blocked", "blocked", "not_set_up", "not_run"];
   const counts = order.map((s) => [s, on.filter((v) => v.state === s).length] as const).filter(([, n]) => n > 0);
-  if (on.length === 0) return { text: "No engines switched on", tone: "neutral", title: "Switch engines on in Settings" };
-  if (counts.length === 1 && counts[0][0] === "not_run") return { text: "Engines not run yet", tone: "neutral", title: "Run an audit to check each engine" };
+  // Nothing switched on is fixed in Settings → Engines & access, not on the Engines page
+  if (views.every((v) => !v.enabled)) return { text: "No engines switched on", tone: "neutral", title: "Switch engines on in Settings → Engines & access", href: "/settings?tab=engines" };
+  if (on.length === 0) return { text: "No engine set up", tone: "danger", title: "The engines switched on need a session or a key. See Engines.", href: "/engines" };
+  if (counts.length === 1 && counts[0][0] === "not_run") return { text: "Engines not run yet", tone: "neutral", title: "Run an audit to check each engine", href: "/engines" };
   const text = counts.map(([s, n]) => `${n} ${STATE_COPY[s].label.toLowerCase()}`).join(" · ");
   const tone: Tone = on.some((v) => v.state === "blocked" || v.state === "not_set_up") ? "danger" : on.some((v) => v.state === "partly_blocked") ? "warning" : on.some((v) => v.state === "working") ? "success" : "neutral";
   const title = on.map((v) => `${engineLabel(v.engine)}: ${v.label}${v.reason ? `. ${v.reason}` : ""}`).join("\n");
-  return { text, tone, title };
+  return { text, tone, title, href: "/engines" };
 }

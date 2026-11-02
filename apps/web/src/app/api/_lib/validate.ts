@@ -9,21 +9,8 @@ export const ENGINE_MODES = ["stealth", "byok", "hybrid"] as const;
 export const BYOK_PROVIDERS = ["openai", "gemini", "perplexity", "serpapi", "dataforseo", "apify"] as const;
 export type ByokProvider = (typeof BYOK_PROVIDERS)[number];
 
-export const LIMITS = {
-  name: 120,
-  description: 2000,
-  alias: 120,
-  aliases: 20,
-  valueProp: 300,
-  valueProps: 20,
-  competitors: 50,
-  promptMin: 5,
-  promptMax: 500,
-  prompts: 200,
-  label: 40,
-  apiKey: 300,
-  proxyUrl: 2000,
-} as const;
+export { LIMITS } from "./limits";
+import { LIMITS } from "./limits";
 
 const HOSTNAME = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 
@@ -199,7 +186,7 @@ export const categorySchema = z
     return words >= 2 && words <= 8;
   }, "Describe the category in 2 to 8 words");
 
-export const competitorSchema = z.object({
+export const competitorSchema = z.strictObject({
   name: nameSchema("competitor name"),
   domain: domainSchema,
   aliases: stringListSchema(LIMITS.aliases, LIMITS.alias).optional(),

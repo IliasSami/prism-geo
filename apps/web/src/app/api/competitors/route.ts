@@ -10,14 +10,14 @@ export const dynamic = "force-dynamic";
 
 const aliasesSchema = stringListSchema(LIMITS.aliases, LIMITS.alias);
 
-const createSchema = z.object({
+const createSchema = z.strictObject({
   brandId: brandIdSchema,
   name: nameSchema("competitor name"),
   domain: domainSchema,
   aliases: aliasesSchema.optional(),
 });
 
-const patchSchema = z.object({
+const patchSchema = z.strictObject({
   brandId: brandIdSchema,
   id: idSchema("Competitor id"),
   name: nameSchema("competitor name").optional(),
@@ -25,7 +25,7 @@ const patchSchema = z.object({
   aliases: aliasesSchema.optional(),
 });
 
-const deleteSchema = z.object({ brandId: brandIdSchema, id: idSchema("Competitor id") });
+const deleteSchema = z.strictObject({ brandId: brandIdSchema, id: idSchema("Competitor id") });
 
 const tracked = (brandId: string, domain: string, exceptId?: string) =>
   Boolean(getRawDb().prepare("SELECT 1 FROM competitors WHERE brand_id = ? AND lower(domain) = ? AND id IS NOT ?").get(brandId, domain, exceptId ?? null));

@@ -86,11 +86,16 @@ export default async function EnginesPage() {
     const id = v.engine;
     const h = v.health;
     const er = runs.filter((r) => r.engine === id);
-    const status: { label: string; tone: Tone } = v.enabled || v.state === "not_set_up" ? { label: v.label, tone: v.tone } : { label: "Switched off", tone: "outline" };
+    // Switched off wins over every other state: it is the person's choice, not something to set up
+    const status: { label: string; tone: Tone } = v.enabled ? { label: v.label, tone: v.tone } : { label: "Switched off", tone: "outline" };
     const keyName = KEY_NAME[id];
     const route =
-      id === "copilot" && v.state === "not_set_up"
+      !v.enabled
+        ? "Not asked in audits. Switch it on in Settings → Engines & access."
+        : id === "copilot" && v.state === "not_set_up"
         ? "Needs a signed-in Microsoft account"
+        : id === "google_ai_mode" && h.route !== "api" && !h.apiFallback
+          ? "Needs a SerpApi key, an Apify token or the DataForSEO data provider (no browser route)"
         : h.route === "api"
           ? h.routeLabel || `${keyName} API key`
           : h.restingUntil
@@ -173,7 +178,9 @@ export default async function EnginesPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Dot tone={r.status.tone} />
                   <h2 className="text-md font-semibold text-zinc-900">{engineLabel(r.engine)}</h2>
-                  <Badge tone={r.status.tone}>{r.status.label}</Badge>
+                  <Badge tone={r.status.tone} wrap>
+                    {r.status.label}
+                  </Badge>
                 </div>
                 <p className="mt-1 text-sm text-zinc-500">{r.route}</p>
               </div>
@@ -327,7 +334,9 @@ export default async function EnginesPage() {
                 return (
                   <li key={`${g.engine}:${g.kind}`} className="space-y-2 px-5 py-4">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge tone={isRealOutcome(g.kind) ? "outline" : g.kind === "blocked" ? "danger" : "warning"}>{capital(kindPhrase(g.kind))}</Badge>
+                      <Badge tone={isRealOutcome(g.kind) ? "outline" : g.kind === "blocked" ? "danger" : "warning"} wrap>
+                        {capital(kindPhrase(g.kind))}
+                      </Badge>
                       <span className="font-medium text-zinc-900">{engineLabel(g.engine)}</span>
                       <span className="text-sm text-zinc-500 tabular">
                         {g.attempted > 0 && plural(g.attempted, g.kind === "blocked" ? "attempt" : "run")}

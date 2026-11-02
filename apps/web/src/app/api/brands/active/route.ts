@@ -7,7 +7,7 @@ import { idSchema } from "../../_lib/validate";
 
 export const dynamic = "force-dynamic";
 
-const schema = z.object({ brandId: idSchema("brandId") });
+const schema = z.strictObject({ brandId: idSchema("brandId") });
 
 /**
  * Selects a client for this browser (cookie). It also becomes the server-wide default used by

@@ -99,10 +99,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                   <HideOn prefix="/setup">
                     <div className="flex items-center gap-2">
                       <Link
-                        href="/engines"
+                        href={summary.href}
                         className="inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-700 shadow-sm transition hover:border-zinc-400"
                         title={summary.title}
-                        aria-label={`Engines: ${summary.text}. Open the Engines page`}
+                        aria-label={`Engines: ${summary.text}. ${summary.href.startsWith("/settings") ? "Open Settings, Engines & access" : "Open the Engines page"}`}
                       >
                         <span className={`h-2 w-2 rounded-full ${DOT[summary.tone] || DOT.neutral}`} aria-hidden />
                         <span className="tabular">{summary.text}</span>

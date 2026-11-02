@@ -5,6 +5,8 @@ import { ArrowLeft, ArrowRight, Check, Loader2, Plus, Trash2, X } from "lucide-r
 import Link from "next/link";
 import { Button, Card, Field, IconButton, Notice, cn, inputClass, textareaClass, buttonClass } from "@/components/ui";
 import { cleanDomain, cleanedHint, domainError } from "@/components/domain";
+import { LIMITS, questionLines, tooLongMessage } from "@/app/api/_lib/limits";
+import { NOT_RUNNING } from "@/components/request";
 
 interface CompetitorInput {
   name: string;
@@ -48,27 +50,53 @@ export default function SetupWizardPage() {
   const [promptCount, setPromptCount] = useState(10);
   const [ownQuestions, setOwnQuestions] = useState("");
   const [repeats, setRepeats] = useState(1);
+  // "Repeats per question" is a global setting: only the first client sets it, later ones only when changed
+  const [savedRepeats, setSavedRepeats] = useState<number | null>(null);
+  const [firstClient, setFirstClient] = useState(true);
+  useEffect(() => {
+    fetch("/api/settings", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const n = Number(d?.crawler?.sampleSize);
+        if (Number.isInteger(n) && n >= 1) {
+          setSavedRepeats(n);
+          setRepeats(Math.min(5, n));
+        }
+      })
+      .catch(() => null);
+    fetch("/api/brands", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => Array.isArray(d?.brands) && setFirstClient(d.brands.length === 0))
+      .catch(() => null);
+  }, []);
 
   const brandClean = cleanDomain(brandDomain);
-  const nameValid = brandName.trim().length > 0;
+  const nameValid = brandName.trim().length >= 2;
   const brandDomainError = brandDomain.trim() ? domainError(brandDomain) : "Enter the website, e.g. example.com";
   const domainValid = !brandDomainError;
   const step1Valid = nameValid && domainValid;
   const [touched2, setTouched2] = useState(false);
-  const rowProblem = (c: CompetitorInput): string | null => {
+  // Same rules as the server and Settings → Competitors, so problems show on this step, not at the end
+  const rowProblem = (c: CompetitorInput, i: number): string | null => {
     const name = c.name.trim();
     const domain = c.domain.trim();
     if (!name && !domain) return null;
     if (name && !domain) return `Add ${name}'s website, or remove the row.`;
     if (!name && domain) return "Add the company name, or remove the row.";
-    return domainError(domain);
+    if (name.length < 2) return "The competitor name needs at least 2 characters.";
+    const bad = domainError(domain);
+    if (bad) return bad;
+    const clean = cleanDomain(domain);
+    if (brandClean && clean === brandClean) return `${clean} is ${brandName.trim() || "the client"}'s own website, not a competitor.`;
+    const first = competitors.findIndex((x) => x.name.trim() && x.domain.trim() && cleanDomain(x.domain) === clean);
+    if (first !== i) return `${clean} is already listed as competitor ${first + 1}.`;
+    return null;
   };
-  const step2Valid = competitors.every((c) => !rowProblem(c));
-  const ownList = ownQuestions
-    .split("\n")
-    .map((q) => q.trim())
-    .filter((q) => q.length >= 5);
-  const step3Valid = questionSource === "generate" || ownList.length > 0;
+  const step2Valid = competitors.every((c, i) => !rowProblem(c, i));
+  const own = questionLines(ownQuestions);
+  const ownList = own.questions;
+  const ownProblem = tooLongMessage(own.tooLong) ?? (ownList.length > LIMITS.prompts ? `At most ${LIMITS.prompts} questions at a time; you have ${ownList.length}.` : null);
+  const step3Valid = questionSource === "generate" || (ownList.length > 0 && !ownProblem);
 
   // Move focus to the step title so keyboard and screen-reader users land on the new step
   const firstRender = useRef(true);
@@ -83,7 +111,8 @@ export default function SetupWizardPage() {
   function next() {
     if (step === 1 && !step1Valid) {
       setTouched(true);
-      return setError(!nameValid && !domainValid ? "Enter the brand name and its website." : !nameValid ? "Enter the brand name." : `Website: ${brandDomainError}`);
+      const nameMessage = brandName.trim() ? "The brand name needs at least 2 characters." : "Enter the brand name.";
+      return setError(!nameValid && !domainValid ? "Enter the brand name and its website." : !nameValid ? nameMessage : `Website: ${brandDomainError}`);
     }
     if (step === 2 && !step2Valid) {
       setTouched2(true);
@@ -99,10 +128,17 @@ export default function SetupWizardPage() {
       setTouched(true);
       return setError("Enter the brand name and its website.");
     }
-    if (!step3Valid) return setError("Add at least one question (5 characters or more), or let PrismGEO write them.");
+    if (!step2Valid) {
+      setStep(2);
+      setTouched2(true);
+      return setError("Fix the highlighted competitor rows, or remove them.");
+    }
+    if (!step3Valid) return setError(ownProblem ?? `Add at least one question (${LIMITS.promptMin} characters or more), or let PrismGEO write them.`);
     setSubmitting(true);
     setError(null);
     try {
+      // Server errors name competitors by their place in the list sent; map them back to the rows shown
+      const sentRows = competitors.map((c, i) => (c.name.trim() && c.domain.trim() ? i : -1)).filter((i) => i >= 0);
       const payload = {
         brand: {
           name: brandName.trim(),
@@ -113,7 +149,7 @@ export default function SetupWizardPage() {
           valueProps: valueProps.split("\n").map((v) => v.trim()).filter(Boolean),
         },
         competitors: competitors.filter((c) => c.name.trim() && c.domain.trim()).map((c) => ({ name: c.name.trim(), domain: cleanDomain(c.domain) })),
-        crawler: { sampleSize: repeats },
+        ...(firstClient || savedRepeats === null || repeats !== Math.min(5, savedRepeats) ? { crawler: { sampleSize: repeats } } : {}),
         ...(questionSource === "own"
           ? { prompts: ownList.map((query) => ({ query, intent: "category", persona: "buyer" })) }
           : { promptLimit: promptCount }),
@@ -122,8 +158,19 @@ export default function SetupWizardPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+      }).catch(() => {
+        throw new Error(NOT_RUNNING);
       });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not create the client");
+      if (!res.ok) {
+        const message: string = (await res.json().catch(() => ({}))).error || "Could not create the client";
+        const row = /^Competitor (\d+)/.exec(message);
+        if (row) {
+          const shown = (sentRows[Number(row[1]) - 1] ?? Number(row[1]) - 1) + 1;
+          setStep(2);
+          throw new Error(message.replace(/^Competitor \d+/, `Competitor ${shown}`));
+        }
+        throw new Error(message);
+      }
       // Written questions are reviewed before the first audit; own questions were already read
       window.location.href = questionSource === "generate" ? "/prompts?review=1" : "/";
     } catch (e) {
@@ -208,6 +255,7 @@ export default function SetupWizardPage() {
                     id="brand-name"
                     autoFocus
                     required
+                    maxLength={LIMITS.name}
                     aria-invalid={touched && !nameValid}
                     className={cn(inputClass, touched && !nameValid && "border-red-400")}
                     placeholder="e.g. Acme Analytics"
@@ -238,7 +286,7 @@ export default function SetupWizardPage() {
                 </Field>
                 <div className="sm:col-span-2">
                   <Field label="Other names (optional)" htmlFor="brand-aliases" hint="Comma separated, e.g. Acme, Acme App">
-                    <input id="brand-aliases" className={inputClass} value={brandAliases} onChange={(e) => setBrandAliases(e.target.value)} />
+                    <input id="brand-aliases" className={inputClass} maxLength={LIMITS.alias * LIMITS.aliases} value={brandAliases} onChange={(e) => setBrandAliases(e.target.value)} />
                   </Field>
                 </div>
                 <div className="sm:col-span-2">
@@ -246,6 +294,7 @@ export default function SetupWizardPage() {
                     <textarea
                       id="brand-description"
                       rows={2}
+                      maxLength={LIMITS.description}
                       className={textareaClass}
                       placeholder="e.g. Accounting software for small online shops"
                       value={description}
@@ -261,6 +310,7 @@ export default function SetupWizardPage() {
                   >
                     <input
                       id="brand-category"
+                      maxLength={80}
                       className={inputClass}
                       placeholder="e.g. accounting software for online shops"
                       value={category}
@@ -288,19 +338,21 @@ export default function SetupWizardPage() {
                 <p className="text-base text-zinc-600">Add the companies buyers compare you with. You can skip this and add them later.</p>
                 <ul className="space-y-3">
                   {competitors.map((c, i) => {
-                    const problem = rowProblem(c);
+                    const problem = rowProblem(c, i);
                     const show = Boolean(problem) && (touched2 || Boolean(c.domain.trim() && c.name.trim()));
                     const hint = !problem ? cleanedHint(c.domain) : null;
                     const nameBad = show && !c.name.trim();
-                    const domainBad = show && Boolean(c.name.trim());
+                    const domainBad = show && c.name.trim().length >= 2;
+                    const nameBad2 = show && c.name.trim().length > 0 && c.name.trim().length < 2;
                     return (
                       <li key={i}>
                         <div className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
                           <input
                             aria-label={`Competitor ${i + 1} name`}
-                            aria-invalid={nameBad}
+                            aria-invalid={nameBad || nameBad2}
                             aria-describedby={show || hint ? `competitor-${i}-hint` : undefined}
-                            className={cn(inputClass, nameBad && "border-red-400")}
+                            className={cn(inputClass, (nameBad || nameBad2) && "border-red-400")}
+                            maxLength={LIMITS.name}
                             placeholder="Name"
                             value={c.name}
                             onChange={(e) => setCompetitors(competitors.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
@@ -310,6 +362,7 @@ export default function SetupWizardPage() {
                             aria-invalid={domainBad}
                             aria-describedby={show || hint ? `competitor-${i}-hint` : undefined}
                             className={cn(inputClass, domainBad && "border-red-400")}
+                            maxLength={253}
                             placeholder="example.com"
                             value={c.domain}
                             onChange={(e) => setCompetitors(competitors.map((x, j) => (j === i ? { ...x, domain: e.target.value } : x)))}
@@ -332,7 +385,7 @@ export default function SetupWizardPage() {
                     );
                   })}
                 </ul>
-                <Button size="sm" variant="ghost" onClick={() => setCompetitors([...competitors, { name: "", domain: "" }])}>
+                <Button size="sm" variant="ghost" disabled={competitors.length >= LIMITS.competitors} onClick={() => setCompetitors([...competitors, { name: "", domain: "" }])}>
                   <Plus className="h-4 w-4" aria-hidden />
                   Add another
                 </Button>
@@ -393,11 +446,23 @@ export default function SetupWizardPage() {
                     </p>
                   </div>
                 ) : (
-                  <Field label="Your questions" htmlFor="own-questions" hint={`One per line, written the way a buyer would ask an AI assistant. ${ownList.length} ready.`}>
+                  <Field
+                    label="Your questions"
+                    htmlFor="own-questions"
+                    hintId="own-questions-hint"
+                    hint={
+                      <span className={ownProblem ? "text-red-700" : undefined}>
+                        {ownProblem ??
+                          `One per line, written the way a buyer would ask an AI assistant, ${LIMITS.promptMin} to ${LIMITS.promptMax} characters. Lines under ${LIMITS.promptMin} characters are ignored. ${ownList.length} ready${own.ignored ? `, ${own.ignored} ignored` : ""}.`}
+                      </span>
+                    }
+                  >
                     <textarea
                       id="own-questions"
                       rows={6}
-                      className={textareaClass}
+                      aria-invalid={Boolean(ownProblem)}
+                      aria-describedby="own-questions-hint"
+                      className={cn(textareaClass, ownProblem && "border-red-400")}
                       placeholder={"e.g. what's the best way to recover abandoned checkouts on shopify?\nis there a tool that calls customers who abandon carts?"}
                       value={ownQuestions}
                       onChange={(e) => setOwnQuestions(e.target.value)}

@@ -116,6 +116,27 @@ test("start_crawl bounds the prompt limit and needs confirm above 50 runs", asyn
   assert.equal(confirmed.body.started, true);
 });
 
+test("start_crawl never runs engines switched off in Settings", async () => {
+  const setEngines = (v: Record<string, unknown>) =>
+    sqlite.prepare("INSERT OR REPLACE INTO system_settings (key, value_json, updated_at) VALUES ('engine_settings', ?, '')").run(JSON.stringify(v));
+  setEngines({ chatgpt: false, gemini: true, perplexity: false, google_aio: false, google_ai_mode: false, copilot: false });
+  try {
+    const off = await call("start_crawl", { engines: ["chatgpt"], sample_size: 1 });
+    assert.ok(off.isError);
+    assert.match(off.text, /Switched off in Settings: chatgpt/);
+    assert.match(off.text, /Settings → Engines & access/);
+    const mixed = await call("start_crawl", { engines: ["chatgpt", "gemini"], sample_size: 1, prompt_limit: 1 });
+    assert.equal(mixed.body.started, true);
+    assert.deepEqual(mixed.body.args.engines, ["gemini"]);
+    setEngines({ chatgpt: false, gemini: false, perplexity: false, google_aio: false, google_ai_mode: false, copilot: false });
+    const allOff = await call("start_crawl", { sample_size: 1, prompt_limit: 1 });
+    assert.ok(allOff.isError);
+    assert.match(allOff.text, /Every engine is switched off/);
+  } finally {
+    sqlite.prepare("DELETE FROM system_settings WHERE key = 'engine_settings'").run();
+  }
+});
+
 test("add_prompts skips non-ASCII case duplicates", async () => {
   const first = await call("add_prompts", { prompts: ["Étude de marché IA vocale"] });
   assert.equal(first.body.added, 1);

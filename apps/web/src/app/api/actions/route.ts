@@ -63,8 +63,8 @@ async function launchFailure(window: Promise<unknown>, engine: string): Promise<
   return result;
 }
 
-const ActionBody = z.object({
-  id: z.string().min(1, "Missing request id"),
+const ActionBody = z.strictObject({
+  id: z.string({ error: "Missing request id" }).min(1, "Missing request id"),
   action: z.enum(["open", "done", "dismiss", "resume"], { message: 'Use action "open", "done", "dismiss" or "resume"' }),
 });
 
@@ -161,7 +161,8 @@ export const POST = route("actions POST", async (request: Request) => {
     const held = r.batchId ? (getRawDb().prepare("SELECT sample_size FROM crawl_batches WHERE id = ?").get(r.batchId) as { sample_size: number | null } | undefined) : undefined;
     const sampleSize = Math.min(20, Math.max(1, Number(held?.sample_size) || 1));
     const started = startCrawl(brand, { engines: [r.engine], sampleSize }, { promptIdsByEngine: { [r.engine as EngineId]: questions } });
-    if (!started.ok) return NextResponse.json(started.body, { status: started.status });
+    // Engines switched off in Settings are refused there too; the request stays open to resume later
+    if (!started.ok) return NextResponse.json({ ...started.body, error: `Not resumed: ${started.body.error}` }, { status: started.status });
     setPendingPrompts(r.id, []);
     setActionStatus(r.id, "resolved", `Resumed in ${started.body.batchId}`);
     return NextResponse.json({ success: true, batchId: started.body.batchId });
