@@ -1,4 +1,6 @@
 import type { Browser, Page } from "playwright";
+import { getSettings, setSettings } from "@prismgeo/db";
+import { isProfileConnected } from "./profiles";
 import {
   withStealthPage,
   browserCaptureMethod,
@@ -81,6 +83,21 @@ async function ask(page: Page, query: string, signedIn: boolean) {
   return extracted;
 }
 
+/** When the signed-in session last ignored a question; it is tested again a day later. */
+const REFUSED_KEY = "chatgpt_signed_in_refused_at";
+const RETRY_SIGNED_IN_MS = 24 * 3_600_000;
+
+/**
+ * Whether audits should ask ChatGPT through the signed-in session: connected, and it did not
+ * ignore a question in the last 24 hours (until then every question goes straight to logged out,
+ * instead of costing ChatGPT two visits).
+ */
+export function chatGptSignedInUsable(now = Date.now()): boolean {
+  if (!isProfileConnected("chatgpt")) return false;
+  const refused = getSettings<{ at?: string }>(REFUSED_KEY, {}).at;
+  return !refused || now - Date.parse(refused) >= RETRY_SIGNED_IN_MS;
+}
+
 export class ChatGptEngineCrawler {
   /**
    * Logged-out ChatGPT answers `chatgpt.com/?q=` directly (with web search when it decides to),
@@ -91,14 +108,19 @@ export class ChatGptEngineCrawler {
   public static async execute(query: string, existingBrowser?: Browser): Promise<ChatGptEngineResult> {
     const startTime = Date.now();
     let captureMethod = browserCaptureMethod("chatgpt");
-    const signedIn = captureMethod === "browser_signed_in";
+    const signedIn = captureMethod === "browser_signed_in" && chatGptSignedInUsable();
+    if (!signedIn) captureMethod = "browser";
 
     let answer;
     try {
-      answer = await withStealthPage("ChatGptCrawler", existingBrowser, (page) => ask(page, query, signedIn), { profile: "chatgpt" });
+      // Logged out: a fresh page without the saved profile
+      answer = signedIn
+        ? await withStealthPage("ChatGptCrawler", existingBrowser, (page) => ask(page, query, true), { profile: "chatgpt" })
+        : await withStealthPage("ChatGptCrawler", existingBrowser, (page) => ask(page, query, false));
     } catch (err) {
       if (!(signedIn && err instanceof QuestionNotSentError)) throw err;
-      console.warn("[ChatGptCrawler] The signed-in session did not accept the question; asking it logged out instead");
+      setSettings(REFUSED_KEY, { at: new Date().toISOString() });
+      console.warn("[ChatGptCrawler] The signed-in session did not accept the question; asking logged out (for the next 24 hours too)");
       answer = await withStealthPage("ChatGptCrawler", existingBrowser, (page) => ask(page, query, false));
       captureMethod = "browser";
     }

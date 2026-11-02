@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSettings, setSettings } from "@prismgeo/db";
-import { getAutopilotState, serpApiBudgetState, type AutopilotSettings } from "@prismgeo/crawler";
+import { getAutopilotState, refreshSerpApiQuota, serpApiBudgetState, type AutopilotSettings } from "@prismgeo/crawler";
 import { parseBody, route } from "../_lib/http";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +10,8 @@ export const dynamic = "force-dynamic";
 export const GET = route("autopilot GET", async () => {
   const settings = getSettings<AutopilotSettings>("autopilot", {});
   const keys = getSettings<{ serpapi?: string }>("byok_api_keys", {});
+  // Free and cached for 10 minutes: shows the real plan, not a stale count
+  if (keys.serpapi) await refreshSerpApiQuota(keys.serpapi);
   return NextResponse.json({
     enabled: settings.enabled === true,
     state: getAutopilotState(),

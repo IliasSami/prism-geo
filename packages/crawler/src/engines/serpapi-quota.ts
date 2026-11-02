@@ -90,6 +90,11 @@ export async function spendSerpApi(key: string, n = 1, purpose: "audit" | "reser
   setSettings(KEY, l);
 }
 
+/** Reads the plan's remaining searches now (free, cached 10 minutes), so today's share is known before spending. */
+export async function refreshSerpApiQuota(key: string, now = new Date()): Promise<void> {
+  setSettings(KEY, await refresh(key, load(now), now));
+}
+
 /** What the dashboard shows: searches left, kept in reserve, and today's share. */
 export function serpApiBudgetState(now = new Date()): { left: number | null; perMonth: number | null; reserve: number; allowanceToday: number; usedToday: number; checkedAt: string | null } {
   const l = load(now);

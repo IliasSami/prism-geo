@@ -7,7 +7,8 @@ import { browserCoolingDown } from "../engines/block-memory";
 import { budgetExhausted, enginePolicy } from "../engines/budgets";
 import { isProfileConnected } from "../engines/profiles";
 import { apiRouteFor, type ApiKeys } from "../engines/api-engines";
-import { serpApiBudgetState } from "../engines/serpapi-quota";
+import { refreshSerpApiQuota, serpApiBudgetState } from "../engines/serpapi-quota";
+import { chatGptSignedInUsable } from "../engines/chatgpt";
 import { notifyDesktop } from "../engines/notify";
 
 /**
@@ -95,7 +96,7 @@ export function engineRoom(engine: EngineName, brandId: string, now = Date.now()
   }
   const rest = browserCoolingDown(engine, now);
   if (rest && browserOnly) return { room: 0, waiting: `${label} rests after a block until ${rest.until.slice(11, 16)} UTC` };
-  const signedIn = isProfileConnected(engine);
+  const signedIn = engine === "chatgpt" ? chatGptSignedInUsable(now) : isProfileConnected(engine);
   const day = budgetExhausted(engine, signedIn, now);
   if (day?.window === "day") return { room: 0, waiting: `${label} reached its safe daily limit; continues tomorrow` };
   const policy = enginePolicy(engine, signedIn);
@@ -121,6 +122,9 @@ export async function runAutopilot(now = Date.now()): Promise<void> {
 
   busy = true;
   try {
+    // Today's SerpApi share is only known once the plan was read (free; at most every 10 minutes)
+    const serpapiKey = getSettings<ApiKeys>("byok_api_keys", {}).serpapi;
+    if (serpapiKey) await refreshSerpApiQuota(serpapiKey, new Date(now));
     const engineSettings = getSettings<Record<string, unknown>>("engine_settings", {});
     const enabled = ENGINE_IDS.filter((e) => engineSettings[e] !== false) as EngineName[];
     const brands = (db.prepare("SELECT id, name FROM brands ORDER BY created_at").all() as Array<{ id: string; name: string }>).filter(

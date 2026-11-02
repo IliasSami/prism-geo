@@ -18,7 +18,7 @@ import { PerplexityEngineCrawler } from "../engines/perplexity";
 import { GoogleAioCrawler, NoAiOverviewError } from "../engines/google-aio";
 import { CopilotEngineCrawler } from "../engines/copilot";
 import { GeminiEngineCrawler } from "../engines/gemini";
-import { ChatGptEngineCrawler } from "../engines/chatgpt";
+import { ChatGptEngineCrawler, chatGptSignedInUsable } from "../engines/chatgpt";
 import { AnswerNotFinishedError, EngineBlockedError, QuestionNotSentError, type EngineAnswer } from "../engines/browser-session";
 import { getProxyConfig } from "../engines/proxy";
 import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteLocation, countryCodeFor, ApiKeyRejectedError, type ApiEngine, type ApiKeys } from "../engines/api-engines";
@@ -132,9 +132,12 @@ const COOLDOWNS_MS = [10, 20, 30].map((minutes) => minutes * 60_000);
  * Delay between two queries to the same engine, so one host is never hammered. Google and
  * anonymous Perplexity rate-limit an IP after a few dozen queries, so they are paced slowest.
  */
+/** Whether the engine's next browser question goes through the signed-in profile (budgets follow the route). */
+const usesSignedIn = (engine: string) => (engine === "chatgpt" ? chatGptSignedInUsable() : isProfileConnected(engine));
+
 function pacingFor(engine: EngineName, viaApi: boolean): [number, number] {
   if (viaApi) return [500, 1500];
-  const [min, max] = enginePolicy(engine, isProfileConnected(engine)).delay;
+  const [min, max] = enginePolicy(engine, usesSignedIn(engine)).delay;
   return [min * 1000, max * 1000];
 }
 
@@ -747,14 +750,14 @@ export class CrawlerOrchestrator {
           }
           // A free engine's hourly or daily budget (see budgets.ts) protects the account and this
           // computer's address; a key in hybrid mode takes over, otherwise the rest waits for later
-          let spent = viaApi || pacingScale === 0 ? null : budgetExhausted(engine, isProfileConnected(engine));
+          let spent = viaApi || pacingScale === 0 ? null : budgetExhausted(engine, usesSignedIn(engine));
           // Over the hourly cap: wait for room within the hour (the audit carries on by itself);
           // only the daily cap ends the engine's part of the audit
           while (spent?.window === "hour" && !(mode === "hybrid" && apiAllowed(engine))) {
             updateBatch(batchId, { currentEngine: engine, currentPrompt: `Pacing: ${ENGINES[engine].label} reached its safe hourly limit (${spent.limit}); continuing when the hour allows` });
             await new Promise((r) => setTimeout(r, 60_000));
             if (promptStatus(prompt.id) !== "ok") break;
-            spent = budgetExhausted(engine, isProfileConnected(engine));
+            spent = budgetExhausted(engine, usesSignedIn(engine));
           }
           if (spent) {
             if (mode === "hybrid" && apiAllowed(engine)) viaApi = true;
