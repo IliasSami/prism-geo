@@ -12,7 +12,7 @@
     "@prismgeo/core": "workspace:*",
     "@prismgeo/db": "workspace:*",
     "cheerio": "^1.0.0",
-    "playwright": "^1.50.0"
+    "playwright": "^1.64.1"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
