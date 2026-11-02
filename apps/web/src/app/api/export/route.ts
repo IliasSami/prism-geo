@@ -50,7 +50,14 @@ export const GET = route("export", async (request: Request) => {
   if (!(FORMATS as readonly string[]).includes(format)) return jsonError(`Unknown format "${format}". Use json, csv or md.`, 400);
   if (!(TYPES as readonly string[]).includes(type)) return jsonError(`Unknown type "${type}". Use citations, full or report.`, 400);
   if (type === "full" && format !== "json") return jsonError("The full snapshot is only available as JSON", 400);
-  if ((type === "report") !== (format === "md")) return jsonError("The Markdown format is for ?type=report, which is only available as md", 400);
+  if ((type === "report") !== (format === "md")) {
+    return jsonError(
+      type === "report"
+        ? "The report is only available as Markdown: use ?type=report&format=md."
+        : "Markdown (format=md) is only for the report: use ?type=report&format=md, or json/csv for the data.",
+      400
+    );
+  }
 
   const resolved = resolveBrand(request, searchParams.get("brandId"));
   if (!resolved.ok) return resolved.response;

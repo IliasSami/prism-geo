@@ -44,7 +44,7 @@ test("the Markdown report states rates with their denominators and keeps failure
   assert.match(md, /appears in 25% per-question average \(likely \d+–\d+%; 1 of 3 answers\) of answers to 2 unbranded buyer questions/);
   assert.match(md, /Most-named competitor:\*\* Vocora AI/);
   assert.match(md, /Branded questions\*\* \(that name Northwind Voice\)/);
-  assert.match(md, /Perplexity: 1 blocked by the engine, 2 skipped while it kept blocking\./);
+  assert.match(md, /Perplexity: 1 blocked by the engine, 2 not asked \(resting after blocks, waiting for a person, or the page refused questions\)\./);
   assert.match(md, /\| best dunning app for shopify subscriptions \| Vocora AI \(1 of 1\) \| high \|/);
   assert.match(md, /answers captured 2026-10-29 ·/);
   assert.match(md, /\| Gemini \| 1 \| .* \| sources not shown by this engine \|/);
