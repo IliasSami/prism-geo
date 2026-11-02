@@ -157,7 +157,10 @@ export const POST = route("actions POST", async (request: Request) => {
       setActionStatus(r.id, "resolved", "Nothing left to ask");
       return NextResponse.json({ success: true, batchId: null });
     }
-    const started = startCrawl(brand, { engines: [r.engine] }, { promptIdsByEngine: { [r.engine as EngineId]: questions } });
+    // Asked as often as in the audit that held them (not the Settings default, which may be higher)
+    const held = r.batchId ? (getRawDb().prepare("SELECT sample_size FROM crawl_batches WHERE id = ?").get(r.batchId) as { sample_size: number | null } | undefined) : undefined;
+    const sampleSize = Math.min(20, Math.max(1, Number(held?.sample_size) || 1));
+    const started = startCrawl(brand, { engines: [r.engine], sampleSize }, { promptIdsByEngine: { [r.engine as EngineId]: questions } });
     if (!started.ok) return NextResponse.json(started.body, { status: started.status });
     setPendingPrompts(r.id, []);
     setActionStatus(r.id, "resolved", `Resumed in ${started.body.batchId}`);
