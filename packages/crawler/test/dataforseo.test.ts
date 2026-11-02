@@ -10,6 +10,14 @@ import {
 import { apiRouteFor, apiRouteLabel, runApiEngine, ApiKeyRejectedError } from "../src/engines/api-engines";
 import { EngineBlockedError } from "../src/engines/browser-session";
 import { NoAiOverviewError } from "../src/engines/google-aio";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { configureSerpApiAccountFetch } from "../src/engines/serpapi-quota";
+
+// A throwaway database (SerpApi spending is recorded) and a SerpApi account with plenty left
+process.env.PRISMGEO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "prismgeo-dfs-")), "test.db");
+configureSerpApiAccountFetch(async () => ({ total_searches_left: 100_000, searches_per_month: 100_000 }));
 
 /** A DataForSEO envelope around one task result, as documented (status 20000 = ok). */
 const envelope = (result: unknown, cost = 0.004, taskStatus = 20000, taskMessage = "Ok.") => ({

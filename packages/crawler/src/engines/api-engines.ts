@@ -1,4 +1,5 @@
 import { EngineBlockedError, assertRealAnswer, cleanCitationUrl, type EngineAnswer } from "./browser-session";
+import { spendSerpApi } from "./serpapi-quota";
 import { NoAiOverviewError } from "./google-aio";
 import { ProviderAccountError, markdownToText, organicFrom, runDataForSeo, type DataForSeoOptions } from "./dataforseo";
 
@@ -221,12 +222,15 @@ function overviewText(blocks: any[]): string {
 async function serpApiOverview(query: string, key: string, opts: DataForSeoOptions): Promise<Omit<EngineAnswer, "executionMs">> {
   const params = new URLSearchParams({ engine: "google", q: query, hl: (opts.language || "en").slice(0, 2), gl: countryCodeFor(opts.location) || "us", api_key: key });
   if (opts.place || opts.location) params.set("location", (opts.place || opts.location)!);
+  if (opts.noCache) params.set("no_cache", "true");
+  await spendSerpApi(key, 1, opts.serpApiPurpose);
   const data = await getJson("SerpApiAio", `https://serpapi.com/search.json?${params}`);
   if (data.error) throw new Error(`[SerpApiAio] ${data.error}`);
   let overview = data.ai_overview;
   // Overviews that load lazily come back as a token for a second request
   if (overview?.page_token && !overview.text_blocks) {
     const more = new URLSearchParams({ engine: "google_ai_overview", page_token: overview.page_token, api_key: key });
+    await spendSerpApi(key, 1, opts.serpApiPurpose);
     overview = (await getJson("SerpApiAio", `https://serpapi.com/search.json?${more}`)).ai_overview;
   }
   if (!overview?.text_blocks?.length) throw new NoAiOverviewError(`[SerpApiAio] No AI Overview shown for "${query}"`);
@@ -254,6 +258,8 @@ async function serpApiAiMode(query: string, key: string, opts: DataForSeoOptions
   if (opts.place || opts.location) params.set("location", (opts.place || opts.location)!);
   const country = countryCodeFor(opts.location);
   if (country) params.set("gl", country);
+  if (opts.noCache) params.set("no_cache", "true");
+  await spendSerpApi(key, 1, opts.serpApiPurpose);
   const data = await getJson("SerpApiAiMode", `https://serpapi.com/search.json?${params}`);
   if (data.error) throw new Error(`[SerpApiAiMode] ${data.error}`);
   const lines: string[] = [];

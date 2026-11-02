@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { notifyDesktop } from "../engines/notify";
 import { getRawDb } from "@prismgeo/db";
 import { clearBrowserCooldown } from "../engines/block-memory";
 
@@ -180,6 +181,8 @@ export function raiseActionRequest(input: {
     now(),
     now()
   );
+  // A new request: tell the person even when the dashboard is closed
+  notifyDesktop("PrismGEO needs you", `${engineName(input.engine)}: ${input.kind === "sign_in" ? "sign in" : "complete a \"verify you are human\" check"}. Open the bell in PrismGEO.`);
   return getActionRequest(id)!;
 }
 

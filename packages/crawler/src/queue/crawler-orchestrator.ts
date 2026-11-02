@@ -25,6 +25,7 @@ import { runApiEngine, apiKeyFor, apiRouteFor, apiRouteLocation, countryCodeFor,
 import { connectionCountry, countryName, planRoutes } from "../engines/location";
 import { blockGroup, browserCoolingDown, clearBrowserCooldown, recordBrowserBlock, recordBrowserSuccess, untilText } from "../engines/block-memory";
 import { canShowWindow, checkWindowState } from "../engines/check-window";
+import { ApiBudgetError } from "../engines/serpapi-quota";
 import { budgetExhausted, enginePolicy } from "../engines/budgets";
 import {
   addPendingPrompts,
@@ -207,6 +208,7 @@ export function classifyFailure(engine: EngineName, promptId: string | null, err
   else if (err instanceof NoAiOverviewError) kind = "no_ai_overview";
   else if (err instanceof ApiKeyRejectedError) kind = "api_key_rejected";
   else if (err instanceof QuestionNotSentError) kind = "not_accepted";
+  else if (err instanceof ApiBudgetError) kind = "budget_reached";
   else if (err instanceof AnswerNotFinishedError || /No extractable response|present but empty|did not finish/.test(message)) kind = "no_answer";
   // A profile another browser holds fails to launch too, but it is not a missing browser: it passes
   else if (err instanceof ProfileInUseError || PROFILE_IN_USE.test(rawMessage)) kind = "error";
@@ -480,7 +482,9 @@ export class CrawlerOrchestrator {
           // The mode only orders the routes (see viaApi); every engine but AI Mode has a browser route
           hasBrowser: engine !== "google_ai_mode" && !resting.get(engine),
           // Google's browser route sends the location itself (uule); trusted once calibrated
-          browserLocated: engine === "google_aio" && uuleTrusted,
+          // Google's own location signal (uule, gl, hl), as location checkers such as valentin.app
+          // use it: approximately in the market. Only "Only search from here" needs a passing calibration
+          browserLocated: engine === "google_aio" && (uuleTrusted || !strictLocation),
           apiRoute: hasApi(engine) ? apiRouteLocation(engine, apiKeys) : null,
         }),
       ])
@@ -866,6 +870,8 @@ export class CrawlerOrchestrator {
             if (consecutiveNetwork >= MAX_CONSECUTIVE_NETWORK) {
               stopped = { kind: "skipped_after_network", message: `Not run: ${engine} could not connect ${consecutiveNetwork} times in a row (${failure.message})` };
             }
+            // A paid plan's share for today is used up: the rest of this engine waits for the next days
+            if (failure.kind === "budget_reached") stopped = { kind: "budget_reached", message: `Not run: ${failure.message}` };
             if (failure.kind === "setup") {
               if (!viaApi) setupFailure = failure.message;
               stopped = { kind: "skipped_setup", message: `Not run: ${failure.message}` };
@@ -1057,6 +1063,10 @@ export class CrawlerOrchestrator {
     if (engineResult.searchedFrom) flags.searchedFrom = engineResult.searchedFrom.toUpperCase();
     // The place the search was asked as from (Google's uule, or a provider's location) and the exact address
     if (engineResult.locationSignal) flags.locationSignal = engineResult.locationSignal;
+    // A browser search sent with Google's location signal is approximately in the market, unless calibrated
+    if (engineResult.locationSignal && engineResult.captureMethod !== "provider" && engineResult.captureMethod !== "manual") {
+      flags.locationApproximate = getSettings<{ trusted?: boolean }>("location_calibration", {}).trusted !== true;
+    }
     if (engineResult.searchUrl) flags.searchUrl = engineResult.searchUrl;
     if (engineResult.organic?.length) flags.organic = engineResult.organic;
     // Google sometimes answers with an AI Mode reply in the Overview slot: labelled, not mixed in silently

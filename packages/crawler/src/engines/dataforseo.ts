@@ -32,6 +32,10 @@ export interface DataForSeoOptions {
   language?: string;
   /** Perplexity model for LLM Responses (default "sonar"). */
   perplexityModel?: string;
+  /** SerpApi: "audit" spends today's share of the plan, "reserve" (calibration) the monthly reserve. */
+  serpApiPurpose?: "audit" | "reserve";
+  /** SerpApi: skip SerpApi's one-hour cache (a fresh, counted search; calibration's repeat). */
+  noCache?: boolean;
 }
 
 export interface DataForSeoAnswer extends Omit<EngineAnswer, "executionMs"> {

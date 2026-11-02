@@ -3,7 +3,8 @@ import { detectMentions, hostKey, languageFor, seededShuffle } from "@prismgeo/c
 import { GoogleAioCrawler, NoAiOverviewError } from "../engines/google-aio";
 import { EngineBlockedError, type EngineAnswer } from "../engines/browser-session";
 import { browserCoolingDown, recordBrowserBlock, recordBrowserSuccess, untilText } from "../engines/block-memory";
-import { apiRouteLabel, apiRouteLocation, countryCodeFor, runApiEngine, type ApiKeys } from "../engines/api-engines";
+import { apiRouteFor, apiRouteLabel, apiRouteLocation, countryCodeFor, runApiEngine, type ApiKeys } from "../engines/api-engines";
+import { serpApiBudgetState } from "../engines/serpapi-quota";
 import { connectionCountry, countryName } from "../engines/location";
 import { trackedEntitiesFor } from "./manual-capture";
 import { placeInCountry } from "./crawler-orchestrator";
@@ -120,7 +121,7 @@ export async function calibrateLocation(brandId: string, opts: { sample?: number
   }
 }
 
-async function runCalibration(brandId: string, { sample = 10, pauseMs = [15000, 30000] as [number, number] } = {}): Promise<CalibrationResult> {
+async function runCalibration(brandId: string, { sample = calibrationSample(), pauseMs = [15000, 30000] as [number, number] } = {}): Promise<CalibrationResult> {
   const rest = browserCoolingDown("google_aio");
   if (rest) throw new Error(`Google's browser route is resting after a block until ${untilText(rest.until)}; the calibration waits for it.`);
   const s = getSettings<{ providerLocation?: string; providerLanguage?: string; searchPlace?: string }>("engine_settings", {});
@@ -180,8 +181,10 @@ async function runCalibration(brandId: string, { sample = 10, pauseMs = [15000, 
         // Any other failed browser search cannot be compared; it is skipped, not counted as "no Overview"
         continue;
       }
-      const reference = await overviewOrNull(() => runApiEngine("google_aio", p.query_text, keys, options)).catch(() => undefined);
-      const repeat = await overviewOrNull(() => runApiEngine("google_aio", p.query_text, keys, options)).catch(() => undefined);
+      // Spent from the plan's reserve. The repeat skips SerpApi's one-hour cache: a cached copy is
+      // identical to the reference, which made the noise floor a meaningless 100%
+      const reference = await overviewOrNull(() => runApiEngine("google_aio", p.query_text, keys, { ...options, serpApiPurpose: "reserve" })).catch(() => undefined);
+      const repeat = await overviewOrNull(() => runApiEngine("google_aio", p.query_text, keys, { ...options, serpApiPurpose: "reserve", noCache: true })).catch(() => undefined);
       if (reference === undefined || repeat === undefined) continue;
       const both = (x: EngineAnswer | null) => (x && reference ? true : false);
       result.questions.push({
@@ -201,6 +204,15 @@ async function runCalibration(brandId: string, { sample = 10, pauseMs = [15000, 
   }
   return result;
 }
+
+/** A small SerpApi plan (the free one has 250 searches a month) cannot afford 10 questions × 2 references. */
+const smallSerpApiPlan = () => {
+  const keys = getSettings<ApiKeys>("byok_api_keys", {});
+  if (apiRouteFor("google_aio", keys)?.kind !== "serpapi") return false;
+  const perMonth = serpApiBudgetState().perMonth;
+  return perMonth === null || perMonth < 1000;
+};
+const calibrationSample = () => (smallSerpApiPlan() ? 5 : 10);
 
 /** Why a calibration cannot start now, or null when it can. */
 export function calibrationBlocker(): string | null {
@@ -260,6 +272,8 @@ export async function runPendingCalibration(activeBrandId: string | null): Promi
     if (!activeBrandId || !target) return;
     const connection = await connectionCountry();
     if (!connection || connection === target) return;
+    // On a small SerpApi plan a calibration costs a real share of the month: only when asked for
+    if (smallSerpApiPlan()) return;
     current = requestCalibration(activeBrandId);
   }
   if (current.status === "waiting" && current.brandId && !calibrationBlocker()) {

@@ -1,6 +1,7 @@
 import { ENGINE_IDS } from "@prismgeo/core";
 import { getActiveBrand, getRawDb, getSettings, setSettings } from "@prismgeo/db";
 import { runPendingCalibration } from "./calibrate";
+import { runAutopilot } from "./autopilot";
 import { CrawlerOrchestrator, BatchRunningError, recoverInterruptedBatches, type EngineName } from "./crawler-orchestrator";
 
 /**
@@ -234,6 +235,8 @@ export function startScheduler(): void {
     runScheduledAuditsIfDue().catch((err) => console.error("[Scheduler]", err));
     // A queued calibration of Google's location signal starts by itself once nothing blocks it
     runPendingCalibration(getActiveBrand()?.id ?? null).catch((err) => console.error("[Calibration]", err));
+    // Autopilot: keeps covering unanswered questions by itself until every engine has answered them all
+    runAutopilot().catch((err) => console.error("[Autopilot]", err));
   }, 60_000);
   console.log("[Scheduler] Rolling audit scheduler started");
 }

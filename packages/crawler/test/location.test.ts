@@ -7,6 +7,9 @@ import path from "node:path";
 process.env.PRISMGEO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "prismgeo-location-")), "test.db");
 const { countryFromTrace, countryName, planRoutes } = await import("../src/engines/location");
 const { apiRouteTargetsLocation, apiRouteLocation, runApiEngine } = await import("../src/engines/api-engines");
+// SerpApi plan checks answer from a fake account with plenty left (tests never reach SerpApi)
+const { configureSerpApiAccountFetch } = await import("../src/engines/serpapi-quota");
+configureSerpApiAccountFetch(async () => ({ total_searches_left: 100_000, searches_per_month: 100_000 }));
 
 test("the connection's country comes from the Cloudflare trace", () => {
   assert.equal(countryFromTrace("fl=1\nip=45.114.89.161\nts=1\nloc=BD\ntls=TLSv1.3\n"), "bd");

@@ -14,6 +14,7 @@ import { LogViewer } from "@/components/settings/LogViewer";
 import { CaptureExtensionPanel } from "@/components/settings/CaptureExtensionPanel";
 import { SearchLocationStatus } from "@/components/settings/SearchLocationStatus";
 import { PlacePicker } from "@/components/settings/PlacePicker";
+import { AutopilotCard } from "@/components/settings/AutopilotCard";
 import { SEARCH_COUNTRIES, searchCountry } from "@prismgeo/core";
 import { cleanedHint, domainError } from "@/components/domain";
 
@@ -730,6 +731,8 @@ function Settings() {
                 </p>
               </div>
             </Card>
+
+            <AutopilotCard />
 
             <Card>
               <CardHeader
