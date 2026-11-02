@@ -34,6 +34,8 @@ const INTEGRATION = /^(?:works|integrates|syncs|connects|plugs)\s+(?:in(?:to)?\s
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean);
 const lowerFirst = (s: string) => (/^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** A capability that starts with a verb ("calls…", "works with…", "can…"), so it reads after "that". */
+const VERB_START = /^(?:is|are|has|have|can|could|will|does|do|lets|helps|works|integrates|supports|offers|sends|calls|texts|answers|handles|recovers|books|syncs|connects|plugs|runs|speaks|sounds|follows|writes|reads|tracks|captures|routes|qualifies|learns|stays|keeps|turns|makes|gives|uses|needs|includes|comes|provides|automates|replies|responds|detects|flags|scores)\b|^\w+s\s/i;
 const stripEnd = (s: string) => s.trim().replace(/[\s.!?;:,]+$/, "");
 
 /** Classifies a value proposition as a customer pain, a capability, or a pricing model. */
@@ -195,7 +197,8 @@ export class IcpPromptSynthesizer {
           set.add(`Which ${category ? many : "tools"} integrate with ${target}?`, "dilemma", "technical_lead", `Integration question from "${vp}".`);
           set.add(`does anything plug into ${target} for this, or do I need custom work?`, "dilemma", director.persona, `Casual integration phrasing from "${vp}".`);
         } else {
-          const clause = lowerFirst(vp);
+          // "HIPAA ready" needs a verb ("that is HIPAA ready"); "calls shoppers" already has one
+          const clause = VERB_START.test(vp) ? lowerFirst(vp) : `is ${lowerFirst(vp)}`;
           set.add(`Is there ${category ? `${article} ${one}` : "a tool"} that ${clause}?`, "dilemma", "head_of_growth", `Capability question from "${vp}".`);
         }
         continue;

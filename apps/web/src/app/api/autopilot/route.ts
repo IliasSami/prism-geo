@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getSettings, setSettings } from "@prismgeo/db";
-import { getAutopilotState, refreshSerpApiQuota, serpApiBudgetState, type AutopilotSettings } from "@prismgeo/crawler";
+import { getSettings } from "@prismgeo/db";
+import { getAutopilotState, refreshSerpApiQuota, serpApiBudgetState, setAutopilotEnabled, type AutopilotSettings } from "@prismgeo/crawler";
 import { parseBody, route } from "../_lib/http";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +25,5 @@ const bodySchema = z.object({ enabled: z.boolean({ error: "enabled must be true 
 export const POST = route("autopilot POST", async (request: Request) => {
   const parsed = await parseBody(request, bodySchema);
   if (!parsed.ok) return parsed.response;
-  setSettings("autopilot", { ...getSettings<AutopilotSettings>("autopilot", {}), enabled: parsed.data.enabled });
-  return NextResponse.json({ success: true, enabled: parsed.data.enabled, state: getAutopilotState() });
+  return NextResponse.json({ success: true, enabled: parsed.data.enabled, state: setAutopilotEnabled(parsed.data.enabled) });
 });

@@ -3,6 +3,9 @@ import { fileURLToPath } from "node:url";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Code style is checked by `pnpm lint` (and CI); repeating it in every build only prints warnings
+  // that read like failures to someone installing PrismGEO
+  eslint: { ignoreDuringBuilds: true },
   // The monorepo root, so file tracing does not guess from lockfiles found further up
   outputFileTracingRoot: path.join(path.dirname(fileURLToPath(import.meta.url)), "../.."),
   // Playwright is loaded from node_modules at runtime, never bundled

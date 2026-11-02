@@ -274,8 +274,10 @@ export async function runPendingCalibration(activeBrandId: string | null): Promi
     if (!activeBrandId || !target) return;
     const connection = await connectionCountry();
     if (!connection || connection === target) return;
-    // On a small SerpApi plan a calibration costs a real share of the month: only when asked for
+    // On a small SerpApi plan a calibration costs a real share of the month: only when asked for.
+    // Nor when Google is switched off: there is nothing to calibrate for
     if (smallSerpApiPlan()) return;
+    if (getSettings<Record<string, unknown>>("engine_settings", {}).google_aio === false) return;
     current = requestCalibration(activeBrandId);
   }
   if (current.status === "waiting" && current.brandId && !calibrationBlocker()) {

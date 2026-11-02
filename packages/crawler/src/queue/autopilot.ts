@@ -107,6 +107,17 @@ export function engineRoom(engine: EngineName, brandId: string, now = Date.now()
   return { room: Number.isFinite(left) ? left : PAID_SLICE, waiting: null };
 }
 
+/** Turns the autopilot on or off; its status says so at once (the next step follows within minutes). */
+export function setAutopilotEnabled(enabled: boolean): AutopilotState {
+  setSettings("autopilot", { ...getSettings<AutopilotSettings>("autopilot", {}), enabled });
+  const state: AutopilotState = enabled
+    ? { ...getAutopilotState(), status: "waiting", detail: "Starting: the first step follows within a few minutes." }
+    : { ...getAutopilotState(), status: "off", detail: "Autopilot is off" };
+  setSettings(STATE, state);
+  lastCheck = 0;
+  return state;
+}
+
 let busy = false;
 let lastCheck = 0;
 
@@ -132,6 +143,11 @@ export async function runAutopilot(now = Date.now()): Promise<void> {
     if (serpapiKey) await refreshSerpApiQuota(serpapiKey, new Date(now));
     const engineSettings = getSettings<Record<string, unknown>>("engine_settings", {});
     const enabled = ENGINE_IDS.filter((e) => engineSettings[e] !== false) as EngineName[];
+    // Nothing switched on means nothing to cover, not "complete"
+    if (enabled.length === 0) {
+      setSettings(STATE, { status: "waiting", checkedAt: nowIso(), brandId: null, lastBatchId: getAutopilotState().lastBatchId, engines: [], detail: "No engine is switched on (Settings → Engines & access)." } satisfies AutopilotState);
+      return;
+    }
     const brands = (db.prepare("SELECT id, name FROM brands ORDER BY created_at").all() as Array<{ id: string; name: string }>).filter(
       (b) => !settings.brandIds?.length || settings.brandIds.includes(b.id)
     );
@@ -171,7 +187,10 @@ export async function runAutopilot(now = Date.now()): Promise<void> {
       return; // one slice per step; the next step looks again
     }
     if (allComplete && getAutopilotState().status !== "complete") {
-      setSettings(STATE, { status: "complete", checkedAt: nowIso(), brandId: null, lastBatchId: getAutopilotState().lastBatchId, engines: [], detail: "Every engine has answered every active question. The rolling daily schedule keeps answers fresh." } satisfies AutopilotState);
+      const fresh = getSettings<{ scheduleEnabled?: boolean }>("crawler_settings", {}).scheduleEnabled
+        ? "The rolling daily schedule keeps answers fresh."
+        : "Turn on the rolling daily schedule (Settings → Schedule) to keep answers fresh.";
+      setSettings(STATE, { status: "complete", checkedAt: nowIso(), brandId: null, lastBatchId: getAutopilotState().lastBatchId, engines: [], detail: `Every switched-on engine has answered every active question. ${fresh}` } satisfies AutopilotState);
       notifyDesktop("PrismGEO: coverage complete", "Every engine has answered every active question.");
     }
   } finally {

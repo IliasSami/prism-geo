@@ -30,6 +30,8 @@ else {
 loadEnv();
 
 step("Building the dashboard");
+// node:sqlite prints an "experimental" warning that reads like an error
+process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, "--disable-warning=ExperimentalWarning"].filter(Boolean).join(" ");
 if (pnpm(["--filter", "@prismgeo/web", "build"]) !== 0) fail("The build failed (see the messages above).");
 
 const port = process.env.PRISMGEO_PORT || "3333";
